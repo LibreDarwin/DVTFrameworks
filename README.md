@@ -328,11 +328,21 @@ Two dependencies had to be reconstructed alongside it. The function sends
 `dvt_allObjectsPassTest:` to `keyPaths`, and that selector is implemented in
 Apple as a non-exported category method on `NSArray` — so it is a real method
 here, not one of the intentionally-missing selectors, and it was added to
-`DVTFoundationClassAdditions`. It returns `YES` on exhaustion, which is what
-makes the empty `keyPaths` case vacuously true. Apple also carries
-`dvt_allObjectsPassTest:` on `NSSet` and `NSHashTable`; those are still missing.
-`-valueForKeyPath:` is plain KVC, but the SDK used to build this framework does
-not declare it, so it is declared locally where it is used.
+`DVTFoundationClassAdditions`. Apple also carries the same selector on `NSSet`
+and `NSHashTable`, and all three were disassembled and confirmed to be
+structurally identical: a 16-slot fast-enumeration buffer, `YES` when the
+enumeration runs out, and an early `NO` at the first element that fails. The
+three share one body here. It returns `YES` on exhaustion, which is what makes
+the empty `keyPaths` case vacuously true. `-valueForKeyPath:` is plain KVC, but
+the SDK used to build this framework does not declare it, so it is declared
+locally where it is used.
+
+**One deliberate deviation.** All three of Apple's implementations load the
+test block's invoke pointer without a nil check, so a non-empty collection
+passed a `nil` block faults — confirmed by running it, crashing at
+`ldr x8, [x19, #0x10]` inside Apple's `NSSet` method. This framework returns
+`YES` instead. The guard is kept on purpose and is documented at each
+declaration; it can only differ in the case where the original crashes.
 
 Exceptions are not caught. An undefined key path raises `NSUnknownKeyException`
 out of the function, and a `keyPaths` that is not a collection carrying
@@ -362,7 +372,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 295 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 303 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -371,7 +381,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **295 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **303 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

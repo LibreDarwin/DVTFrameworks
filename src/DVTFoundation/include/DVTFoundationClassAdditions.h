@@ -75,7 +75,8 @@ NS_ASSUME_NONNULL_BEGIN
 
  An empty receiver is `YES` without ever calling `test`, so this is a vacuous
  truth rather than a failure to find a witness. A `nil` `test` is treated the
- same way.
+ same way, which deviates from Apple: it dereferences the block unchecked and
+ faults on a non-empty array.
  */
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
 /** How many elements satisfy `test`. */
@@ -155,6 +156,21 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+@interface NSSet (DVTNSSetAdditions)
+
+/**
+ `YES` when every member satisfies `test`, stopping at the first that does not.
+
+ An empty set is `YES` without ever calling `test`, and a `nil` `test` is
+ treated the same way.
+
+ This deviates from Apple, which dereferences `test` without checking it and so
+ faults on a non-empty set with a `nil` block. The guard is kept deliberately.
+ */
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
+
+@end
+
 @interface NSMutableSet (DVTFoundationClassAdditions)
 
 /** Adds `object` only when it is non-`nil`. */
@@ -163,6 +179,14 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @interface NSHashTable (DVTNSHashTableAdditions)
+
+/**
+ `YES` when every object satisfies `test`, stopping at the first that does not.
+
+ An empty table is `YES` without ever calling `test`, and a `nil` `test` is
+ treated the same way, which deviates from Apple as noted on `NSSet`.
+ */
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
 
 /** Adds `object` only when it is non-`nil`. */
 - (void)dvt_addObjectIfNonNil:(id _Nullable)object;

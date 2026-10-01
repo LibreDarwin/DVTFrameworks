@@ -41,6 +41,22 @@ static id DVTFirstObject(NSArray *array)
     return array.count > 0 ? [array objectAtIndex:0] : nil;
 }
 
+/** Shared body of `dvt_allObjectsPassTest:`, which carries the same selector on
+    `NSArray`, `NSSet` and `NSHashTable`. Running out of elements is a `YES`;
+    only an element failing the test ends it early. */
+static BOOL DVTAllObjectsPassTest(id<NSFastEnumeration> collection, BOOL (^test)(id object))
+{
+    if (test == nil) {
+        return YES;
+    }
+    for (id object in collection) {
+        if (!test(object)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 static NSUInteger DVTIndexOfObject(NSArray *array, id object)
 {
     NSUInteger count = array.count;
@@ -222,17 +238,7 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test
 {
-    if (test == nil) {
-        return YES;
-    }
-    NSEnumerator *enumerator = [self objectEnumerator];
-    id object = nil;
-    while ((object = [enumerator nextObject]) != nil) {
-        if (!test(object)) {
-            return NO;
-        }
-    }
-    return YES;
+    return DVTAllObjectsPassTest(self, test);
 }
 
 - (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
@@ -578,6 +584,15 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 
 @end
 
+@implementation NSSet (DVTNSSetAdditions)
+
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test
+{
+    return DVTAllObjectsPassTest(self, test);
+}
+
+@end
+
 @implementation NSMutableSet (DVTFoundationClassAdditions)
 
 - (void)dvt_addObjectIfNonNil:(id)object
@@ -590,6 +605,11 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 @end
 
 @implementation NSHashTable (DVTNSHashTableAdditions)
+
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test
+{
+    return DVTAllObjectsPassTest(self, test);
+}
 
 - (void)dvt_addObjectIfNonNil:(id)object
 {

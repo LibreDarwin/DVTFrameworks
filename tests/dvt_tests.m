@@ -445,6 +445,27 @@ static void DVTTestClassAdditions(void)
     BOOL (^nilTest)(id) = nil;
     DVTExpect([sample dvt_allObjectsPassTest:nilTest],
               @"allObjectsPassTest treats a nil test as vacuously true, even when non-empty");
+    /* The same selector on NSSet and NSHashTable. Apple faults on a non-empty
+       collection with a nil test, so the guard is a documented deviation. */
+    NSSet *members = [NSSet setWithObjects:@"a", @"b", nil];
+    DVTExpect(![members dvt_allObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }],
+              @"set allObjectsPassTest rejects a non-matching member");
+    DVTExpect([members dvt_allObjectsPassTest:^BOOL(id o) { return YES; }],
+              @"set allObjectsPassTest accepts when every member passes");
+    DVTExpect([[NSSet set] dvt_allObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"set allObjectsPassTest is vacuously true when empty");
+    DVTExpect([members dvt_allObjectsPassTest:nilTest], @"set allObjectsPassTest guards a nil test");
+    NSHashTable *table = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    [table addObject:@"a"];
+    [table addObject:@"b"];
+    DVTExpect(![table dvt_allObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"hash table allObjectsPassTest rejects a non-matching object");
+    DVTExpect([table dvt_allObjectsPassTest:^BOOL(id o) { return [o isKindOfClass:[NSString class]]; }],
+              @"hash table allObjectsPassTest accepts when every object passes");
+    DVTExpect([[NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality]
+                  dvt_allObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"hash table allObjectsPassTest is vacuously true when empty");
+    DVTExpect([table dvt_allObjectsPassTest:nilTest], @"hash table allObjectsPassTest guards a nil test");
     DVTExpectEqualObjects([sample dvt_objectsOfClass:[NSString class]], sample, @"objectsOfClass");
 
     DVTExpect([sample dvt_containsObjectIdenticalTo:[sample objectAtIndex:0]], @"identical object found");
