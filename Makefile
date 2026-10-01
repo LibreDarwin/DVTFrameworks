@@ -10,9 +10,9 @@
 
 DEVELOPER_DIR ?= /Users/sunneva/xnuports-root/devel/xcode-tools/build/release/Developer
 TOOLCHAIN_BIN := $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/bin
-# This project is developed against our Internal SDK. Override with
-# `make SDK_PATH=...` to build against the public SDK instead.
-SDK_PATH ?= $(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.Internal.sdk
+# Build against Apple's SDK by default. The reduced Internal SDK under
+# $(DEVELOPER_DIR) also works and can be selected with `make SDK_PATH=...`.
+SDK_PATH ?= /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 
 CC := $(TOOLCHAIN_BIN)/clang
 

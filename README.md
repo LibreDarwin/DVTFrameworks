@@ -26,18 +26,19 @@ make clean      # remove build/
 make install    # copy the framework into $(DESTDIR)/Library/Frameworks
 ```
 
-The build defaults to our own `MacOSX.Internal.sdk`, which is the SDK this
-project is developed against:
-
-```
-$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.Internal.sdk
-```
-
-Override it to build against the public SDK instead:
+The build defaults to Apple's SDK. The reduced Internal SDK
+(`macosx26.5.internal`, 11 frameworks) under the `DEVELOPER_DIR` tree also
+builds and passes the suite, so either can be selected:
 
 ```sh
-make SDK_PATH=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk test
+make test
+make SDK_PATH="$(DEVELOPER_DIR)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.Internal.sdk" test
 ```
+
+The two SDKs differ in ways worth knowing: the Internal SDK ships the complete
+legacy Foundation header set, including `NSObject.h`, whereas the public SDK
+has 297 frameworks but leaves the core Foundation declarations to `.apinotes`
+and the module map.
 
 The framework links only `Foundation` and `CoreFoundation`, installs as
 `@rpath/DVTFoundation.framework/Versions/A/DVTFoundation`, and carries
