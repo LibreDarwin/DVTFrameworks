@@ -361,6 +361,43 @@ there is a `Developer ID Application` display string with no matching kind — s
 the mapping is not recoverable by inspection and is left alone rather than
 guessed at.
 
+### Dispatch wrappers
+
+Eight GCD wrappers, which between them are referenced by 58 of the frameworks in
+`Xcode.app/Contents/SharedFrameworks`. They live in `DVTDispatch`.
+
+`DVTDispatchCreateQueue` is the only one whose shape is not obvious from its
+name, and it is worth stating precisely because guessing it produces a queue
+that looks fine and is not. The arguments are `(serial, qos, unused, label)` —
+the label is the **fourth** argument, and `serial` is inverted relative to how
+it reads: a non-zero `serial` selects a null attribute, which is how GCD spells
+"serial", while zero selects the concurrent attribute explicitly. The
+autorelease frequency is then forced to `WORK_ITEM` on both branches, so the
+two differ only in concurrency. The third argument is accepted and ignored;
+Apple never reads it either. Verified by probing: a label passed as the first
+argument comes back as garbage, and a queue built that way answers to no
+recognisable name at all.
+
+The remaining seven are thin pass-throughs to `dispatch_async`,
+`dispatch_sync`, `dispatch_after`, `dispatch_barrier_async`,
+`dispatch_group_notify` and the two `dispatch_source_set_*_handler` calls, with
+argument orders matching GCD's own.
+
+**What is not reproduced.** Every one of these wraps the caller's block rather
+than submitting it directly. The wrapper asks a DVT log-aspect group whether a
+group is already current: if one is, it invokes the block directly; if not, it
+creates a group, clears a per-thread table keyed
+`DVTInvalidation_ObjectsReportedToRadarDuringCurrentEventHashTable`, and runs
+the block inside it. That bookkeeping is diagnostic instrumentation tied to
+machinery this reconstruction does not have, so the blocks here are submitted
+unwrapped. Scheduling, ordering, thread and queue semantics are unaffected; the
+diagnostic grouping is simply absent.
+
+`DVTDispatchSourceSetCancelHandler` takes a third `dispatch_group_t` argument
+that the others do not, and submits through it rather than the source's own
+queue. It is accepted and passed to GCD's own cancel-handler registration,
+which preserves the serialization but not the group submission.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -372,7 +409,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 303 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 321 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -381,7 +418,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **303 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **321 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

@@ -10,6 +10,8 @@
 #import <mach-o/fat.h>
 #import <mach-o/loader.h>
 #import <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -212,6 +214,126 @@ static NSString *DVTWriteFatMachO(NSString *name)
 }
 
 #pragma mark - Environment snapshot
+
+/* How many of four submitted tasks are ever in flight together. A serial queue
+   peaks at one, a concurrent queue at more. */
+static int DVTPeakConcurrency(dispatch_queue_t queue)
+{
+    if (queue == NULL) {
+        return -1;
+    }
+    __block int active = 0;
+    __block int peak = 0;
+    for (int i = 0; i < 4; i++) {
+        dispatch_async(queue, ^{
+            int now = __sync_fetch_and_add(&active, 1) + 1;
+            if (now > peak) {
+                peak = now;
+            }
+            usleep(40000);
+            __sync_fetch_and_sub(&active, 1);
+        });
+    }
+    usleep(400000);
+    return peak;
+}
+
+static void DVTTestDispatch(void)
+{
+    /* A non-zero first argument means serial. The label is the fourth argument,
+       not the first, and it survives the trip. */
+    dispatch_queue_t serial = DVTDispatchCreateQueue(YES, QOS_CLASS_DEFAULT, 0, "dvt.test.serial");
+    DVTExpect(serial != NULL, @"create queue returns a queue");
+    DVTExpectEqualCStrings(dispatch_queue_get_label(serial), "dvt.test.serial",
+                           @"serial queue keeps its label");
+    DVTExpect(DVTPeakConcurrency(serial) == 1, @"serial queue runs one task at a time");
+
+    dispatch_queue_t concurrent = DVTDispatchCreateQueue(NO, QOS_CLASS_DEFAULT, 0, "dvt.test.concurrent");
+    DVTExpect(concurrent != NULL, @"create queue returns a concurrent queue");
+    DVTExpectEqualCStrings(dispatch_queue_get_label(concurrent), "dvt.test.concurrent",
+                           @"concurrent queue keeps its label");
+    DVTExpect(DVTPeakConcurrency(concurrent) > 1, @"concurrent queue overlaps tasks");
+
+    /* The unused third argument must not disturb the result. */
+    dispatch_queue_t ignored = DVTDispatchCreateQueue(YES, QOS_CLASS_DEFAULT, 0xdead, "dvt.test.ignored");
+    DVTExpectEqualCStrings(dispatch_queue_get_label(ignored), "dvt.test.ignored",
+                           @"ignored argument does not affect the label");
+
+    /* Sync completes before it returns. */
+    __block int syncRan = 0;
+    DVTDispatchSync(serial, ^{
+        syncRan = 1;
+    });
+    DVTExpect(syncRan, @"sync runs the block before returning");
+
+    /* Async is deferred behind work already on the queue, and runs off the
+       calling thread. Occupying the queue first keeps this from racing. */
+    __block int asyncRan = 0;
+    __block int onCallerThread = 1;
+    pthread_t caller = pthread_self();
+    dispatch_async(serial, ^{
+        usleep(250000);
+    });
+    usleep(30000);
+    DVTDispatchAsync(serial, ^{
+        asyncRan = 1;
+        onCallerThread = pthread_equal(pthread_self(), caller);
+    });
+    usleep(40000);
+    DVTExpect(!asyncRan, @"async defers behind a queue that is already busy");
+    usleep(300000);
+    DVTExpect(asyncRan, @"async runs once the queue drains");
+    DVTExpect(!onCallerThread, @"async runs on the queue, not the caller");
+
+    /* Barrier work also lands on the queue. */
+    __block int barrierRan = 0;
+    DVTDispatchBarrierAsync(serial, ^{
+        barrierRan = 1;
+    });
+    usleep(150000);
+    DVTExpect(barrierRan, @"barrier async runs the block");
+
+    /* Delayed work does not run inline. */
+    __block int afterRan = 0;
+    DVTDispatchAfter(dispatch_time(DISPATCH_TIME_NOW, 20 * 1000 * 1000), serial, ^{
+        afterRan = 1;
+    });
+    DVTExpect(!afterRan, @"after does not run inline");
+    usleep(200000);
+    DVTExpect(afterRan, @"after runs once its deadline passes");
+
+    /* Group notify waits for the group, and fires exactly once. */
+    __block int notifyRuns = 0;
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_group_enter(group);
+    DVTDispatchGroupNotify(group, serial, ^{
+        notifyRuns++;
+    });
+    usleep(50000);
+    DVTExpect(notifyRuns == 0, @"group notify waits for the group to drain");
+    dispatch_group_leave(group);
+    usleep(200000);
+    DVTExpect(notifyRuns == 1, @"group notify fires once after the group drains");
+
+    /* Dispatch source handlers. */
+    __block int events = 0;
+    __block int cancelled = 0;
+    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, serial);
+    DVTDispatchSourceSetEventHandler(source, ^{
+        events++;
+    });
+    DVTDispatchSourceSetCancelHandler(source, ^{
+        cancelled = 1;
+    }, dispatch_group_create());
+    dispatch_source_set_timer(source, dispatch_time(DISPATCH_TIME_NOW, 10 * 1000 * 1000),
+                              10 * 1000 * 1000, 0);
+    dispatch_resume(source);
+    usleep(120000);
+    DVTExpect(events > 0, @"source event handler runs on each tick");
+    dispatch_source_cancel(source);
+    usleep(80000);
+    DVTExpect(cancelled, @"source cancel handler runs on cancellation");
+}
 
 static void DVTTestEnvironmentSnapshot(void)
 {
@@ -965,6 +1087,7 @@ int main(int argc, const char *argv[])
     @autoreleasepool {
         fprintf(stdout, "DVTFoundation tests\n");
         DVTTestEnvironmentSnapshot();
+        DVTTestDispatch();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

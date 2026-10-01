@@ -29,6 +29,7 @@
 #import "DVTDefines.h"
 #import "DVTAssertions.h"
 #import "DVTComparison.h"
+#import "DVTDispatch.h"
 #import "DVTCertificateComparison.h"
 #import "DVTEnvironmentSnapshot.h"
 #import "DVTFoundationErrors.h"
