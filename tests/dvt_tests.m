@@ -12,6 +12,7 @@
 #import <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <libkern/OSByteOrder.h>
 
 #import "DVTFoundation.h"
@@ -694,6 +695,84 @@ static void DVTTestAssertions(void)
 
 #pragma mark - main
 
+static void DVTTestComparison(void)
+{
+    fprintf(stdout, "\n== comparison ==\n");
+
+    DVTExpect(DVTCompareBools(NO, NO) == 0, @"NO is NO");
+    DVTExpect(DVTCompareBools(NO, YES) == -1, @"NO precedes YES");
+    DVTExpect(DVTCompareBools(YES, NO) == 1, @"YES follows NO");
+    DVTExpect(DVTCompareBools(YES, YES) == 0, @"YES is YES");
+
+    DVTExpect(DVTCompareIntegers(1, 2) == -1, @"1 precedes 2");
+    DVTExpect(DVTCompareIntegers(2, 1) == 1, @"2 follows 1");
+    DVTExpect(DVTCompareIntegers(7, 7) == 0, @"7 equals 7");
+    /* The extremes must not be subtracted from one another. */
+    DVTExpect(DVTCompareIntegers(NSIntegerMin, 0) == -1, @"NSIntegerMin precedes 0");
+    DVTExpect(DVTCompareIntegers(0, NSIntegerMin) == 1, @"0 follows NSIntegerMin");
+    DVTExpect(DVTCompareIntegers(NSIntegerMax, NSIntegerMin) == 1, @"NSIntegerMax follows NSIntegerMin");
+
+    DVTExpect(DVTCompareDoubles(1.0, 2.0) == -1, @"1.0 precedes 2.0");
+    DVTExpect(DVTCompareDoubles(2.0, 1.0) == 1, @"2.0 follows 1.0");
+    DVTExpect(DVTCompareDoubles(1.5, 1.5) == 0, @"1.5 equals 1.5");
+    /* -0.0 is ordered equal to 0.0. */
+    DVTExpect(DVTCompareDoubles(-0.0, 0.0) == 0, @"-0.0 equals 0.0");
+
+    /* A NaN is ordered by the sign bit of the operand it is compared with. */
+    DVTExpect(DVTCompareDoubles(NAN, 1.0) == -1, @"NaN is unordered against 1.0");
+    DVTExpect(DVTCompareDoubles(NAN, -1.0) == 1, @"NaN is unordered against -1.0");
+    DVTExpect(DVTCompareDoubles(NAN, 0.0) == -1, @"NaN is unordered against 0.0");
+    DVTExpect(DVTCompareDoubles(NAN, -0.0) == 1, @"NaN reads the sign bit of -0.0");
+    DVTExpect(DVTCompareDoubles(1.0, NAN) == 1, @"1.0 against NaN takes the other branch");
+    DVTExpect(DVTCompareDoubles(-1.0, NAN) == -1, @"-1.0 against NaN takes the other branch");
+    DVTExpect(DVTCompareDoubles(NAN, NAN) == 0, @"NaN equals NaN");
+    DVTExpect(DVTCompareDoubles(-NAN, 1.0) == -1, @"a negative NaN is still unordered");
+
+    /* The tolerance is relative, so it is meaningful away from the origin. */
+    DVTExpect(DVTEqualDoublesWithEpsilon(1.0, 1.0000001, 1e-6), @"1.0 is within 1e-6 of 1.0000001");
+    DVTExpect(DVTEqualDoublesWithEpsilon(1.0, 1.5, 1e-6) == NO, @"1.0 is not within 1e-6 of 1.5");
+    DVTExpect(DVTEqualDoublesWithEpsilon(1e9, 1e9 + 1.0, 1e-6), @"the test scales with magnitude");
+    /* Either operand being zero collapses the scale, leaving exact equality. */
+    DVTExpect(DVTEqualDoublesWithEpsilon(0.0, -0.0, 1e-6), @"-0.0 is within epsilon of 0.0");
+    DVTExpect(DVTEqualDoublesWithEpsilon(0.0, 0.25, 1e-6) == NO, @"0.0 is not within 1e-6 of 0.25");
+    /* Equal infinities have an infinite scale but a NaN difference. */
+    DVTExpect(DVTEqualDoublesWithEpsilon(INFINITY, INFINITY, 1e-6) == NO, @"INFINITY differs from INFINITY");
+    DVTExpect(DVTEqualDoublesWithEpsilon(INFINITY, -INFINITY, 1e-6), @"INFINITY is within epsilon of -INFINITY");
+    DVTExpect(DVTEqualDoublesWithEpsilon(NAN, 1.0, 1e-6) == NO, @"NaN is within epsilon of nothing");
+    DVTExpect(DVTEqualDoublesWithEpsilon(1.0, NAN, 1e-6) == NO, @"nothing is within epsilon of NaN");
+
+    DVTExpect(DVTCompareDoublesWithEpsilon(1.0, 1.0000001, 1e-6) == 0, @"a tolerated pair compares equal");
+    DVTExpect(DVTCompareDoublesWithEpsilon(1.0, 1.5, 1e-6) == -1, @"1.0 precedes 1.5");
+    DVTExpect(DVTCompareDoublesWithEpsilon(1.5, 1.0, 1e-6) == 1, @"1.5 follows 1.0");
+    /* Unlike DVTCompareDoubles, every unordered pair is reported as greater. */
+    DVTExpect(DVTCompareDoublesWithEpsilon(1.0, NAN, 1e-6) == 1, @"1.0 against NaN compares greater");
+    DVTExpect(DVTCompareDoublesWithEpsilon(-1.0, NAN, 1e-6) == 1, @"-1.0 against NaN compares greater");
+    DVTExpect(DVTCompareDoublesWithEpsilon(NAN, 1.0, 1e-6) == 1, @"NaN against 1.0 compares greater");
+    DVTExpect(DVTCompareDoublesWithEpsilon(NAN, NAN, 1e-6) == 1, @"NaN against NaN compares greater");
+    DVTExpect(DVTCompareDoublesWithEpsilon(INFINITY, INFINITY, 1e-6) == 1, @"INFINITY compares greater than itself");
+    DVTExpect(DVTCompareDoublesWithEpsilon(INFINITY, -INFINITY, 1e-6) == 0, @"INFINITY equals -INFINITY");
+
+    /* Arrays are compared as unordered collections. */
+    DVTExpect(DVTCompareArrays(@[], @[]) == 0, @"two empty arrays are equal");
+    DVTExpect(DVTCompareArrays(@[@1], @[@1]) == 0, @"a one element array equals itself");
+    DVTExpect(DVTCompareArrays(@[@1, @2], @[@2, @1]) == 0, @"element order does not matter");
+    DVTExpect(DVTCompareArrays(@[@3, @1, @2], @[@1, @2, @3]) == 0, @"a shuffled array equals its sorted form");
+    DVTExpect(DVTCompareArrays(@[@"a", @"b"], @[@"b", @"a"]) == 0, @"string order does not matter");
+    DVTExpect(DVTCompareArrays(@[], @[@1]) == -1, @"an empty array precedes a longer one");
+    DVTExpect(DVTCompareArrays(@[@1], @[]) == 1, @"a longer array follows an empty one");
+    DVTExpect(DVTCompareArrays(@[@1, @2], @[@1, @2, @3]) == -1, @"the shorter array precedes the longer");
+    DVTExpect(DVTCompareArrays(@[@1, @2], @[@1, @3]) == -1, @"the first differing element decides");
+    DVTExpect(DVTCompareArrays(@[@1, @3], @[@1, @2]) == 1, @"the first differing element decides the other way");
+    DVTExpect(DVTCompareArrays(@[@1, @1], @[@1, @2]) == -1, @"duplicates are compared by value");
+    /* compare: is case sensitive, which separates it from caseInsensitiveCompare:. */
+    DVTExpect(DVTCompareArrays(@[@"a"], @[@"A"]) == 1, @"sorting is case sensitive");
+    DVTExpect(DVTCompareArrays(@[@"B"], @[@"a"]) == -1, @"sorting is case sensitive both ways");
+    /* A nil array is sorted to nothing and so compares as empty. */
+    DVTExpect(DVTCompareArrays(nil, nil) == 0, @"two nil arrays are equal");
+    DVTExpect(DVTCompareArrays(nil, @[@1]) == -1, @"nil precedes a populated array");
+    DVTExpect(DVTCompareArrays(@[@1], nil) == 1, @"a populated array follows nil");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -709,6 +788,7 @@ int main(int argc, const char *argv[])
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();
+        DVTTestComparison();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);
     }

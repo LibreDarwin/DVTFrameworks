@@ -68,7 +68,7 @@ sources.
 skips any directory without a `.m` file. Everything in this document below
 applies to `DVTFoundation` unless it says otherwise.
 
-Note that the four `DVTAnalytics*` frameworks are distinct bundles:
+Note that the five `DVTAnalytics*` frameworks are distinct bundles:
 `DVTAnalytics`, `DVTAnalyticsClient`, `DVTAnalyticsKit`,
 `DVTAnalyticsMetrics`, and `DVTAnalyticsMetricsClient`. They are separate
 libraries in Apple's tree, not variants of one.
@@ -200,6 +200,56 @@ renderer, and an `NSHashTable` addition. See
 `src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 38 methods
 implemented here.
 
+### Comparison helpers
+
+Six exported C functions in `src/DVTFoundation/DVTComparison.m`, declared in
+`src/DVTFoundation/include/DVTComparison.h`.
+
+| Function | Behaviour |
+| --- | --- |
+| `_DVTCompareBools` | Three-way on the two truth values. |
+| `_DVTCompareIntegers` | Three-way, with no overflow on the extremes. |
+| `_DVTCompareDoubles` | Three-way, with a sign-bit rule for `NaN`. |
+| `_DVTEqualDoublesWithEpsilon` | `fabs(a - b) <= eps * fmin(fabs(a), fabs(b))`. |
+| `_DVTCompareDoublesWithEpsilon` | `0` within tolerance, otherwise `-1`/`1`. |
+| `_DVTCompareArrays` | Sorts with `compare:`, compares count, then elements. |
+
+Three behaviours are worth stating outright because they look like bugs and
+would otherwise get "fixed":
+
+- `_DVTCompareDoubles` returns a value even when an operand is `NaN`. Both
+  `NaN` compares `0`, a `NaN` on the left gives `1` when the right operand is
+  negative and `-1` otherwise, and a `NaN` on the right gives `-1` when the left
+  operand is negative and `1` otherwise. The two branches disagree in polarity
+  on purpose, so `-0.0` is what separates them: `NaN` against `-0.0` returns
+  `1` while `NaN` against `0.0` returns `-1`.
+- `_DVTCompareDoublesWithEpsilon` is not that function with a tolerance bolted
+  on. Its fallback is `a < b ? -1 : 1`, so *every* remaining case is `1`:
+  a `NaN` on either side compares greater regardless of sign, and `INFINITY`
+  against `INFINITY` also returns `1`, because two equal infinities differ by
+  `NaN` and so fail the tolerance test.
+- `_DVTEqualDoublesWithEpsilon(INFINITY, INFINITY)` is `NO` while
+  `(INFINITY, -INFINITY)` is `YES`. The first pair has a `NaN` difference; the
+  second has an infinite difference measured against an equally infinite
+  `epsilon * min`, which the comparison orders as equal.
+
+`_DVTCompareArrays` sorts both operands with `compare:` before anything else, so
+element order is irrelevant and `nil` sorts to an empty array and compares as
+one. The sort happens first in a way that is observable: `@[@1, @"a"]` against
+`@[@1]` raises rather than returning `1` for the longer array, because the sort
+of the mixed array fails before the counts are compared. The original does not
+guard either the sort or the element walk, so a mixed pair raises from `-compare:`
+in both cases, and that parity is preserved here.
+
+These were recovered by differential testing rather than by reading the
+assembly, which is worth noting because the disassembly is actively misleading:
+`_DVTCompareDoublesWithEpsilon` and `_DVTCompareIntegers` both end in a
+`csinv` that decodes as returning only `0` and `-1`, and neither of them does.
+Confirmed against Apple's binary at 1,481,809 generated cases — doubles from raw
+bit patterns (so `NaN` payloads, subnormals, and both zeros), eight epsilon
+values, random 64- and 32-bit integers, and random arrays — with zero mismatches,
+including which inputs raise.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -211,16 +261,16 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 161 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 253 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
-  additions, the command-line rendering table, and both assertion report
-  layouts.
+  additions, the command-line rendering table, both assertion report layouts,
+  and the three-way and epsilon comparison helpers.
 - `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **161 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **253 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
