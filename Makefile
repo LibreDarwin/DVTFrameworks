@@ -15,6 +15,9 @@ TOOLCHAIN_BIN := $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/bin
 SDK_PATH ?= /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 
 CC := $(TOOLCHAIN_BIN)/clang
+SWIFT := $(TOOLCHAIN_BIN)/swiftc
+# The Swift overlay test is skipped rather than failing on a toolchain without Swift.
+HAVE_SWIFT := $(shell test -x $(SWIFT) && echo yes || echo no)
 
 CURRENT_VERSION := 1.0.0
 COMPATIBILITY_VERSION := 1.0.0
@@ -38,6 +41,11 @@ CFLAGS += -isysroot $(SDK_PATH) -I$(INC_DIR) -DDEBUG=1
 LDFLAGS := -isysroot $(SDK_PATH) -framework Foundation -framework CoreFoundation
 
 TEST_BIN := $(BUILD_DIR)/dvt_tests
+
+# Apple's DVTFoundation ships no module map, so Swift reaches the framework
+# through a bridging header rather than `import DVTFoundation`.
+BRIDGING_HEADER := $(TEST_DIR)/DVTFoundation-Bridging-Header.h
+SWIFT_TEST_BIN := $(BUILD_DIR)/dvt_swift_overlay_test
 
 all: framework
 
@@ -94,8 +102,23 @@ $(TEST_BIN): $(TEST_DIR)/dvt_tests.m $(FRAMEWORK_BIN) Makefile
 		-Wl,-rpath,$(abspath $(BUILD_DIR)) \
 		$(LDFLAGS)
 
+$(SWIFT_TEST_BIN): $(TEST_DIR)/dvt_swift_overlay_test.swift $(BRIDGING_HEADER) $(FRAMEWORK_BIN) Makefile
+	@mkdir -p $(dir $@)
+	$(SWIFT) -import-objc-header $(BRIDGING_HEADER) \
+		-I$(INC_DIR) -sdk $(SDK_PATH) \
+		$(TEST_DIR)/dvt_swift_overlay_test.swift -o $@ \
+		$(FRAMEWORK_BIN) \
+		-Xlinker -rpath -Xlinker $(abspath $(BUILD_DIR))
+
+ifeq ($(HAVE_SWIFT),yes)
+test: $(TEST_BIN) $(SWIFT_TEST_BIN)
+	@$(TEST_BIN)
+	@$(SWIFT_TEST_BIN)
+else
 test: $(TEST_BIN)
 	@$(TEST_BIN)
+	@echo "note: $(SWIFT) is not executable, skipping the Swift overlay test"
+endif
 
 clean:
 	rm -rf $(BUILD_DIR)

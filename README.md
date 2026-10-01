@@ -104,13 +104,23 @@ relying on it, so it has to remain a real exported symbol.
 
 ## Testing
 
-`make test` builds `tests/dvt_tests.m` against the freshly built framework and
-runs it. The suite covers the environment snapshot modes, thin/fat/byte-swapped
-Mach-O files (including synthetic ones it writes itself), a header that claims
-more load commands than the file holds, the collection additions, the
-command-line rendering table, and both assertion report layouts.
+`make test` builds both test runners against the freshly built framework and
+runs them:
 
-Current status: **131 checks, 0 failures**.
+- `tests/dvt_tests.m` — 131 checks covering the environment snapshot modes,
+  thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
+  a header that claims more load commands than the file holds, the collection
+  additions, the command-line rendering table, and both assertion report
+  layouts.
+- `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
+  and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
+  for nil arguments.
+
+Current status: **131 checks + 13 Swift checks, 0 failures**, on either SDK.
+
+The suite contains assertions that fail on purpose (its own
+`ASSERTION FAILURE in …` output is expected); the count of failures is what the
+run reports at the end.
 
 ## Fidelity notes
 
@@ -140,9 +150,23 @@ Inferred, and therefore liable to differ from Apple:
 - re-exported libraries report the `LC_REEXPORT_DYLIB` path rather than
   resolving the re-export target
 
-Known gaps: the Swift overlay entry points
-(`_DVTAssertFromSwift`, `_DVTWarnFromSwift`) are declared and defined but have
-not been exercised from Swift, and `DVTSetupWeakPropertyKVOAssertions` is a stub.
+Writing the Swift overlay test turned up three API details that the
+Objective-C suite could not have found, all now settled:
+
+- `DVTAssertionReportHandler.currentHandler` is imported by Swift as
+  `DVTAssertionReportHandler.current`, because Swift drops a property suffix
+  that repeats the class name.
+- The Swift entry points substitute `DVTUnknownFile` and
+  `DVTUnknownFunction` for a nil file or function, so those parameters are
+  declared `_Nullable`. Without that annotation Swift rejects the `nil` that the
+  implementation is written to accept.
+- `-init` reaches Swift as non-optional under Apple's SDK but as failable under
+  the Internal SDK, where `NSObject`'s `init` carries
+  `NS_DESIGNATED_INITIALIZER`. The test routes construction through an explicit
+  `Optional` so it compiles against both.
+
+Known gap: `DVTSetupWeakPropertyKVOAssertions` is a stub, as it is in Apple's
+binary, where it compiles away entirely.
 
 ## License
 

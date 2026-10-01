@@ -66,8 +66,9 @@ DVT_EXTERN NSString *const DVTUnknownFunction;
  */
 @interface DVTAssertionReportHandler : NSObject
 
-/** The handler used when no per-thread override is installed. */
-/** Assign `nil` to restore the default handler. */
+/** The handler used when no per-thread override is installed. Assign `nil` to
+ restore the default handler. Swift imports this as `DVTAssertionReportHandler.current`,
+ having dropped the suffix that repeats the class name. */
 @property (class, nonatomic, strong, nullable) DVTAssertionReportHandler *currentHandler;
 /** The handler installed for `thread`, if any. */
 + (nullable DVTAssertionReportHandler *)currentHandlerForThread:(NSThread *)thread;
@@ -113,8 +114,13 @@ DVT_EXTERN void _DVTAssertionWarningHandler(NSString *file,
                                             NSString *format, ...) NS_FORMAT_FUNCTION(7, 8);
 
 /** Entry points used by the Swift overlay. */
-DVT_EXTERN void _DVTAssertFromSwift(BOOL condition, NSString *file, NSString *function, NSUInteger line, NSString *message, NSString *_Nullable hints);
-DVT_EXTERN void _DVTWarnFromSwift(NSString *file, NSString *function, NSUInteger line, NSString *message, NSString *_Nullable hints);
+/* `file`, `function`, and `message` are nullable: a placeholder is substituted
+   for each one that is missing, which is what a `#file`-less Swift build site or
+   a synthesised call from another language ends up passing. */
+DVT_EXTERN void _DVTAssertFromSwift(BOOL condition, NSString *_Nullable file, NSString *_Nullable function,
+                                   NSUInteger line, NSString *_Nullable message, NSString *_Nullable hints);
+DVT_EXTERN void _DVTWarnFromSwift(NSString *_Nullable file, NSString *_Nullable function, NSUInteger line,
+                                  NSString *_Nullable message, NSString *_Nullable hints);
 
 /** Returns `YES` when assertions are enabled for the current process. */
 DVT_EXTERN BOOL DVTIsAssertionEnvironment(void);
