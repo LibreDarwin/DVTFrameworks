@@ -434,7 +434,16 @@ void _DVTWarnFromSwift(NSString *file,
 /** Enables every case at once; matches the recovered `DVTEnableAllAssertions`. */
 static NSString *const DVTEnableAllAssertionsKey = @"DVTEnableAllAssertions";
 
-/** Gate for each environment past the always-on first case. */
+/**
+ Gates for environments 1 through 4, in the order the reference framework reads
+ them. The framework has a fifth gated case; it has no exported name, so it is
+ not represented here and is handled by deferring to the master switch.
+
+ Nothing in this list is enabled by default, and a process that selects no
+ environment has to land outside the known cases: `0` is the case that asserts
+ without consulting a gate, so defaulting to it would switch assertions on for
+ every process that links this framework.
+ */
 static NSString *const DVTAssertionEnvironmentKeys[] = {
     @"DVTEnableAssertionsForValidationTestSuite",
     @"DVTEnableAssertionsForMemoryPerformanceTestSuite",
@@ -446,22 +455,6 @@ static NSString *const DVTAssertionEnvironmentKeys[] = {
 static const size_t DVTAssertionEnvironmentKeyCount =
     sizeof(DVTAssertionEnvironmentKeys) / sizeof(DVTAssertionEnvironmentKeys[0]);
 
-/**
- The current assertion environment, or `-1` when none is selected. Mirrors the
- reference framework's convention that the first case needs no gate.
- */
-static NSInteger DVTAssertionEnvironmentIndex(void)
-{
-    static NSInteger index = 0;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        const char *value = getenv("DVTAssertionEnvironment");
-        long parsed = (value != NULL && value[0] != '\0') ? strtol(value, NULL, 10) : 0;
-        index = (parsed < 0 || parsed > (long)DVTAssertionEnvironmentKeyCount) ? -1 : (NSInteger)parsed;
-    });
-    return index;
-}
-
 /** `YES` when the hidden user default, or the same-named variable, is set. */
 static BOOL DVTAssertionGateIsEnabled(NSString *key)
 {
@@ -472,33 +465,36 @@ static BOOL DVTAssertionGateIsEnabled(NSString *key)
     return value != NULL && DVTStringIsTrue(@(value));
 }
 
-BOOL DVTIsAssertionEnvironment(void)
+BOOL DVTIsAssertionEnvironment(NSInteger environment)
 {
-    /* Nothing is enabled until a hidden default or variable says so, so a plain
-       run of a tool that links this framework stays quiet. */
-    if (DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey)) {
+    /* The reference framework switches on this integer directly. Case 0 is the
+       one that needs no gate; anything outside the known cases is simply not an
+       assertion environment. */
+    if (environment == 0) {
         return YES;
     }
-    NSInteger index = DVTAssertionEnvironmentIndex();
-    if (index <= 0 || (size_t)index > DVTAssertionEnvironmentKeyCount) {
-        return NO;
+    if (environment > 0 && (size_t)environment <= DVTAssertionEnvironmentKeyCount) {
+        return DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[environment - 1]);
     }
-    return DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[index - 1]);
+    return NO;
 }
 
-BOOL DVTShouldAssertForEnvironment(NSString *environment)
+BOOL DVTShouldAssertForEnvironment(NSInteger environment)
 {
-    if (environment == nil || environment.length == 0) {
-        return DVTIsAssertionEnvironment();
-    }
-    if (DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey)) {
+    if (environment == 0) {
         return YES;
     }
-    /* Naming a suite asks about that suite; anything else is taken at face value. */
-    for (size_t index = 0; index < DVTAssertionEnvironmentKeyCount; index++) {
-        if ([DVTAssertionEnvironmentKeys[index] isEqualToString:environment]) {
-            return DVTAssertionGateIsEnabled(environment);
+    if (environment < 0 || environment > (NSInteger)DVTAssertionEnvironmentKeyCount) {
+        return DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey);
+    }
+    /* The reference switch falls through, so a case that finds its own gate
+       closed asks every later gate in turn before giving up. */
+    for (NSInteger index = environment; index <= (NSInteger)DVTAssertionEnvironmentKeyCount; index++) {
+        if (DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[index - 1])) {
+            return YES;
         }
     }
-    return DVTStringIsTrue(environment);
+    /* Apple's fifth gated case has no exported name yet. Until it is
+       identified, defer to the master switch rather than invent a default. */
+    return DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey);
 }

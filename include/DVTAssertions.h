@@ -122,11 +122,24 @@ DVT_EXTERN void _DVTAssertFromSwift(BOOL condition, NSString *_Nullable file, NS
 DVT_EXTERN void _DVTWarnFromSwift(NSString *_Nullable file, NSString *_Nullable function, NSUInteger line,
                                   NSString *_Nullable message, NSString *_Nullable hints);
 
-/** Returns `YES` when assertions are enabled for the current process. */
-DVT_EXTERN BOOL DVTIsAssertionEnvironment(void);
+/**
+ Returns `YES` when `environment` is an environment whose own gate is set.
 
-/** Returns `YES` when `environment` should run assertions. */
-DVT_EXTERN BOOL DVTShouldAssertForEnvironment(NSString *_Nullable environment);
+ The argument is a small integer environment selector, not a name. The
+ reference framework switches on it directly and never messages it: `0` needs
+ no gate and asserts, `1` through `5` are decided by the gate for that case,
+ and anything else is not an assertion environment at all.
+ */
+DVT_EXTERN BOOL DVTIsAssertionEnvironment(NSInteger environment);
+
+/**
+ Returns `YES` when `environment` should run assertions.
+
+ Same integer selector as `DVTIsAssertionEnvironment`, but permissive: a case
+ that finds its own gate closed falls through to every later gate, and an
+ unrecognised selector defers to `DVTEnableAllAssertions`.
+ */
+DVT_EXTERN BOOL DVTShouldAssertForEnvironment(NSInteger environment);
 
 /** A one-line description of the calling thread, for report headers. */
 DVT_EXTERN NSString *DVTThreadDescription(void);

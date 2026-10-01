@@ -85,9 +85,20 @@ The assertion gates mirror the hidden user defaults found in Apple's binary —
 `DVTEnableAssertionsForMemoryPerformanceTestSuite`,
 `DVTEnableAssertionsForCPUPerformanceTestSuite`,
 `DVTEnableAssertionsForQuickLookTestSuite`, and `DVTEnableAllAssertions` — each
-of which is also read from the environment of the same name. Nothing is enabled
-by default, so a plain run stays quiet. `DVTFailureHintCreator` turns an object,
-a selector, or a class into the hint text that appears in the report.
+of which is also read from the environment of the same name.
+
+`DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` both take a small
+integer selector, not a suite name. Apple switches on that integer and never
+messages it, and both of its call sites pass the literal `2`. Selector `0` is
+the one case that asserts without consulting a gate; `1` through `5` are decided
+by that case's own gate; anything else is not an assertion environment.
+`ShouldAssert` is the permissive variant — a case that finds its own gate closed
+falls through to the later gates, and an unrecognised selector defers to
+`DVTEnableAllAssertions`. Nothing is enabled by default, so a plain run stays
+quiet: a process that selects no environment has to land outside the known
+cases, since defaulting to `0` would assert unconditionally.
+`DVTFailureHintCreator` turns an object, a selector, or a class into the hint
+text that appears in the report.
 
 ### Foundation additions
 
@@ -107,7 +118,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 131 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 161 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, and both assertion report
@@ -116,7 +127,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **131 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **161 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -124,11 +135,13 @@ run reports at the end.
 
 ## Scope
 
-This is a partial reimplementation. Apple's `DVTFoundation` exports 526 distinct
+This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
 `dvt_` Objective-C methods across its categories, 250 of them in
-`DVTFoundationClassAdditions` alone. This project implements 43 of them, chosen
-for what `IDETools` and the recovered usage actually reach. Callers using any of
-the other 483 will not find it here.
+`DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
+exported C entry points, so they are absent from `nm`'s export list and only
+show up when the selector itself is read. This project implements 43 of them,
+chosen for what `IDETools` and the recovered usage actually reach. Callers using
+any of the other 483 will not find it here.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -154,12 +167,13 @@ Recovered from Apple's binary, or matched against it byte for byte:
   characters — `'`, space, `"`, and tab — and renders an empty argument as `""`.
   A backslash is *not* escaped, and neither is the rest of the shell
   metacharacters, so its output is not shell-safe
+- `DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` take an integer
+  selector rather than a suite name, and both are called with the literal `2`.
+  Selector `0` asserts without consulting a gate, `1`–`5` map to the gates in
+  order, and the permissive variant falls through to the later gates
 
 Inferred, and therefore liable to differ from Apple:
 
-- the exact order of the six assertion-environment cases; the mapping from a
-  selected environment to a suite default is a best reading of the recovered
-  control flow
 - re-exported libraries report the `LC_REEXPORT_DYLIB` path rather than
   resolving the re-export target
 

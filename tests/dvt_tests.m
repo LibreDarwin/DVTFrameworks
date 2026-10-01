@@ -604,7 +604,46 @@ static void DVTTestAssertions(void)
                   containsString:@"should be an instance inheriting from NSString"],
               @"class hint uses the recovered wording");
 
-    DVTExpect(!DVTIsAssertionEnvironment(), @"assertions are off by default in this environment");
+    /* The selector is an integer, and nothing is selected by default, so the
+       out-of-range case is the quiet one. */
+    DVTExpect(!DVTIsAssertionEnvironment(-1), @"no environment selected is quiet");
+    DVTExpect(!DVTIsAssertionEnvironment(9), @"an unknown environment is quiet");
+    DVTExpect(DVTIsAssertionEnvironment(0), @"environment 0 needs no gate");
+    for (NSInteger environment = 1; environment <= 4; environment++) {
+        DVTExpect(!DVTIsAssertionEnvironment(environment),
+                 @"gated environments are off unless their own gate is set");
+    }
+    /* The fall-through runs towards the later gates, so opening the first gate
+       answers only for the first case, and opening the last answers for all of
+       them. That direction is the easy thing to get backwards. */
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:YES forKey:@"DVTEnableAssertionsForValidationTestSuite"];
+    DVTExpect(DVTIsAssertionEnvironment(1), @"the open gate answers for its own case");
+    DVTExpect(!DVTIsAssertionEnvironment(2), @"a later case is not carried backwards");
+    DVTExpect(DVTShouldAssertForEnvironment(1), @"ShouldAssert agrees on its own case");
+    DVTExpect(!DVTShouldAssertForEnvironment(2),
+             @"an earlier gate does not reach a later case");
+    [defaults removeObjectForKey:@"DVTEnableAssertionsForValidationTestSuite"];
+
+    [defaults setBool:YES forKey:@"DVTEnableAssertionsForQuickLookTestSuite"];
+    for (NSInteger environment = 1; environment <= 4; environment++) {
+        DVTExpect(DVTShouldAssertForEnvironment(environment),
+                 @"the last gate carries every earlier case");
+    }
+    DVTExpect(!DVTShouldAssertForEnvironment(9),
+             @"an unknown environment ignores a suite gate and asks the master switch");
+    [defaults removeObjectForKey:@"DVTEnableAssertionsForQuickLookTestSuite"];
+    DVTExpect(!DVTShouldAssertForEnvironment(1), @"clearing the gate closes the case again");
+
+    /* ShouldAssert is the permissive variant: unrecognised selectors defer to
+       the master switch, which is also unset here. */
+    DVTExpect(!DVTShouldAssertForEnvironment(-1), @"unselected asks the master switch");
+    DVTExpect(!DVTShouldAssertForEnvironment(9), @"unknown asks the master switch");
+    DVTExpect(DVTShouldAssertForEnvironment(0), @"environment 0 asserts either way");
+    for (NSInteger environment = 1; environment <= 4; environment++) {
+        DVTExpect(!DVTShouldAssertForEnvironment(environment),
+                 @"a closed gate falls through and stays closed");
+    }
 
     [DVTAssertionReportHandler setCurrentHandler:nil];
     DVTExpect([DVTAssertionReportHandler currentHandler] != nil, @"there is always a default handler");
