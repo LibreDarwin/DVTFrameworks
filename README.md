@@ -94,7 +94,7 @@ a selector, or a class into the hint text that appears in the report.
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), a command-line
 renderer, and an `NSHashTable` addition. See
-`include/DVTFoundationClassAdditions.h` for all 33 methods.
+`include/DVTFoundationClassAdditions.h` for the 38 methods implemented here.
 
 ### Errors
 
@@ -122,6 +122,18 @@ The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
 run reports at the end.
 
+## Scope
+
+This is a partial reimplementation. Apple's `DVTFoundation` exports 526 distinct
+`dvt_` Objective-C methods across its categories, 250 of them in
+`DVTFoundationClassAdditions` alone. This project implements 43 of them, chosen
+for what `IDETools` and the recovered usage actually reach. Callers using any of
+the other 483 will not find it here.
+
+What is implemented is matched against Apple's binary rather than guessed; what
+is not implemented is not stubbed out, so its absence is visible as a missing
+selector instead of a wrong answer.
+
 ## Fidelity notes
 
 Recovered from Apple's binary, or matched against it byte for byte:
@@ -135,18 +147,19 @@ Recovered from Apple's binary, or matched against it byte for byte:
 - the hidden assertion defaults listed above
 - the diagnostic text
   `You may need to set the hidden user default "%@" to 1 to reproduce.`
+- `dvt_arrayByRemovingObject:` drops every element that is pointer-identical to
+  or `isEqual:` to the argument, not just the first, despite the singular
+  argument name
+- `dvt_stringByConcatenatingAsCommandLineArguments` escapes exactly four
+  characters — `'`, space, `"`, and tab — and renders an empty argument as `""`.
+  A backslash is *not* escaped, and neither is the rest of the shell
+  metacharacters, so its output is not shell-safe
 
 Inferred, and therefore liable to differ from Apple:
 
 - the exact order of the six assertion-environment cases; the mapping from a
   selected environment to a suite default is a best reading of the recovered
   control flow
-- the shell metacharacter set used by
-  `dvt_stringByConcatenatingAsCommandLineArguments` (space, both quote kinds,
-  and backslash are escaped; an empty argument becomes `''`, and `NSNull` is
-  described and escaped so argument count is preserved)
-- `dvt_arrayByRemovingObject:` removes the first matching occurrence, matching
-  the "FirstOccurrence" wording of its sibling method
 - re-exported libraries report the `LC_REEXPORT_DYLIB` path rather than
   resolving the re-export target
 

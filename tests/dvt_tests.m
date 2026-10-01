@@ -16,6 +16,15 @@
 
 #import "DVTFoundation.h"
 
+/** An object that claims to be equal to nothing, not even to itself. */
+@interface DVTPicky : NSObject
+@end
+
+@implementation DVTPicky
+- (BOOL)isEqual:(id)other { (void)other; return NO; }
+- (NSUInteger)hash { return 0; }
+@end
+
 static int DVTTestFailures = 0;
 static int DVTTestCount = 0;
 
@@ -387,9 +396,17 @@ static void DVTTestClassAdditions(void)
     DVTExpectEqualObjects([@[@"a", [NSNull null], @"b"] dvt_arrayByRemovingNSNulls], (@[@"a", @"b"]),
                           @"NSNull removed");
     DVTExpectEqualObjects([sample dvt_arrayByRemovingObject:@"bb"], (@[@"a", @"ccc"]), @"object removed");
-    /* Only the first occurrence goes, matching the "FirstOccurrence" sibling. */
-    DVTExpectEqualObjects([@[@"a", @"b", @"a"] dvt_arrayByRemovingObject:@"a"], (@[@"b", @"a"]),
-                          @"only the first occurrence is removed");
+    /* Every match goes, not just the first: see the method's disassembly note. */
+    DVTExpectEqualObjects([@[@"a", @"b", @"a"] dvt_arrayByRemovingObject:@"a"], (@[@"b"]),
+                          @"every occurrence is removed, not just the first");
+    DVTExpectEqualObjects([@[@"a", @"a", @"a"] dvt_arrayByRemovingObject:@"a"], (@[]),
+                          @"all three occurrences are removed");
+    DVTExpectEqualObjects([sample dvt_arrayByRemovingObject:sample.lastObject], (@[@"a", @"bb"]),
+                          @"a pointer-identical element is removed");
+    /* A pointer-identical object is dropped even when isEqual: would say no. */
+    DVTPicky *picky = [DVTPicky new];
+    DVTExpectEqualObjects([@[picky, @"x"] dvt_arrayByRemovingObject:picky], (@[@"x"]),
+                          @"identity is tested before isEqual:");
     DVTExpectEqualObjects([sample dvt_arrayByRemovingObject:@"absent"], sample,
                           @"removing an absent object copies the receiver");
     DVTExpectEqualObjects(sample.dvt_arrayByReversingObjects, (@[@"ccc", @"bb", @"a"]), @"reversed");
@@ -430,15 +447,23 @@ static void DVTTestClassAdditions(void)
         @[@"no arguments", @[], @""],
         @[@"single argument", @[@"one"], @"one"],
         @[@"arguments are space separated", @[@"one", @"two"], @"one two"],
-        @[@"empty argument is quoted", @[@""], @"''"],
-        @[@"every empty argument is quoted", @[@"", @""], @"'' ''"],
+        /* An empty argument becomes two double quotes, not two single quotes. */
+        @[@"empty argument is quoted", @[@""], @"\"\""],
+        @[@"every empty argument is quoted", @[@"", @""], @"\"\" \"\""],
         @[@"spaces are backslash escaped", @[@"a b"], @"a\\ b"],
         @[@"single quotes are escaped", @[@"a'b"], @"a\\'b"],
         @[@"double quotes are escaped", @[@"a\"b"], @"a\\\"b"],
+        @[@"tabs are backslash escaped", @[@"a\tb"], @"a\\\tb"],
+        /* The escaping set is only quote, space, and tab, so a backslash is
+           already literal and must not be doubled, and the rest of the shell
+           metacharacters are not escaped at all. */
+        @[@"backslashes are left alone", @[@"a\\b"], @"a\\b"],
+        @[@"other shell metacharacters are left alone", @[@"a$b*c;d|e&f>g<h~i#j!k"], @"a$b*c;d|e&f>g<h~i#j!k"],
+        @[@"newlines are left alone", @[@"a\nb"], @"a\nb"],
         @[@"non-strings are described", @[@1, @2], @"1 2"],
-        /* Describing NSNull keeps the argument count intact, and escaping it keeps
-           the result inert if it is handed to a shell. */
-        @[@"NSNull keeps its place", @[@"x", [NSNull null], @"y"], @"x \\<null\\> y"],
+        /* Describing NSNull keeps the argument count intact. None of the
+           characters in <null> are in the escaping set, so it is emitted as is. */
+        @[@"NSNull keeps its place", @[@"x", [NSNull null], @"y"], @"x <null> y"],
     ];
     for (NSArray *renderingCase in renderingCases) {
         NSArray *input = [renderingCase objectAtIndex:1];

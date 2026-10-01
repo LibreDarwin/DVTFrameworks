@@ -64,8 +64,11 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     static NSCharacterSet *characterSet;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        characterSet = [NSCharacterSet characterSetWithCharactersInString:
-                            @"!\"#$%&'()*+,;<=>?@[\\]^`{|}~ \t\n"];
+        /* Read from the literal Apple passes to characterSetWithCharactersInString:
+           (cfstring 0x6beae8, length 4). Single quote, space, double quote, tab
+           -- notably *not* the rest of the shell metacharacters, and *not*
+           backslash, which therefore passes through unescaped. */
+        characterSet = [NSCharacterSet characterSetWithCharactersInString:@"' \"\t"];
     });
     return characterSet;
 }
@@ -390,21 +393,17 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 
 - (NSArray *)dvt_arrayByRemovingObject:(id)object
 {
-    if (DVTIndexOfObject(self, object) == NSNotFound) {
-        return [self copy];
-    }
-    NSMutableArray *result = [NSMutableArray arrayWithCapacity:self.count];
-    BOOL removed = NO;
-    NSUInteger count = self.count;
-    for (NSUInteger index = 0; index < count; index++) {
-        id candidate = [self objectAtIndex:index];
-        if (!removed && [candidate isEqual:object]) {
-            removed = YES;
-            continue;
-        }
-        [result addObject:candidate];
-    }
-    return result;
+    /* Disassembly of Apple's implementation: the whole method retains the
+       argument, builds one block, and tail-calls dvt_objectsPassingTest:. The
+       block tests the candidate for pointer identity against the argument
+       first and returns NO on a match, otherwise returns !isEqual:.
+
+       So an element goes when it is pointer-identical to the argument *or*
+       isEqual: to it, and every match goes, not just the first. Reproduced here
+       in the same shape, including the identity test preceding isEqual:. */
+    return [self dvt_objectsPassingTest:^BOOL(id candidate) {
+        return candidate != object && ![candidate isEqual:object];
+    }];
 }
 
 - (NSArray *)dvt_arrayByRemovingObjectsInArray:(NSArray *)objects
@@ -478,6 +477,10 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 
 - (NSString *)dvt_stringByConcatenatingAsCommandLineArguments
 {
+    /* Follows the shape of Apple's implementation: a single space separates
+       arguments and is skipped before the first one, an empty argument becomes
+       two double quotes, and every metacharacter found is emitted as a
+       backslash followed by the character itself. */
     NSUInteger count = self.count;
     if (count == 0) {
         return @"";
@@ -489,26 +492,44 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     for (NSUInteger index = 0; index < count; index++) {
         id object = [self objectAtIndex:index];
         NSString *value = [object isKindOfClass:[NSString class]] ? object : [object description];
-        if (value == nil) {
-            continue;
-        }
 
         if (index > 0) {
             [result appendString:@" "];
         }
 
-        if (value.length == 0) {
-            [result appendString:@"''"];
+        if ([value isEqualToString:@""]) {
+            [result appendString:@"\"\""];
             continue;
         }
 
-        NSUInteger length = value.length;
-        for (NSUInteger position = 0; position < length; position++) {
-            unichar character = [value characterAtIndex:position];
-            if ([metacharacters characterIsMember:character]) {
-                [result appendString:@"\\"];
+        /* Walk the argument, copying the clean runs between metacharacters
+           wholesale rather than one UTF-16 unit at a time, so a surrogate pair
+           in a run is never split.
+
+           Apple locates each metacharacter with
+           -rangeOfCharacterFromSet:options:range: and NSLiteralSearch, but the
+           reduced Internal SDK declares no rangeOfCharacterFromSet: variant at
+           all, so the same next-metacharacter search is done here a UTF-16 unit
+           at a time. The two agree for an ASCII-only set. */
+        NSUInteger position = 0;
+        NSUInteger remaining = value.length;
+        while (remaining > 0) {
+            NSUInteger location = position;
+            while (location < value.length &&
+                   ![metacharacters characterIsMember:[value characterAtIndex:location]]) {
+                location++;
             }
-            [result appendFormat:@"%C", character];
+            if (location > position) {
+                [result appendString:[value substringWithRange:NSMakeRange(position, location - position)]];
+                remaining -= (location - position);
+                position = location;
+            }
+            if (location < value.length) {
+                [result appendString:@"\\"];
+                [result appendString:[value substringWithRange:NSMakeRange(location, 1)]];
+                position += 1;
+                remaining -= 1;
+            }
         }
     }
 

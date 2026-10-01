@@ -86,6 +86,10 @@ NS_ASSUME_NONNULL_BEGIN
 /** A copy with every `NSNull` removed. */
 - (NSArray *)dvt_arrayByRemovingNSNulls;
 /** A copy with the first `object` removed, using `isEqual:`. */
+/** A copy with every element that is identical to, or `isEqual:` to, `object`
+ removed. Despite the singular argument this removes all matches, not just the
+ first, which is what sets it apart from
+ `dvt_arrayByMovingFirstOccurrenceOfObjectToFrontIfPresent:`. */
 - (NSArray *)dvt_arrayByRemovingObject:(id)object;
 /** A copy with every element of `objects` removed, using `isEqual:`. */
 - (NSArray *)dvt_arrayByRemovingObjectsInArray:(NSArray *)objects;
@@ -120,8 +124,14 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Renders the receiver the way a command line would accept it: elements are
  separated by a single space, non-`NSString` elements are described, the empty
- string is emitted as `''`, and characters from the shell metacharacter set are
- backslash-escaped. An empty receiver yields the empty string.
+ string is emitted as `""`, and an empty receiver yields the empty string.
+
+ Escaping is narrower than the name suggests. Only the four characters in
+ `'`, space, `"`, and tab are backslash-escaped, matching the literal Apple
+ passes to `+[NSCharacterSet characterSetWithCharactersInString:]`. A backslash
+ is therefore already literal and is *not* doubled, and the rest of the shell
+ metacharacters (`$`, `*`, `;`, `|`, `&`, `>`, `<`, `~`, `#`, `!`, newline) pass
+ through untouched, so the result is not safe to hand to a shell unquoted.
  */
 - (NSString *)dvt_stringByConcatenatingAsCommandLineArguments;
 
