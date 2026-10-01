@@ -11,19 +11,67 @@ is inferred is called out explicitly in [Fidelity notes](#fidelity-notes).
 
 ## Frameworks
 
+The package is 44 frameworks, matching the `DVT*.framework` bundles in Apple's
+`Xcode.app/Contents/SharedFrameworks` one for one. Each has a directory under
+`src/` so the layout is already in place; only the ones marked implemented have
+sources.
+
 | Framework | Status |
 | --- | --- |
 | `DVTFoundation` | Implemented. The core, non-UI layer. |
 | `DVTAnalytics` | Not started |
+| `DVTAnalyticsClient` | Not started |
+| `DVTAnalyticsKit` | Not started |
+| `DVTAnalyticsMetrics` | Not started |
+| `DVTAnalyticsMetricsClient` | Not started |
+| `DVTAppStoreConnect` | Not started |
+| `DVTCocoaAdditionsKit` | Not started |
+| `DVTCoreDeviceCore` | Not started |
+| `DVTCoreGlyphs` | Not started |
+| `DVTCrashLogFoundation` | Not started |
+| `DVTDeviceFoundation` | Not started |
+| `DVTDeviceKit` | Not started |
+| `DVTDeviceProvisioning` | Not started |
+| `DVTDocumentation` | Not started |
+| `DVTExplorableKit` | Not started |
+| `DVTFeedbackReporting` | Not started |
+| `DVTIconKit` | Not started |
+| `DVTInstrumentsAnalysisCore` | Not started |
+| `DVTInstrumentsFoundation` | Not started |
+| `DVTInstrumentsUtilities` | Not started |
+| `DVTITunesSoftware` | Not started |
+| `DVTITunesSoftwareServiceFoundation` | Not started |
+| `DVTKeychain` | Not started |
+| `DVTKeychainService` | Not started |
+| `DVTKeychainUtilities` | Not started |
 | `DVTKit` | Not started |
-| `DVTSigningKit` | Not started |
+| `DVTLibraryKit` | Not started |
+| `DVTMacroFoundation` | Not started |
+| `DVTMarkup` | Not started |
+| `DVTPlaygroundCommunication` | Not started |
+| `DVTPlaygroundStubMacServices` | Not started |
+| `DVTPortal` | Not started |
+| `DVTProducts` | Not started |
+| `DVTProductsUI` | Not started |
+| `DVTServices` | Not started |
+| `DVTSmartSearch` | Not started |
 | `DVTSourceControl` | Not started |
+| `DVTSourceEditor` | Not started |
+| `DVTStructuredLayoutKit` | Not started |
+| `DVTSystemPrerequisites` | Not started |
+| `DVTSystemPrerequisitesUI` | Not started |
 | `DVTUserInterfaceKit` | Not started |
 | `DVTViewControllerKit` | Not started |
 
-`DVTFoundation` is the only one with sources so far; the rest have empty
-directories so the layout is already in place. Everything in this document
-below applies to `DVTFoundation` unless it says otherwise.
+`DVTFoundation` is the only one with sources so far; the rest carry a
+`.gitkeep` so the empty directory is preserved by git, and the `Makefile`
+skips any directory without a `.m` file. Everything in this document below
+applies to `DVTFoundation` unless it says otherwise.
+
+Note that the four `DVTAnalytics*` frameworks are distinct bundles:
+`DVTAnalytics`, `DVTAnalyticsClient`, `DVTAnalyticsKit`,
+`DVTAnalyticsMetrics`, and `DVTAnalyticsMetricsClient`. They are separate
+libraries in Apple's tree, not variants of one.
 
 ## Layout
 
@@ -33,7 +81,7 @@ headers alongside its implementations.
 | Path | Contents |
 | --- | --- |
 | `include/` | Headers shared by every framework. Currently only `DVTDefines.h`, which defines `DVT_EXTERN` and `DVT_VISIBILITY`. |
-| `src/<Framework>/` | That framework's implementations, one file per subsystem. |
+| `src/<Framework>/` | That framework's implementations, one file per subsystem. A directory with only a `.gitkeep` is a placeholder. |
 | `src/<Framework>/include/` | That framework's public headers. `DVTFoundation.h` is the `DVTFoundation` umbrella. |
 | `tests/` | Test runners, currently `dvt_tests.m` and the Swift overlay test. |
 | `Makefile` | Framework, test, and install rules. |
@@ -214,8 +262,12 @@ Recovered from Apple's binary, or matched against it byte for byte:
   metacharacters, so its output is not shell-safe
 - `DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` take an integer
   selector rather than a suite name, and both are called with the literal `2`.
-  Selector `0` asserts without consulting a gate, `1`–`5` map to the gates in
-  order, and the permissive variant falls through to the later gates
+  Selector `0` asserts without consulting a gate, `1`–`5` map to the gates
+  QuickLook, CPUPerformance, MemoryPerformance, Validation for `2`–`5` with
+  case `1` named by nothing, and the permissive variant falls through to the
+  later gates before deferring to the master switch
+- the package is 44 frameworks, one per `DVT*.framework` bundle in Apple's
+  `SharedFrameworks`
 - `DVTMachOReexportedLibrariesForExecutable` is a five-instruction tail call into
   the same enumerator `DVTMachOLinkedLibrariesForExecutable` uses, differing only
   in its filter. Apple does not resolve a re-export target: the path reported is
