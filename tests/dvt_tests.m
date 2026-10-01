@@ -436,6 +436,15 @@ static void DVTTestClassAdditions(void)
               @"onlyObjectPassingTest rejects multiple matches");
     DVTExpect([sample dvt_anyObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }],
               @"anyObjectsPassTest");
+    DVTExpect(![sample dvt_allObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }],
+              @"allObjectsPassTest rejects a non-matching element");
+    DVTExpect([sample dvt_allObjectsPassTest:^BOOL(id o) { return YES; }],
+              @"allObjectsPassTest accepts when every element passes");
+    DVTExpect([@[] dvt_allObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"allObjectsPassTest is vacuously true when empty");
+    BOOL (^nilTest)(id) = nil;
+    DVTExpect([sample dvt_allObjectsPassTest:nilTest],
+              @"allObjectsPassTest treats a nil test as vacuously true, even when non-empty");
     DVTExpectEqualObjects([sample dvt_objectsOfClass:[NSString class]], sample, @"objectsOfClass");
 
     DVTExpect([sample dvt_containsObjectIdenticalTo:[sample objectAtIndex:0]], @"identical object found");
@@ -773,6 +782,89 @@ static void DVTTestComparison(void)
     DVTExpect(DVTCompareArrays(@[@1], nil) == 1, @"a populated array follows nil");
 }
 
+@interface DVTKeyPathProbeBase : NSObject
+@property (nonatomic, copy) NSString *name;
+@end
+@implementation DVTKeyPathProbeBase
+@end
+
+@interface DVTKeyPathProbeDerived : DVTKeyPathProbeBase
+@property (nonatomic, assign) int number;
+@end
+@implementation DVTKeyPathProbeDerived
+@end
+
+static void DVTTestKeyPathComparison(void)
+{
+    DVTKeyPathProbeBase *base = [DVTKeyPathProbeBase new];
+    base.name = @"shared";
+    DVTKeyPathProbeBase *twin = [DVTKeyPathProbeBase new];
+    twin.name = @"shared";
+    DVTKeyPathProbeBase *other = [DVTKeyPathProbeBase new];
+    other.name = @"different";
+    DVTKeyPathProbeDerived *derived = [DVTKeyPathProbeDerived new];
+    derived.name = @"shared";
+
+    /* Identity is checked before anything else, so it wins even when the mode
+       is not one the function knows. Two nils are identical, and so equal. */
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, base, 7, @[@"nope"]), @"an object equals itself under any mode");
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(nil, nil, 0, @[]), @"two nils are identical and therefore equal");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(nil, base, 0, @[]), @"nil against an object is not equal");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, nil, 0, @[]), @"an object against nil is not equal");
+
+    /* Mode 0 accepts a subclass, mode 1 does not, and the check is one
+       directional: a derived left operand against a base right one fails,
+       because it asks whether the *right* operand is a kind of the left one. */
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, derived, DVTKeyPathClassMatchAllowsSubclass, @[]),
+              @"mode 0 allows a subclass on the right");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, derived, DVTKeyPathClassMatchRequiresIdenticalClass, @[]),
+              @"mode 1 requires the identical class");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(derived, base, DVTKeyPathClassMatchAllowsSubclass, @[]),
+              @"the subclass allowance only runs left to right");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, twin, 2, @[]), @"an unknown mode is never equal");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, twin, NSUIntegerMax, @[]), @"nor is any other unknown mode");
+
+    /* An empty key path list passes, so the class check alone decides. */
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, twin, 0, @[]), @"equal classes with no key paths are equal");
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, other, 0, @[]), @"unequal contents do not matter without key paths");
+
+    /* With key paths, each pair of values is compared by identity and then
+       isEqual:. */
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, twin, 0, @[@"name"]), @"equal key path values are equal");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, other, 0, @[@"name"]), @"differing key path values are not");
+    DVTExpect(DVTEqualObjectsUsingKeyPaths(base, twin, 0, @[@"name", @"name"]),
+              @"every key path has to agree, not just one");
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, other, 0, @[@"name", @"name"]),
+              @"one disagreeing key path is enough to fail");
+
+    /* Two distinct objects can hold the identical value, and identity is tried
+       first, so a pair of shared strings matches. */
+    NSString *shared = @"shared";
+    DVTExpect(DVTEqualObjectsUsingKeyPaths([DVTKeyPathProbeBase new], twin, 0, @[@"name"]) == NO,
+              @"a nil key path value is not equal to a string");
+    (void)shared;
+
+    /* A key path that does not resolve raises out of the function rather than
+       being treated as a mismatch. */
+    @try {
+        DVTEqualObjectsUsingKeyPaths(base, twin, 0, @[@"missing"]);
+        DVTExpect(NO, @"an undefined key path raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:@"NSUnknownKeyException"],
+                  @"an undefined key path raises NSUnknownKeyException");
+    }
+
+    /* keyPaths has to be a collection that answers dvt_allObjectsPassTest:. */
+    @try {
+        DVTEqualObjectsUsingKeyPaths(base, twin, 0, @"name");
+        DVTExpect(NO, @"a non-collection key path list raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                  @"a non-collection key path list raises NSInvalidArgumentException");
+    }
+    DVTExpect(!DVTEqualObjectsUsingKeyPaths(base, twin, 0, nil), @"a nil key path list is not equal");
+}
+
 static void DVTTestCertificateComparison(void)
 {
     NSString *iOSDev = @"1.2.840.113635.100.6.1.2";
@@ -857,6 +949,7 @@ int main(int argc, const char *argv[])
         DVTTestAssertions();
         DVTTestComparison();
         DVTTestCertificateComparison();
+        DVTTestKeyPathComparison();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);
     }

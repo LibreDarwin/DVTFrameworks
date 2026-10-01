@@ -288,6 +288,62 @@ pairs of known OIDs, `nil` in every position, unknown strings, non-string
 operands, 30,000 random strings, and exception-name parity for the sets. Zero
 mismatches.
 
+### Key path equality
+
+`_DVTEqualObjectsUsingKeyPaths(lhs, rhs, mode, keyPaths)` compares two objects by
+reading the same key paths out of both and comparing each pair. Its third
+argument looks like a key path count and is not: it is a **class-strictness
+mode**, and getting that wrong is what made the first round of probes
+contradict the disassembly.
+
+| `mode` | class requirement |
+| --- | --- |
+| `0` | `rhs` is a `kind of` `[lhs class]` |
+| `1` | `rhs` is a `member of` exactly `[lhs class]` |
+| anything else | never equal |
+
+The check is one-directional — it asks whether the *right* operand is a subclass
+of the left one's class — so a derived left operand and a base right operand
+fail even in mode `0`. The mode argument is not a count, and a value of `2` is
+not "two key paths": it is an unsupported mode.
+
+The order of the checks is observable and none of them can be skipped:
+
+1. Identical operands return `YES` before the mode is even examined, which is
+   why an unsupported mode still reports two identical objects as equal, and why
+   two `nil`s are equal — `nil == nil`.
+2. A single `nil` operand is `NO`.
+3. The class check runs next, and failing it returns `NO` without reading a
+   single key path.
+4. Only then are the key paths enumerated, stopping at the first disagreement.
+
+An empty `keyPaths` therefore passes vacuously, and the class check alone
+decides the answer.
+
+Each value pair is compared by **identity first**, and `isEqual:` only when the
+two are not the same object. That ordering is deliberate: an object whose
+`isEqual:` refuses to accept even itself still compares equal to itself.
+
+Two dependencies had to be reconstructed alongside it. The function sends
+`dvt_allObjectsPassTest:` to `keyPaths`, and that selector is implemented in
+Apple as a non-exported category method on `NSArray` — so it is a real method
+here, not one of the intentionally-missing selectors, and it was added to
+`DVTFoundationClassAdditions`. It returns `YES` on exhaustion, which is what
+makes the empty `keyPaths` case vacuously true. Apple also carries
+`dvt_allObjectsPassTest:` on `NSSet` and `NSHashTable`; those are still missing.
+`-valueForKeyPath:` is plain KVC, but the SDK used to build this framework does
+not declare it, so it is declared locally where it is used.
+
+Exceptions are not caught. An undefined key path raises `NSUnknownKeyException`
+out of the function, and a `keyPaths` that is not a collection carrying
+`dvt_allObjectsPassTest:` raises `NSInvalidArgumentException`. A `nil`
+`keyPaths` messages `nil`, yields `nil`, and `nil` is `NO`.
+
+Verified over 37,216 differential cases: 24 operand types against each other,
+modes `0`–`3` plus `4`–`8`, sixteen key path collections including non-collections
+and a `nil` one, and `nil` in every position, with exception-name parity. Zero
+mismatches.
+
 Still missing from this family: `_DVTSigningCertificateDisplayNameForCertificateKind`.
 Apple exports the seven `DVTCertificateKind_*` identifiers alongside seven
 `DVTCertificateKindName_*` values, but the two sets do not pair up by name —
@@ -306,7 +362,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 272 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 295 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -315,7 +371,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **272 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **295 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

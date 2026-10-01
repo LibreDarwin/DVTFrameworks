@@ -70,6 +70,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 /** `YES` when any element satisfies `test`. */
 - (BOOL)dvt_anyObjectsPassTest:(BOOL (^)(id object))test;
+/**
+ `YES` when every element satisfies `test`, stopping at the first that does not.
+
+ An empty receiver is `YES` without ever calling `test`, so this is a vacuous
+ truth rather than a failure to find a witness. A `nil` `test` is treated the
+ same way.
+ */
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
 /** How many elements satisfy `test`. */
 - (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
 

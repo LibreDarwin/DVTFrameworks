@@ -24,6 +24,7 @@
 //
 
 #import "DVTComparison.h"
+#import "DVTFoundationClassAdditions.h"
 
 #include <math.h>
 
@@ -119,4 +120,43 @@ NSInteger DVTCompareArrays(NSArray *_Nullable lhs, NSArray *_Nullable rhs)
         }
     }
     return 0;
+}
+
+/** `-valueForKeyPath:` is KVC, not a declared method, and the SDK headers used
+    to build this framework do not declare it. */
+@interface NSObject (DVTKeyValueCoding)
+- (id _Nullable)valueForKeyPath:(NSString *)keyPath;
+@end
+
+BOOL DVTEqualObjectsUsingKeyPaths(id lhs, id rhs, DVTKeyPathClassMatch mode, id keyPaths)
+{
+    if (lhs == rhs) {
+        return YES;
+    }
+    if (lhs == nil || rhs == nil) {
+        return NO;
+    }
+    /* The class check runs before any key path is read, so a class mismatch is
+       never reported as an exception from a bad key path. */
+    switch (mode) {
+    case DVTKeyPathClassMatchAllowsSubclass:
+        if (![rhs isKindOfClass:[lhs class]]) {
+            return NO;
+        }
+        break;
+    case DVTKeyPathClassMatchRequiresIdenticalClass:
+        if (![rhs isMemberOfClass:[lhs class]]) {
+            return NO;
+        }
+        break;
+    default:
+        return NO;
+    }
+    return [keyPaths dvt_allObjectsPassTest:^BOOL(id keyPath) {
+        id left = [lhs valueForKeyPath:keyPath];
+        id right = [rhs valueForKeyPath:keyPath];
+        /* Identity first, so an object that refuses to be equal to itself is
+           still equal to itself. */
+        return (left == right) ? YES : [left isEqual:right];
+    }];
 }

@@ -116,6 +116,50 @@ DVT_EXTERN NSInteger DVTCompareDoublesWithEpsilon(double lhs, double rhs, double
  */
 DVT_EXTERN NSInteger DVTCompareArrays(NSArray *_Nullable lhs, NSArray *_Nullable rhs);
 
+/**
+ How strictly `DVTEqualObjectsUsingKeyPaths` requires the two operands to agree
+ on their class before comparing any key path.
+
+ The check is one-directional and is applied as *is the right operand a
+ subclass of the left one*, so the operand order matters.
+ */
+typedef NS_ENUM(NSUInteger, DVTKeyPathClassMatch) {
+    /** The right operand only has to be a `kind of` the left one's class. */
+    DVTKeyPathClassMatchAllowsSubclass = 0,
+    /** The right operand has to be a member of exactly the left one's class. */
+    DVTKeyPathClassMatchRequiresIdenticalClass = 1,
+};
+
+/**
+ `YES` when `lhs` and `rhs` agree on every key path in `keyPaths`, compared with
+ `valueForKeyPath:` and then `isEqual:`.
+
+ `mode` selects the class check from `DVTKeyPathClassMatch`; any value other
+ than `0` or `1` is not a mode this function knows and always yields `NO`, even
+ for two identical objects whose key paths would otherwise match.
+
+ The order of the checks is observable, and none of them can be skipped:
+
+ - Identical operands return `YES` before anything else is examined, so
+   `keyPaths` is never touched. Two `nil`s are identical, and therefore equal.
+ - A single `nil` operand returns `NO`.
+ - The class check runs next, and a failure returns `NO` without reading a single
+   key path.
+ - Only then is `keyPaths` enumerated, stopping at the first key path that
+   disagrees.
+
+ Each value pair is compared by identity first and by `isEqual:` only when the
+ two are not the same object, so a pair of objects whose `isEqual:` refuses to
+ accept even itself still compares equal to themselves under a key path.
+
+ Exceptions raised while evaluating a key path are not caught: an undefined key
+ path raises `NSUnknownKeyException` out of this function, and a `keyPaths`
+ that is not one of the collection classes carrying
+ `dvt_allObjectsPassTest:` raises `NSInvalidArgumentException`. A `nil`
+ `keyPaths` sends the message to `nil`, which yields `nil`, and `nil` is `NO`.
+ */
+DVT_EXTERN BOOL DVTEqualObjectsUsingKeyPaths(id _Nullable lhs, id _Nullable rhs, DVTKeyPathClassMatch mode, id _Nullable keyPaths);
+
 NS_ASSUME_NONNULL_END
 
 #endif /* DVT_COMPARISON_H */

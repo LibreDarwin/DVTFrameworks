@@ -220,6 +220,21 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     return [self dvt_firstObjectPassingTest:test] != nil;
 }
 
+- (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test
+{
+    if (test == nil) {
+        return YES;
+    }
+    NSEnumerator *enumerator = [self objectEnumerator];
+    id object = nil;
+    while ((object = [enumerator nextObject]) != nil) {
+        if (!test(object)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 - (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
 {
     if (test == nil) {
