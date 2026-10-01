@@ -112,11 +112,13 @@ Reports carry the file, line, function, object or selector, a human-readable
 message, the formatted details, and a backtrace.
 
 The assertion gates mirror the hidden user defaults found in Apple's binary —
-`DVTEnableAssertionsForValidationTestSuite`,
-`DVTEnableAssertionsForMemoryPerformanceTestSuite`,
+`DVTEnableAssertionsForQuickLookTestSuite`,
 `DVTEnableAssertionsForCPUPerformanceTestSuite`,
-`DVTEnableAssertionsForQuickLookTestSuite`, and `DVTEnableAllAssertions` — each
-of which is also read from the environment of the same name.
+`DVTEnableAssertionsForMemoryPerformanceTestSuite`,
+`DVTEnableAssertionsForValidationTestSuite`, and `DVTEnableAllAssertions` — each
+of which is also read from the environment of the same name. Either form uses
+`NSUserDefaults` boolean parsing, so `1`, `YES`, `true`, and `yes` are on, while
+`0`, `NO`, and anything unrecognised are off.
 
 `DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` both take a small
 integer selector, not a suite name. Apple switches on that integer and never
@@ -130,6 +132,17 @@ quiet: a process that selects no environment has to land outside the known
 cases, since defaulting to `0` would assert unconditionally.
 `DVTFailureHintCreator` turns an object, a selector, or a class into the hint
 text that appears in the report.
+
+The gate-to-case mapping above was recorded by driving all 32 combinations of
+the five keys through Apple's own exported functions and recording both answers.
+Reading it off the string table instead gets it backwards: the cases run
+`2` = QuickLook, `3` = CPUPerformance, `4` = MemoryPerformance, `5` = Validation,
+which is neither the order the keys appear in the binary nor the order they are
+declared in Apple's headers. Case `1` is gated but named by no string in the
+binary, so it cannot be switched on. `DVTEnableAllAssertions` is a master
+switch rather than a sixth case: it is read only by `ShouldAssert`, which it
+answers `YES` for every selector, while `Is` keeps reporting `NO` for every gated
+case.
 
 ### Foundation additions
 

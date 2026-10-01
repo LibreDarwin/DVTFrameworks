@@ -402,42 +402,52 @@ void _DVTWarnFromSwift(NSString *file,
 
 /*
  The reference framework gates assertions on an "assertion environment", an
- enum with six cases. `_DVTIsAssertionEnvironment` ANDs a byte out of a static
- six-entry table and then masks it with 1; the first case is compiled in as
- unconditionally true, and `-1` (no environment) diverts to
- `DVTHowToReproduceAssertionsForEnvironment`, which tells the user which hidden
- user default to set.
+ integer selector with six cases. `_DVTIsAssertionEnvironment` switches on the
+ integer directly, reading one byte out of a static table and masking it with 1:
 
- The five gated cases each read a defaults key reached through an
- `environmentVariableFor...Enabled:` selector. The recovered key names are
+     0             compiled in as unconditionally true
+     1             gate 0x3b0  -- named by no string in the binary
+     2             gate 0x3b1  -- DVTEnableAssertionsForQuickLookTestSuite
+     3             gate 0x3b2  -- DVTEnableAssertionsForCPUPerformanceTestSuite
+     4             gate 0x3b3  -- DVTEnableAssertionsForMemoryPerformanceTestSuite
+     5             gate 0x3b4  -- DVTEnableAssertionsForValidationTestSuite
+     anything else            false
 
-     DVTEnableAssertionsForValidationTestSuite
-     DVTEnableAssertionsForMemoryPerformanceTestSuite
-     DVTEnableAssertionsForCPUPerformanceTestSuite
-     DVTEnableAssertionsForQuickLookTestSuite
-     DVTEnableAllAssertions
+ `DVTEnableAllAssertions` is not one of those five cases. It is the byte at
+ 0x3b5, which only `_DVTShouldAssertForEnvironment` reads: switching it on
+ leaves `Is` reporting NO for every gated case while `Should` reports YES for
+ every selector, including out-of-range ones. Each gate accepts either the
+ hidden user default of the same name or an environment variable of the same
+ name, and both use NSUserDefaults boolean parsing -- "1", "YES", "true" and
+ "yes" are on; "0", "NO" and anything unrecognised are off. The five
+ `environmentVariableFor...Enabled:` selectors in the binary are what name that
+ pairing.
 
- with `DVTEnableAllAssertions` overriding the rest, which is what
- `DVTHowToReproduceAssertionsForEnvironment` tells the user to set:
- "You may need to set the hidden user default "%@" to 1 to reproduce."
-
- Which enum index maps to which suite was not recoverable -- the reference
- framework builds the table at runtime from the running host -- so the order
- below is the order the keys appear in the binary and is documented as
- inferred.
-
- Each gate also accepts the environment variable of the same name, which is what
- the `environmentVariableFor...Enabled:` selectors name and what makes the gate
- usable before a defaults domain is seeded.
+ None of this was taken from the disassembly alone. Every gate-to-case mapping
+ and every answer below was recorded by driving all 32 combinations of the five
+ keys through the reference framework's own exported functions, because the
+ order the keys appear in the binary is not the order the cases are numbered
+ in and reading it straight off the string table gets it backwards.
  */
 
-/** Enables every case at once; matches the recovered `DVTEnableAllAssertions`. */
+/**
+ Enables every case at once.
+
+ This is the master switch, not a sixth environment: `_DVTIsAssertionEnvironment`
+ never reads it, and `_DVTShouldAssertForEnvironment` consults it as the last
+ step of every selector including the ones outside the known cases.
+ */
 static NSString *const DVTEnableAllAssertionsKey = @"DVTEnableAllAssertions";
 
 /**
- Gates for environments 1 through 4, in the order the reference framework reads
- them. The framework has a fifth gated case; it has no exported name, so it is
- not represented here and is handled by deferring to the master switch.
+ Gates for environments 1 through 5, indexed from 1.
+
+ Environment 1 is gated but no string in the binary names its key, so it can
+ never be switched on here and its slot is nil. The other four are numbered in
+ the order `DVTEnableAssertionsForQuickLookTestSuite`,
+ `...CPUPerformanceTestSuite`, `...MemoryPerformanceTestSuite`,
+ `...ValidationTestSuite` -- which is neither the order the keys appear in the
+ binary nor the order they are declared in the reference headers.
 
  Nothing in this list is enabled by default, and a process that selects no
  environment has to land outside the known cases: `0` is the case that asserts
@@ -445,19 +455,23 @@ static NSString *const DVTEnableAllAssertionsKey = @"DVTEnableAllAssertions";
  every process that links this framework.
  */
 static NSString *const DVTAssertionEnvironmentKeys[] = {
-    @"DVTEnableAssertionsForValidationTestSuite",
-    @"DVTEnableAssertionsForMemoryPerformanceTestSuite",
-    @"DVTEnableAssertionsForCPUPerformanceTestSuite",
+    nil,
     @"DVTEnableAssertionsForQuickLookTestSuite",
+    @"DVTEnableAssertionsForCPUPerformanceTestSuite",
+    @"DVTEnableAssertionsForMemoryPerformanceTestSuite",
+    @"DVTEnableAssertionsForValidationTestSuite",
 };
 
 /** Number of gated cases, i.e. entries in `DVTAssertionEnvironmentKeys`. */
-static const size_t DVTAssertionEnvironmentKeyCount =
-    sizeof(DVTAssertionEnvironmentKeys) / sizeof(DVTAssertionEnvironmentKeys[0]);
+static const NSInteger DVTAssertionEnvironmentKeyCount =
+    (NSInteger)(sizeof(DVTAssertionEnvironmentKeys) / sizeof(DVTAssertionEnvironmentKeys[0]));
 
 /** `YES` when the hidden user default, or the same-named variable, is set. */
-static BOOL DVTAssertionGateIsEnabled(NSString *key)
+static BOOL DVTAssertionGateIsEnabled(NSString *_Nullable key)
 {
+    if (key == nil) {
+        return NO;
+    }
     if ([[NSUserDefaults standardUserDefaults] boolForKey:key]) {
         return YES;
     }
@@ -469,11 +483,12 @@ BOOL DVTIsAssertionEnvironment(NSInteger environment)
 {
     /* The reference framework switches on this integer directly. Case 0 is the
        one that needs no gate; anything outside the known cases is simply not an
-       assertion environment. */
+       assertion environment. The master switch is deliberately not consulted
+       here, because Apple keeps it out of this function. */
     if (environment == 0) {
         return YES;
     }
-    if (environment > 0 && (size_t)environment <= DVTAssertionEnvironmentKeyCount) {
+    if (environment >= 1 && environment <= DVTAssertionEnvironmentKeyCount) {
         return DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[environment - 1]);
     }
     return NO;
@@ -484,17 +499,16 @@ BOOL DVTShouldAssertForEnvironment(NSInteger environment)
     if (environment == 0) {
         return YES;
     }
-    if (environment < 0 || environment > (NSInteger)DVTAssertionEnvironmentKeyCount) {
-        return DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey);
-    }
     /* The reference switch falls through, so a case that finds its own gate
-       closed asks every later gate in turn before giving up. */
-    for (NSInteger index = environment; index <= (NSInteger)DVTAssertionEnvironmentKeyCount; index++) {
-        if (DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[index - 1])) {
-            return YES;
+       closed asks every later gate in turn before deferring to the master
+       switch. For a selector outside the known cases the master switch is the
+       whole answer. */
+    if (environment >= 1 && environment <= DVTAssertionEnvironmentKeyCount) {
+        for (NSInteger index = environment; index <= DVTAssertionEnvironmentKeyCount; index++) {
+            if (DVTAssertionGateIsEnabled(DVTAssertionEnvironmentKeys[index - 1])) {
+                return YES;
+            }
         }
     }
-    /* Apple's fifth gated case has no exported name yet. Until it is
-       identified, defer to the master switch rather than invent a default. */
     return DVTAssertionGateIsEnabled(DVTEnableAllAssertionsKey);
 }

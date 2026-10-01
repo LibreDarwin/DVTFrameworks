@@ -129,6 +129,15 @@ DVT_EXTERN void _DVTWarnFromSwift(NSString *_Nullable file, NSString *_Nullable 
  reference framework switches on it directly and never messages it: `0` needs
  no gate and asserts, `1` through `5` are decided by the gate for that case,
  and anything else is not an assertion environment at all.
+
+ The cases are numbered independently of the order the gate names appear in
+ Apple's binary: `2` is the QuickLook suite, `3` the CPUPerformance suite, `4`
+ the MemoryPerformance suite, and `5` the Validation suite. Case `1` is gated
+ but no string in the binary names its key, so it cannot be switched on through
+ any supported default or variable.
+
+ This function does not consult `DVTEnableAllAssertions`, which matches Apple
+ and is easy to get wrong.
  */
 DVT_EXTERN BOOL DVTIsAssertionEnvironment(NSInteger environment);
 
@@ -137,7 +146,10 @@ DVT_EXTERN BOOL DVTIsAssertionEnvironment(NSInteger environment);
 
  Same integer selector as `DVTIsAssertionEnvironment`, but permissive: a case
  that finds its own gate closed falls through to every later gate, and an
- unrecognised selector defers to `DVTEnableAllAssertions`.
+ unrecognised selector defers to `DVTEnableAllAssertions`. A gated selector
+ whose gates are all closed also defers to `DVTEnableAllAssertions`, so
+ enabling that master switch answers `YES` for every selector, including
+ out-of-range ones.
  */
 DVT_EXTERN BOOL DVTShouldAssertForEnvironment(NSInteger environment);
 

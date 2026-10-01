@@ -609,41 +609,82 @@ static void DVTTestAssertions(void)
     DVTExpect(!DVTIsAssertionEnvironment(-1), @"no environment selected is quiet");
     DVTExpect(!DVTIsAssertionEnvironment(9), @"an unknown environment is quiet");
     DVTExpect(DVTIsAssertionEnvironment(0), @"environment 0 needs no gate");
-    for (NSInteger environment = 1; environment <= 4; environment++) {
+    for (NSInteger environment = 1; environment <= 5; environment++) {
         DVTExpect(!DVTIsAssertionEnvironment(environment),
                  @"gated environments are off unless their own gate is set");
     }
-    /* The fall-through runs towards the later gates, so opening the first gate
-       answers only for the first case, and opening the last answers for all of
-       them. That direction is the easy thing to get backwards. */
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    [defaults setBool:YES forKey:@"DVTEnableAssertionsForValidationTestSuite"];
-    DVTExpect(DVTIsAssertionEnvironment(1), @"the open gate answers for its own case");
-    DVTExpect(!DVTIsAssertionEnvironment(2), @"a later case is not carried backwards");
-    DVTExpect(DVTShouldAssertForEnvironment(1), @"ShouldAssert agrees on its own case");
-    DVTExpect(!DVTShouldAssertForEnvironment(2),
-             @"an earlier gate does not reach a later case");
-    [defaults removeObjectForKey:@"DVTEnableAssertionsForValidationTestSuite"];
 
-    [defaults setBool:YES forKey:@"DVTEnableAssertionsForQuickLookTestSuite"];
-    for (NSInteger environment = 1; environment <= 4; environment++) {
+    /* Each gate answers only for its own case, and the case numbers run in a
+       different order from the keys in the binary: 2 is QuickLook, 3 CPU, 4
+       Memory, 5 Validation. Case 1 is gated but named by nothing, so it can
+       never be switched on. */
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    struct {
+        __unsafe_unretained NSString *key;
+        NSInteger environment;
+    } const gates[] = {
+        { @"DVTEnableAssertionsForQuickLookTestSuite", 2 },
+        { @"DVTEnableAssertionsForCPUPerformanceTestSuite", 3 },
+        { @"DVTEnableAssertionsForMemoryPerformanceTestSuite", 4 },
+        { @"DVTEnableAssertionsForValidationTestSuite", 5 },
+    };
+    for (size_t index = 0; index < sizeof(gates) / sizeof(gates[0]); index++) {
+        [defaults setBool:YES forKey:gates[index].key];
+        const NSInteger own = gates[index].environment;
+        DVTExpect(DVTIsAssertionEnvironment(own), @"the open gate answers for its own case");
+        for (NSInteger environment = 1; environment <= 5; environment++) {
+            if (environment != own) {
+                DVTExpect(!DVTIsAssertionEnvironment(environment),
+                         @"Is never carries a gate backwards to another case");
+            }
+        }
+        [defaults removeObjectForKey:gates[index].key];
+    }
+    DVTExpect(!DVTIsAssertionEnvironment(1),
+             @"case 1 is gated but no key names it, so it stays closed");
+
+    /* ShouldAssert is the permissive variant: a closed gate falls through to
+       the later ones, so opening the last gate answers for every earlier case
+       while leaving later ones quiet. That direction is easy to get backwards. */
+    [defaults setBool:YES forKey:@"DVTEnableAssertionsForValidationTestSuite"];
+    for (NSInteger environment = 1; environment <= 5; environment++) {
         DVTExpect(DVTShouldAssertForEnvironment(environment),
                  @"the last gate carries every earlier case");
     }
-    DVTExpect(!DVTShouldAssertForEnvironment(9),
+    DVTExpect(!DVTShouldAssertForEnvironment(6),
              @"an unknown environment ignores a suite gate and asks the master switch");
+    [defaults removeObjectForKey:@"DVTEnableAssertionsForValidationTestSuite"];
+
+    [defaults setBool:YES forKey:@"DVTEnableAssertionsForQuickLookTestSuite"];
+    DVTExpect(DVTShouldAssertForEnvironment(1), @"the first gate answers for itself");
+    DVTExpect(DVTShouldAssertForEnvironment(2), @"and for its own case");
+    DVTExpect(!DVTShouldAssertForEnvironment(3),
+             @"an earlier gate does not reach a later case");
     [defaults removeObjectForKey:@"DVTEnableAssertionsForQuickLookTestSuite"];
     DVTExpect(!DVTShouldAssertForEnvironment(1), @"clearing the gate closes the case again");
 
-    /* ShouldAssert is the permissive variant: unrecognised selectors defer to
-       the master switch, which is also unset here. */
+    /* Unrecognised selectors defer to the master switch, which is unset here. */
     DVTExpect(!DVTShouldAssertForEnvironment(-1), @"unselected asks the master switch");
     DVTExpect(!DVTShouldAssertForEnvironment(9), @"unknown asks the master switch");
     DVTExpect(DVTShouldAssertForEnvironment(0), @"environment 0 asserts either way");
-    for (NSInteger environment = 1; environment <= 4; environment++) {
+    for (NSInteger environment = 1; environment <= 5; environment++) {
         DVTExpect(!DVTShouldAssertForEnvironment(environment),
                  @"a closed gate falls through and stays closed");
     }
+
+    /* DVTEnableAllAssertions is a master switch, not a sixth case: it answers
+       ShouldAssert for every selector but leaves Is alone for every gated one. */
+    [defaults setBool:YES forKey:@"DVTEnableAllAssertions"];
+    DVTExpect(DVTIsAssertionEnvironment(0), @"Is still needs no gate");
+    for (NSInteger environment = 1; environment <= 5; environment++) {
+        DVTExpect(!DVTIsAssertionEnvironment(environment),
+                 @"the master switch is not one of the gated cases");
+        DVTExpect(DVTShouldAssertForEnvironment(environment),
+                 @"the master switch answers every gated case");
+    }
+    DVTExpect(DVTShouldAssertForEnvironment(-1), @"including unselected");
+    DVTExpect(DVTShouldAssertForEnvironment(9), @"including unknown");
+    [defaults removeObjectForKey:@"DVTEnableAllAssertions"];
 
     [DVTAssertionReportHandler setCurrentHandler:nil];
     DVTExpect([DVTAssertionReportHandler currentHandler] != nil, @"there is always a default handler");
