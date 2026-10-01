@@ -171,11 +171,15 @@ Recovered from Apple's binary, or matched against it byte for byte:
   selector rather than a suite name, and both are called with the literal `2`.
   Selector `0` asserts without consulting a gate, `1`–`5` map to the gates in
   order, and the permissive variant falls through to the later gates
+- `DVTMachOReexportedLibrariesForExecutable` is a five-instruction tail call into
+  the same enumerator `DVTMachOLinkedLibrariesForExecutable` uses, differing only
+  in its filter. Apple does not resolve a re-export target: the path reported is
+  the one in the load command, which is what this project returns too
 
 Inferred, and therefore liable to differ from Apple:
 
-- re-exported libraries report the `LC_REEXPORT_DYLIB` path rather than
-  resolving the re-export target
+- nothing outstanding; the notes above replaced the four that were previously
+  listed here
 
 Writing the Swift overlay test turned up three API details that the
 Objective-C suite could not have found, all now settled:
