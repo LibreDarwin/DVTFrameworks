@@ -1,30 +1,61 @@
-# LibreDarwin DVTFoundation.framework
+# LibreDarwin DVTFrameworks
 
-An open source reimplementation of Apple's `DVTFoundation.framework`, the
-foundation layer that Xcode's IDE stack builds on. `DVTFoundation` is used by
-`IDETools`; see `Sources/IDETools` for that side of the picture.
+An open source reimplementation of Apple's DVTFrameworks package, the
+lower-level sub-frameworks that power Xcode and Apple's command-line developer
+utilities. `DVTFrameworks` is used by `IDETools`; see `Sources/IDETools` for
+that side of the picture.
 
 The goal is byte-identical output where that is achievable, and function
 compatibility everywhere else. What is recovered from Apple's binary and what
 is inferred is called out explicitly in [Fidelity notes](#fidelity-notes).
 
+## Frameworks
+
+| Framework | Status |
+| --- | --- |
+| `DVTFoundation` | Implemented. The core, non-UI layer. |
+| `DVTAnalytics` | Not started |
+| `DVTKit` | Not started |
+| `DVTSigningKit` | Not started |
+| `DVTSourceControl` | Not started |
+| `DVTUserInterfaceKit` | Not started |
+| `DVTViewControllerKit` | Not started |
+
+`DVTFoundation` is the only one with sources so far; the rest have empty
+directories so the layout is already in place. Everything in this document
+below applies to `DVTFoundation` unless it says otherwise.
+
 ## Layout
+
+Each framework is self-contained under `src/`, and carries its own public
+headers alongside its implementations.
 
 | Path | Contents |
 | --- | --- |
-| `include/` | Public headers. `DVTFoundation.h` is the umbrella. |
-| `src/` | Implementations, one file per subsystem. |
-| `tests/` | A single-file test runner, `dvt_tests.m`. |
+| `include/` | Headers shared by every framework. Currently only `DVTDefines.h`, which defines `DVT_EXTERN` and `DVT_VISIBILITY`. |
+| `src/<Framework>/` | That framework's implementations, one file per subsystem. |
+| `src/<Framework>/include/` | That framework's public headers. `DVTFoundation.h` is the `DVTFoundation` umbrella. |
+| `tests/` | Test runners, currently `dvt_tests.m` and the Swift overlay test. |
 | `Makefile` | Framework, test, and install rules. |
+
+A header belongs in `include/` only if more than one framework needs it. Putting
+a framework's headers in the shared directory would make them look like part of
+every framework's public surface, so each framework's own directory is the
+default.
 
 ## Building
 
 ```sh
-make            # build build/DVTFoundation.framework
+make            # build every framework that has sources
 make test       # build and run the test suite
 make clean      # remove build/
-make install    # copy the framework into $(DESTDIR)/Library/Frameworks
+make install    # copy the frameworks into $(DESTDIR)/Library/Frameworks
 ```
+
+Frameworks are discovered from `src/`, so adding a framework needs only its
+directory and sources. `make` builds each one into its own bundle, with the
+install name, `Info.plist` identity, and header set derived from the directory
+name.
 
 The build defaults to Apple's SDK. The reduced Internal SDK
 (`macosx26.5.internal`, 11 frameworks) under the `DEVELOPER_DIR` tree also
@@ -105,7 +136,8 @@ text that appears in the report.
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), a command-line
 renderer, and an `NSHashTable` addition. See
-`include/DVTFoundationClassAdditions.h` for the 38 methods implemented here.
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 38 methods
+implemented here.
 
 ### Errors
 

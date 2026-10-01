@@ -1,6 +1,6 @@
 //
 //  DVTDefines.h
-//  DVTFoundation
+//  DVTFrameworks
 //
 //  Copyright (C) 2026, LibreDarwin
 //  All rights reserved.
