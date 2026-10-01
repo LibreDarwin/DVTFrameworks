@@ -250,6 +250,51 @@ bit patterns (so `NaN` payloads, subnormals, and both zeros), eight epsilon
 values, random 64- and 32-bit integers, and random arrays — with zero mismatches,
 including which inputs raise.
 
+### Certificate kind comparison
+
+Two more exported functions in `src/DVTFoundation/DVTCertificateComparison.m`.
+They take the `1.2.840.113635.100.6.1` OID that Apple stamps into a signing
+certificate to say what the certificate is for, and order certificates by *what
+they are for* rather than by OID text. The seven recognised OIDs map to ranks
+`0`–`6`, and the rank order is not the OID order: `...6.1.12` sorts *before*
+`...6.1.7`, which is the entire reason the indirection exists.
+
+Two of the fallbacks order by **object address**, not by anything meaningful, and
+neither can be reproduced by comparing the two ranks:
+
+- An exactly-`nil` operand sorts before everything and after nothing, because
+  `nil` is address zero.
+- A pair where one side is a recognised kind and the other is not is also
+  settled by address, between the looked-up rank and `nil`. So a known kind
+  always sorts *after* an unknown one regardless of which side it is on.
+
+When *both* sides are unknown the answer instead falls through to
+`[lhs compare:rhs]` on the operands, so unknown kinds order by text. The case
+that pins this down is `@7` against `@3`: both look up to `nil`, yet the result
+is `1` rather than the `0` that comparing two `nil` ranks would give.
+
+`DVTCompareCertificateKindSets` sorts both operands and compares the lowest
+element of each, and **cannot succeed**. `dvt_sortedArrayUsingComparator:` is
+referenced but never implemented, in Apple's framework and in this one, so every
+call raises `NSInvalidArgumentException`. Two `nil` sets are the single
+exception: messaging `nil` returns `nil`, so neither array reaches the missing
+selector and the result is `NSOrderedSame`. The body is reproduced rather than
+repaired, since matching the shipped binary is the point.
+
+The rank table is deliberately *not* exported — Apple's binary keeps it in a
+private lazy static, and adding a public symbol Apple does not have would be its
+own kind of infidelity. Verified over 30,638 differential cases: all 49 ordered
+pairs of known OIDs, `nil` in every position, unknown strings, non-string
+operands, 30,000 random strings, and exception-name parity for the sets. Zero
+mismatches.
+
+Still missing from this family: `_DVTSigningCertificateDisplayNameForCertificateKind`.
+Apple exports the seven `DVTCertificateKind_*` identifiers alongside seven
+`DVTCertificateKindName_*` values, but the two sets do not pair up by name —
+there is a `Developer ID Application` display string with no matching kind — so
+the mapping is not recoverable by inspection and is left alone rather than
+guessed at.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -261,7 +306,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 253 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 272 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -270,7 +315,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **253 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **272 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

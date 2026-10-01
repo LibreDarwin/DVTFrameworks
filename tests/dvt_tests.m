@@ -773,6 +773,73 @@ static void DVTTestComparison(void)
     DVTExpect(DVTCompareArrays(@[@1], nil) == 1, @"a populated array follows nil");
 }
 
+static void DVTTestCertificateComparison(void)
+{
+    NSString *iOSDev = @"1.2.840.113635.100.6.1.2";
+    NSString *iOSDist = @"1.2.840.113635.100.6.1.4";
+    NSString *macDev = @"1.2.840.113635.100.6.1.12";
+    NSString *macApp = @"1.2.840.113635.100.6.1.7";
+    NSString *macInst = @"1.2.840.113635.100.6.1.8";
+    NSString *devID = @"1.2.840.113635.100.6.1.13";
+    NSString *directApp = @"1.2.840.113635.100.6.1.14";
+
+    /* Kinds are ordered by their rank in the table, not by the OID text. This
+       is the whole reason the function exists, and it is why the OIDs cannot be
+       compared directly: ...6.1.12 has to sort before ...6.1.7. */
+    DVTExpect(DVTCompareCertificateKinds(iOSDev, iOSDist) == -1, @"iOS Development precedes iOS Distribution");
+    DVTExpect(DVTCompareCertificateKinds(iOSDist, iOSDev) == 1, @"and the reverse holds");
+    DVTExpect(DVTCompareCertificateKinds(macDev, macApp) == -1, @"Mac Development precedes Mac App Distribution");
+    DVTExpect(DVTCompareCertificateKinds(macApp, macDev) == 1, @"rank order is not OID order");
+    DVTExpect(DVTCompareCertificateKinds(macApp, macInst) == -1, @"Mac App Distribution precedes Mac Installer");
+    DVTExpect(DVTCompareCertificateKinds(devID, directApp) == -1, @"the last two ranks are adjacent and ordered");
+    DVTExpect(DVTCompareCertificateKinds(iOSDev, iOSDev) == 0, @"a kind equals itself");
+    DVTExpect(DVTCompareCertificateKinds(iOSDev, [iOSDev copy]) == 0, @"equal but distinct objects are the same kind");
+
+    /* nil is ordered by address, so it precedes everything and follows nothing. */
+    DVTExpect(DVTCompareCertificateKinds(nil, nil) == 0, @"two nils are equal");
+    DVTExpect(DVTCompareCertificateKinds(nil, iOSDev) == -1, @"nil precedes a kind");
+    DVTExpect(DVTCompareCertificateKinds(iOSDev, nil) == 1, @"a kind follows nil");
+
+    /* An unknown kind on one side only is also settled by address, which puts it
+       *before* the known kind no matter which side it appears on. */
+    NSString *unknown = @"1.2.840.113635.100.6.1.99";
+    DVTExpect(DVTCompareCertificateKinds(unknown, iOSDev) == -1, @"an unknown kind precedes a known one");
+    DVTExpect(DVTCompareCertificateKinds(iOSDev, unknown) == 1, @"and a known kind follows an unknown one");
+
+    /* Two unknown kinds fall through to comparing the operands, so they order by
+       text. @7 against @3 is the case that pins this down: both are unknown, so
+       the answer is 1 rather than the 0 that comparing two nil ranks would give. */
+    DVTExpect(DVTCompareCertificateKinds(@7, @3) == 1, @"two unknown kinds compare by value, not as both nil");
+    DVTExpect(DVTCompareCertificateKinds(@3, @7) == -1, @"two unknown kinds compare by value both ways");
+    DVTExpect(DVTCompareCertificateKinds(unknown, [unknown copy]) == 0, @"equal unknown kinds are equal");
+
+    /* DVTCompareCertificateKindSets cannot succeed: the sorting selector it needs
+       is not implemented, in Apple's framework or in this one. */
+    @try {
+        DVTCompareCertificateKindSets(@[iOSDev], @[iOSDev]);
+        DVTExpect(NO, @"comparing kind sets raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                  @"comparing kind sets raises NSInvalidArgumentException");
+    }
+    @try {
+        /* Two nil sets are the one input that survives: messaging nil returns
+           nil, so neither array is ever sent the missing selector and the two
+           nil first objects compare equal. One populated side is enough to make
+           it raise, and a nil operand is no escape from that. */
+        DVTExpect(DVTCompareCertificateKindSets(nil, nil) == 0, @"two nil kind sets do not raise");
+    } @catch (NSException *exception) {
+        DVTExpect(NO, @"two nil kind sets do not raise");
+    }
+    @try {
+        DVTCompareCertificateKindSets(nil, @[iOSDev]);
+        DVTExpect(NO, @"nil against a populated kind set still raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                  @"a populated operand is enough to raise");
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -789,6 +856,7 @@ int main(int argc, const char *argv[])
         DVTTestClassAdditions();
         DVTTestAssertions();
         DVTTestComparison();
+        DVTTestCertificateComparison();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);
     }
