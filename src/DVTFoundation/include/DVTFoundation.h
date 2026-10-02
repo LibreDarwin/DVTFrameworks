@@ -38,6 +38,7 @@
 #import "DVTTextExtras.h"
 #import "DVTFilterExpression.h"
 #import "DVTLineOffsetTableTextExtras.h"
+#import "DVTTextUTF8Correspondence.h"
 #import "DVTFoundationClassAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

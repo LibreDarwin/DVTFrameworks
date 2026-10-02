@@ -1627,6 +1627,161 @@ static void DVTTestLineOffsetTableTextExtras(void)
     }
 }
 
+/** Builds a string from UTF-16 code units, so lone surrogates survive. */
+static NSString *DVTUnits(const unichar *units, NSUInteger count)
+{
+    return [NSString stringWithCharacters:units length:count];
+}
+
+static void DVTExpectRoundTrip(NSString *text, NSUInteger index, NSString *what)
+{
+    NSUInteger utf8 = DVTCorrespondingUTF8ByteIndexWithIndexInString(text, index);
+    NSUInteger back = DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, utf8);
+    DVTExpect(back == index, [NSString stringWithFormat:@"%@ survives the round trip at %lu",
+                                                 what, (unsigned long)index]);
+    if (back != index) {
+        printf("       actual: %lu -> %lu -> %lu\n", (unsigned long)index, (unsigned long)utf8,
+               (unsigned long)back);
+    }
+}
+
+static void DVTTestTextUTF8Correspondence(void)
+{
+    {
+        /* An ASCII literal is stored one byte per character, so the shortcut
+           applies and the two translations are the identity even out of range. */
+        NSString *ascii = @"hello";
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(ascii, 0) == 0,
+                  @"an ASCII string maps offset 0 to 0");
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(ascii, 5) == 5,
+                  @"an ASCII string maps its length to its length");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(ascii, 3) == 3,
+                  @"an ASCII string maps a byte offset back to itself");
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(ascii, 99) == 99,
+                  @"an ASCII literal passes an out-of-range index straight through");
+    }
+
+    {
+        /* The same characters built two bytes at a time take the general path
+           instead, and clamp. Nothing at the NSString level tells them apart,
+           so this pair is the reason the implementation asks CoreFoundation
+           rather than testing the characters. */
+        unichar units[] = {'h', 'e', 'l', 'l', 'o'};
+        NSString *same = DVTUnits(units, 5);
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(same, 5) == 5,
+                  @"the two-byte ASCII string maps its length to its length");
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(same, 99) == 5,
+                  @"the two-byte ASCII string clamps an out-of-range index");
+    }
+
+    {
+        /* One, two, three and four UTF-8 bytes per code unit. */
+        unichar latin[] = {'a', 0x00E9, 0x4E2D, 0xD83D, 0xDE00, 'z'};
+        NSString *mixed = DVTUnits(latin, 6);
+        NSUInteger expected[] = {0, 1, 3, 6, 10, 10, 11};
+        for (NSUInteger i = 0; i < 7; i++) {
+            NSUInteger got = DVTCorrespondingUTF8ByteIndexWithIndexInString(mixed, i);
+            DVTExpect(got == expected[i],
+                      [NSString stringWithFormat:@"mixed string: index %lu is byte %lu, wanted %lu",
+                                                 (unsigned long)i, (unsigned long)got,
+                                                 (unsigned long)expected[i]]);
+        }
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(mixed, 99) == 11,
+                  @"the mixed string clamps an out-of-range index to its byte length");
+    }
+
+    {
+        /* A byte offset inside a multi-byte sequence belongs to no character, so
+           it resolves forward to the start of the next whole one. */
+        unichar cjk[] = {0x4E2D, 0x4E2D, 0x4E2D};
+        NSString *text = DVTUnits(cjk, 3);
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 0) == 0,
+                  @"byte 0 maps back to index 0");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 1) == 1,
+                  @"a byte inside the first character resolves to the next one");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 2) == 1,
+                  @"the second byte of a character resolves to the next one");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 3) == 1,
+                  @"the last byte of a character resolves to the next one");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 9) == 3,
+                  @"the full byte length maps back to the index past the end");
+    }
+
+    {
+        /* An unpaired surrogate still claims four bytes, and the walk that
+           converts back consumes the pair as a whole, so it can stop one unit
+           past the end of the string. */
+        unichar lone[] = {0xD800};
+        NSString *text = DVTUnits(lone, 1);
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(text, 1) == 4,
+                  @"a lone surrogate counts as four bytes");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 0) == 0,
+                  @"byte 0 of a lone surrogate maps back to index 0");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 1) == 2,
+                  @"a lone surrogate converts back past the end of the string");
+    }
+
+    {
+        /* A surrogate pair is one character worth four bytes, and the trailing
+           half on its own is three. */
+        unichar pair[] = {0xD83D, 0xDE00};
+        NSString *text = DVTUnits(pair, 2);
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(text, 1) == 4,
+                  @"the leading half of a pair counts as four bytes");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 4) == 2,
+                  @"a whole pair converts back to two code units");
+    }
+
+    {
+        /* Round trips over every code unit, with the ASCII cases that use the
+           shortcut excluded because the shortcut is not a clamp. */
+        for (NSUInteger c = 0x80; c < 0xD800; c++) {
+            unichar unit = (unichar)c;
+            NSString *text = DVTUnits(&unit, 1);
+            DVTExpectRoundTrip(text, 1, [NSString stringWithFormat:@"code unit %04X", c]);
+        }
+    }
+
+    {
+        /* The range forms measure the length from the converted location, which
+           is why the length is a count of the substring rather than of the
+           whole string. */
+        unichar cjk[] = {0x4E2D, 0x4E2D, 0x4E2D, 0x4E2D};
+        NSString *text = DVTUnits(cjk, 4);
+        NSRange converted = DVTCorrespondingUTF8ByteRangeWithRangeOfString(text, NSMakeRange(1, 2));
+        DVTExpect(NSEqualRanges(converted, NSMakeRange(3, 6)),
+                  @"a UTF-16 range converts to a UTF-8 range of the same characters");
+        NSRange back = DVTRangeOfStringWithCorrespondingUtf8ByteRange(text, NSMakeRange(3, 6));
+        DVTExpect(NSEqualRanges(back, NSMakeRange(1, 2)),
+                  @"a UTF-8 range converts back to the same UTF-16 range");
+    }
+
+    {
+        /* The read is done in blocks, so a surrogate pair has to survive the
+           block boundary rather than being counted as four plus three. */
+        NSUInteger length = 300;
+        unichar *units = (unichar *)malloc(sizeof(unichar) * length);
+        for (NSUInteger i = 0; i < length; i++) {
+            units[i] = (i % 3 == 0) ? 0x4E2D : (unichar)('a' + (i % 26));
+        }
+        units[64] = 0xD83D;
+        units[65] = 0xDE00;
+        NSString *text = DVTUnits(units, length);
+        free(units);
+        /* The 64 units before the pair are 22 three-byte and 42 one-byte
+           characters, so the pair starts at byte 108 and the walk resumes at
+           112 rather than counting its trailing half again as three bytes. */
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(text, 64) == 108,
+                  @"a pair straddling the read block boundary still counts as four bytes");
+        DVTExpect(DVTCorrespondingUTF8ByteIndexWithIndexInString(text, 66) == 112,
+                  @"the character after the straddling pair is counted normally");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 112) == 66,
+                  @"the straddling pair converts back across the block boundary");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, 115) == 67,
+                  @"the three-byte character after the pair converts back too");
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -1645,6 +1800,7 @@ int main(int argc, const char *argv[])
         DVTTestTextExtras();
         DVTTestFilterExpression();
         DVTTestLineOffsetTableTextExtras();
+        DVTTestTextUTF8Correspondence();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

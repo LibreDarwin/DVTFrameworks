@@ -594,6 +594,60 @@ field by field — including `capacity`, `baseLine` and `baseOffset`, which
 initialisation sets to `count`, `NSNotFound` and `0` — and the `malloc`-owned
 offset array is compared element by element before both are released.
 
+### UTF-8 and UTF-16 offsets
+
+`DVTTextUTF8Correspondence` converts between the two coordinate systems the
+editor mixes freely: `-[NSString length]` counts UTF-16 code units, while
+`-[NSString lengthOfBytesUsingEncoding:]` and the file layer work in UTF-8
+bytes. Four functions do the translation, in both directions and for both a
+single offset and a range.
+
+**The shortcut is decided by how the string is stored, not by what it
+contains.** An ASCII-backed string — which is what you get from a plain ASCII
+literal or a copy of one — answers with the index unchanged, *without
+clamping*, so index 99 in `@"hello"` returns 99. A string built from `unichar`
+units, or holding any non-ASCII character, has no ASCII backing and takes the
+general path, which clamps instead. Two strings whose characters are
+byte-for-byte identical therefore answer differently, so the implementation
+asks CoreFoundation via `CFStringGetCStringPtr(..., kCFStringEncodingASCII)`
+whether a C string is available rather than testing the characters. This is the
+single most important thing about the family, and it is why a "reasonable"
+character-based implementation fails on literals.
+
+**A byte offset that lands inside a multi-byte sequence resolves forward to the
+start of the next whole character**, never backward. In `中` (three UTF-8
+bytes), bytes 0, 1 and 2 all map back to index 0, and byte 3 maps to index 1.
+The forward direction is the mirror image: a high surrogate contributes four
+bytes and *skips* the low surrogate that follows, so the index of the low half
+reports the byte position *after* the pair rather than inside it.
+
+**Unpaired surrogates are counted as four bytes, and converting one back stops
+one code unit past the end of the string.** `DVTIndexInStringWithCorrespondingUtf8ByteIndex`
+applied to a lone `U+D800` at byte 0 returns 2 from a one-unit string. That
+result is not a valid offset for a following range — feeding it back as
+`location` trips the assertion — so callers are expected to keep UTF-16 and
+UTF-8 ranges separate rather than converting one into the other and reusing it.
+
+**`from` is asserted, not clamped.** An offset past the end of the string
+aborts, which is why the differential counts aborts as carefully as it counts
+values; the assert is load-bearing and the tests do not route around it.
+
+The general path reads the string in blocks of 64 code units, so a surrogate
+pair landing on a block boundary has to carry its skip into the next block. The
+implementation does, and the mutation tests below are what established that this
+is required rather than incidental.
+
+Differential against Apple covers all four functions: **6,727,258 value checks,
+zero mismatches, and 698,060 abort cases matched with zero abort mismatches**.
+The corpus is every one of the 65,536 single UTF-16 code units, exhaustively
+tripled combinations, surrogate-pair construction, and deterministic random
+strings, each probed at every offset. The harness was itself checked by
+mutation: corrupting the three-byte width, the four-byte surrogate width, the
+surrogate skip, the clamp, the zero-byte early-out, and the block carry flag
+each produce tens of thousands of failures, and removing the clamp alone
+produces 31,168 abort mismatches with *no* value mismatches — which is the
+signature of an assertion-only behaviour that a value-only test would miss.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
