@@ -453,6 +453,50 @@ group-notify/source handling, main-queue recognition for four kinds of queue,
 routing and delivery for all three performers, and the semaphore path driven from
 a background thread while the main run loop is genuinely serviced. No mismatches.
 
+### Geometry
+
+The ten `DVT*` CGRect helpers live in `DVTGeometryAdditions`. Most are
+arithmetically obvious; four are not, and all four were pinned down against
+Apple's binary rather than guessed. Each is reproduced exactly, quirks included.
+
+**`DVTRectByInsettingRect` is not `CGRectInset`.** Its y axis reads the *size* of
+the insets rather than the origin: the leading edge moves by `insets.size.width`
+and the trailing edge by that plus `insets.size.height`. So the usual
+`CGRectMake(x, y, w, h)` margin insets y by `w`. Separately, an over-inset
+collapses instead of inverting — the dimension goes to exactly zero and the
+origin moves to the midpoint of the span it would have occupied, so the result
+is never degenerate in a negative direction.
+
+**Edge tests go through CoreGraphics, and those accessors normalise.** Apple calls
+the real exported `CGRectGetMinX`/`CGRectGetMaxX` functions, which return the
+*geometric* extremes. For a rect built with a negative width the min X is the
+origin shifted left, not the origin. `DVTInsetFromRectToRect` and
+`DVTPlaceRectInsideRect` both inherit this, and `{40, 60, -30, -40}` and
+`{10, 20, 30, 40}` must therefore produce identical results — they span the same
+edges. This is why the framework does not link CoreGraphics: those symbols are
+not exported by every SDK configuration, and the four helpers replicate the
+accessors inline instead.
+
+**The three scaling functions are not interchangeable.** `-IntoRect` leaves a size
+that fits on *both* axes alone and merely centres it, otherwise scales it down to
+fit. `-UpOrDownIntoRect` always scales to fit inside, scaling up as well as
+down. `-ToFillRect` scales to *cover*, so it overflows on one axis whenever the
+aspect ratios differ. For `200x100` into a `100x100`, Into and UpOrDown give
+`{0, 25, 100, 50}` while ToFill gives `{-50, 0, 200, 100}`.
+
+**NaN aspect ratios take the "less than" branch.** Every aspect test compiles to
+an `fcmp`, and arm64's `lt` condition is `N != V`, which is also satisfied when
+the comparison is *unordered*. `UpOrDownIntoRect` branches on `lt`, so a NaN
+aspect must take the multiply branch; written as `a < b` it would not. The other
+two branch on `ge`, which C's `>=` already matches. The three are kept as
+separate helpers rather than merged, precisely because they disagree on unordered
+inputs.
+
+Differential against Apple compares all ten **bit for bit**, via `memcmp`, so NaN
+payloads and signed zeroes have to agree too: 1,210 cases on a structured grid
+plus 200,000 randomised rects covering subnormals, ±1e300, mixed signs and zero
+dimensions. Zero mismatches.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -464,16 +508,18 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 343 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 378 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
-  and the three-way and epsilon comparison helpers.
+  the three-way and epsilon comparison helpers, the geometry helpers including
+  their negative-size and NaN-aspect behaviour, and the dispatch wrappers and
+  block performers.
 - `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **343 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **378 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

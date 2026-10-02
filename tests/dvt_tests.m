@@ -63,6 +63,21 @@ static void DVTExpectEqualObjects(id actual, id expected, NSString *what)
     DVTExpect(equal, what);
 }
 
+/** Compares rects field by field, exactly. Geometry is reproduced bit for bit
+    from Apple, so an approximate compare would hide real divergence. */
+static void DVTExpectEqualRects(CGRect actual, CGRect expected, NSString *what)
+{
+    BOOL equal = actual.origin.x == expected.origin.x && actual.origin.y == expected.origin.y &&
+                 actual.size.width == expected.size.width && actual.size.height == expected.size.height;
+    if (!equal) {
+        printf("       actual:   {%g, %g, %g, %g}\n", actual.origin.x, actual.origin.y,
+               actual.size.width, actual.size.height);
+        printf("       expected: {%g, %g, %g, %g}\n", expected.origin.x, expected.origin.y,
+               expected.size.width, expected.size.height);
+    }
+    DVTExpect(equal, what);
+}
+
 /** Writes `length` bytes to a file in the temporary directory. */
 static NSString *DVTWriteBytes(const void *bytes, uint32_t length, NSString *name)
 {
@@ -432,6 +447,99 @@ static void DVTTestBlockPerformers(void)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
     }
     DVTExpect(mainOpRan, @"main operation queue runs the block on the run loop");
+}
+
+static void DVTTestGeometry(void)
+{
+    /* Plain field setters. */
+    CGRect base = CGRectMake(1, 2, 3, 4);
+    DVTExpectEqualRects(DVTRectBySettingWidth(base, 10), CGRectMake(1, 2, 10, 4),
+                        @"setting the width leaves origin and height alone");
+    DVTExpectEqualRects(DVTRectBySettingHeight(base, 10), CGRectMake(1, 2, 3, 10),
+                        @"setting the height leaves origin and width alone");
+
+    /* Pinning maxY moves the origin by the height delta. */
+    CGRect pinned = DVTRectBySettingHeightAndPinningMaxY(CGRectMake(0, 10, 20, 30), 10);
+    DVTExpectEqualRects(pinned, CGRectMake(0, 30, 20, 10), @"pinning maxY grows downwards");
+    DVTExpect(pinned.origin.y + pinned.size.height == 40, @"pinning maxY keeps the far edge fixed");
+
+    /* Insetting reads the *size* of the insets for the y axis, which is not what
+       CGRectInset would do. A 100/200/300/400 margin therefore insets y by 300. */
+    DVTExpectEqualRects(DVTRectByInsettingRect(CGRectMake(1, 2, 3, 4), CGRectMake(100, 200, 300, 400)),
+                        CGRectMake(-47.5, -46, 0, 0),
+                        @"over-insetting collapses to a zero-size rect centred on the span");
+
+    /* A well-formed inset still behaves. */
+    DVTExpectEqualRects(DVTRectByInsettingRect(CGRectMake(10, 20, 100, 100), CGRectMake(0, 0, 10, 20)),
+                        CGRectMake(10, 30, 100, 70),
+                        @"insetting takes its y inset from the insets' width");
+
+    /* Distance. */
+    DVTExpect(DVTDistanceBetweenPoints(CGPointMake(0, 0), CGPointMake(3, 4)) == 5.0,
+              @"distance between points is the hypotenuse");
+    DVTExpect(DVTDistanceBetweenPoints(CGPointMake(1, 1), CGPointMake(1, 1)) == 0.0,
+              @"distance from a point to itself is zero");
+
+    /* Scaling: a size that fits on both axes is centred unscaled. */
+    DVTExpectEqualRects(DVTRectForScalingSizeIntoRect(CGSizeMake(10, 10), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(45, 45, 10, 10),
+                        @"a size that fits is centred without scaling");
+    /* A size that overflows one axis is scaled to fill, aspect preserved. */
+    DVTExpectEqualRects(DVTRectForScalingSizeIntoRect(CGSizeMake(200, 100), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(0, 25, 100, 50),
+                        @"an overflowing size is scaled to fill and centred");
+    /* A size that fits on one axis but not the other still scales. */
+    DVTExpectEqualRects(DVTRectForScalingSizeIntoRect(CGSizeMake(10, 200), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(47.5, 0, 5, 100),
+                        @"overflow on either axis alone triggers scaling");
+
+    /* ToFill scales even when the size already fits. */
+    DVTExpectEqualRects(DVTRectForScalingSizeToFillRect(CGSizeMake(10, 10), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(0, 0, 100, 100),
+                        @"to-fill scales up a size that would otherwise fit");
+    /* UpOrDown scales to *fit inside*, ToFill scales to *cover*, so for a
+       mismatched aspect ratio they deliberately disagree. */
+    DVTExpectEqualRects(DVTRectForScalingSizeUpOrDownIntoRect(CGSizeMake(200, 100), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(0, 25, 100, 50),
+                        @"up-or-down fits the size inside the rect");
+    DVTExpectEqualRects(DVTRectForScalingSizeUpOrDownIntoRect(CGSizeMake(100, 200), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(25, 0, 50, 100),
+                        @"up-or-down fits a tall size inside too");
+    DVTExpectEqualRects(DVTRectForScalingSizeToFillRect(CGSizeMake(100, 200), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(0, -50, 100, 200),
+                        @"to-fill covers the rect and overflows it");
+    /* UpOrDown is the unconditional form of Into's scaling branch. */
+    DVTExpectEqualRects(DVTRectForScalingSizeUpOrDownIntoRect(CGSizeMake(200, 100), CGRectMake(0, 0, 100, 100)),
+                        DVTRectForScalingSizeIntoRect(CGSizeMake(200, 100), CGRectMake(0, 0, 100, 100)),
+                        @"up-or-down matches Into when the size overflows");
+
+    /* InsetFromRectToRect crosses the axes: the x deltas land in the origin and
+       the y deltas in the size. */
+    DVTExpectEqualRects(DVTInsetFromRectToRect(CGRectMake(0, 0, 10, 10), CGRectMake(20, 30, 40, 50)),
+                        CGRectMake(20, -50, 30, -70),
+                        @"inset-from-rect-to-rect crosses the axes");
+
+    /* A negative-size rect is measured by the edges it actually spans, because
+       the tests go through CoreGraphics' geometric min/max and not origin+size.
+       {40,60,-30,-40} and {10,20,30,40} both span x[10,40] y[20,60]. */
+    DVTExpectEqualRects(DVTInsetFromRectToRect(CGRectMake(40, 60, -30, -40), CGRectMake(0, 0, 100, 100)),
+                        DVTInsetFromRectToRect(CGRectMake(10, 20, 30, 40), CGRectMake(0, 0, 100, 100)),
+                        @"a negative-size rect spans the same edges as its positive twin");
+
+    /* PlaceRectInsideRect translates only; size never changes. */
+    DVTExpectEqualRects(DVTPlaceRectInsideRect(CGRectMake(-10, -10, 20, 20), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(0, 0, 20, 20),
+                        @"a rect starting outside is pushed to the container origin");
+    DVTExpectEqualRects(DVTPlaceRectInsideRect(CGRectMake(90, 90, 20, 20), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(80, 80, 20, 20),
+                        @"a rect overhanging the far edge is pulled back in");
+    DVTExpectEqualRects(DVTPlaceRectInsideRect(CGRectMake(10, 10, 20, 20), CGRectMake(0, 0, 100, 100)),
+                        CGRectMake(10, 10, 20, 20),
+                        @"a rect already inside is left where it is");
+    /* Larger than the container: it cannot fit, and spills out the far side. */
+    CGRect oversized = DVTPlaceRectInsideRect(CGRectMake(0, 0, 200, 200), CGRectMake(0, 0, 100, 100));
+    DVTExpectEqualRects(oversized, CGRectMake(-100, -100, 200, 200),
+                        @"an oversized rect keeps its size and spills out of the container");
 }
 
 static void DVTTestEnvironmentSnapshot(void)
@@ -1188,6 +1296,7 @@ int main(int argc, const char *argv[])
         DVTTestEnvironmentSnapshot();
         DVTTestDispatch();
         DVTTestBlockPerformers();
+        DVTTestGeometry();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();
