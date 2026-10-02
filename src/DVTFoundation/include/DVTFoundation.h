@@ -35,6 +35,8 @@
 #import "DVTEnvironmentSnapshot.h"
 #import "DVTFoundationErrors.h"
 #import "DVTMachO.h"
+#import "DVTTextExtras.h"
+#import "DVTFilterExpression.h"
 #import "DVTFoundationClassAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

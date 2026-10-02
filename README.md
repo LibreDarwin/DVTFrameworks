@@ -497,6 +497,57 @@ payloads and signed zeroes have to agree too: 1,210 cases on a structured grid
 plus 200,000 randomised rects covering subnormals, ±1e300, mixed signs and zero
 dimensions. Zero mismatches.
 
+### Text extras
+
+The string and fragment helpers in `DVTTextExtras` were recovered from Apple's
+binary by probing it directly, because three of the four encode an indexing
+quirk that no reasonable reimplementation would reproduce.
+
+**`DVTStringFromLineEnding` indexes a three-entry table at `value - 1` and tests
+the result unsigned.** `DVTLineEndingNone` (0) is therefore *not* a string, and
+neither is any negative value: they underflow to a huge index and fall off the
+end. Only 1, 2 and 3 return anything, and every other input returns `nil`.
+
+**`DVTStringFromFindMatchStyle` falls back instead of asserting.** Values past
+`EndsWith` return `WholeWords`, not `nil` and not an assertion — which is why
+`WholeWords` appears twice in the binary's string pool, once in the table and
+once as the fallback. This is the opposite of the filter display strings below.
+
+**`DVTFindMatchStyleFromString` is case sensitive and returns `Contains` for
+anything unrecognised.** There is no error case, so a typo parses as `Contains`
+rather than failing. Its comparisons are ordered `WholeWords`, `StartsWith`,
+`EndsWith`, `Contains`, which only matters because the result is a single value
+either way.
+
+**`DVTTextFragmentsForStringPreservingEscapedSpaces` protects escapes with a
+placeholder, not an escape.** A literal `\ ` is replaced with the printable
+string `\<space>`, the text is split on spaces, empty pieces are dropped, and the
+placeholder is turned back into a space. Two consequences are pinned down by the
+tests: runs of spaces collapse rather than yielding empty fragments, and passing
+the literal text `\<space>` gives the same answer as passing an escaped space,
+because the placeholder is indistinguishable from its own output.
+
+### Filter expression display strings
+
+The three display-string functions in `DVTFilterExpression` map their enum to a
+user-visible string: `AND`/`OR` for compound operators, the single characters
+`=`/`<`/`>` for numeric comparisons, and the spelled-out `Equals` … `Like` for
+textual ones. The numeric enum has only the three strict comparisons — there is
+no greater-than-or-equal variant.
+
+Unlike `DVTStringFromFindMatchStyle`, **these assert on an out-of-range value**
+rather than substituting a fallback; all three abort with `SIGABRT` in a default
+environment, verified out of process against Apple. The returned string is
+therefore only reachable when the assertion has been made non-fatal, and the
+tables are laid out so that path still yields a valid string.
+
+Differential against Apple covers all seven functions: **42,095 checks, zero
+mismatches**, driven by a deterministic PRNG over strings built from the
+characters that matter here (space, tab, newline, backslash, and the
+`<`/`>` of the placeholder), plus 2,000 strings up to 600 characters long. The
+range-safe two are driven past their ends on purpose, which is where their `nil`
+and fallback behaviour lives.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -508,18 +559,19 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 378 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 417 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
-  their negative-size and NaN-aspect behaviour, and the dispatch wrappers and
-  block performers.
+  their negative-size and NaN-aspect behaviour, the text and find-style helpers
+  including their out-of-range fallbacks, the filter display strings, and the
+  dispatch wrappers and block performers.
 - `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **378 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **417 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -571,6 +623,24 @@ Recovered from Apple's binary, or matched against it byte for byte:
   the same enumerator `DVTMachOLinkedLibrariesForExecutable` uses, differing only
   in its filter. Apple does not resolve a re-export target: the path reported is
   the one in the load command, which is what this project returns too
+- `DVTStringFromLineEnding` indexes a three-entry table at `value - 1` and tests
+  the index unsigned, so `DVTLineEndingNone`, every negative value and every
+  value past `CRLF` return `nil` rather than a string
+- `DVTStringFromFindMatchStyle` substitutes `WholeWords` for any value past
+  `EndsWith` instead of asserting, which is why `WholeWords` appears twice in
+  Apple's string pool — once in the table, once as the fallback
+- `DVTFindMatchStyleFromString` is case sensitive, compares in the order
+  `WholeWords`, `StartsWith`, `EndsWith`, `Contains`, and returns `Contains` for
+  anything unrecognised, so there is no error case
+- `DVTTextFragmentsForStringPreservingEscapedSpaces` protects an escaped space
+  with the printable placeholder `\<space>`, splits on spaces, drops empty
+  pieces, then restores. Runs of spaces therefore collapse to no fragments, and
+  the literal text `\<space>` is indistinguishable from an escaped space
+- `DVTStringForFilterExpressionOperator`,
+  `DVTNumericalFilterComparisonTypeDisplayString` and
+  `DVTTextFilterComparisonTypeDisplayString` *assert* on an out-of-range value
+  rather than falling back; all three abort with `SIGABRT` in a default
+  environment, and the numeric enum has only the three strict comparisons
 
 Inferred, and therefore liable to differ from Apple:
 

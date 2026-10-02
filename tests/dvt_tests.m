@@ -1282,6 +1282,141 @@ static void DVTTestCertificateComparison(void)
     }
 }
 
+static void DVTTestTextExtras(void)
+{
+    /* DVTLineEndingNone has no string: Apple indexes a three-entry table at
+       value - 1 and tests the result unsigned, so 0 -- and every negative
+       value, and every value past 3 -- yields nil rather than a string. */
+    DVTExpect(DVTStringFromLineEnding(DVTLineEndingNone) == nil, @"no line ending has no string");
+    DVTExpectEqualObjects(DVTStringFromLineEnding(DVTLineEndingLF), @"\n", @"LF is a line feed");
+    DVTExpectEqualObjects(DVTStringFromLineEnding(DVTLineEndingCR), @"\r", @"CR is a carriage return");
+    DVTExpectEqualObjects(DVTStringFromLineEnding(DVTLineEndingCRLF), @"\r\n", @"CRLF is both, in that order");
+    DVTExpect(DVTStringFromLineEnding((DVTLineEnding)4) == nil, @"one past the last ending is nil");
+    DVTExpect(DVTStringFromLineEnding((DVTLineEnding)-1) == nil, @"a negative ending is nil, not a table underflow");
+    DVTExpect(DVTStringFromLineEnding((DVTLineEnding)NSIntegerMax) == nil, @"a huge ending is nil");
+
+    /* Find styles map 0...3 in order. */
+    DVTExpect([DVTStringFromFindMatchStyle(DVTFindsMatchStyleContains) isEqualToString:@"Contains"],
+              @"style 0 is Contains");
+    DVTExpect([DVTStringFromFindMatchStyle(DVTFindsMatchStyleStartsWith) isEqualToString:@"StartsWith"],
+              @"style 1 is StartsWith");
+    DVTExpect([DVTStringFromFindMatchStyle(DVTFindsMatchStyleWholeWords) isEqualToString:@"WholeWords"],
+              @"style 2 is WholeWords");
+    DVTExpect([DVTStringFromFindMatchStyle(DVTFindsMatchStyleEndsWith) isEqualToString:@"EndsWith"],
+              @"style 3 is EndsWith");
+
+    /* Out of range this one falls back rather than asserting, and the fallback is
+       WholeWords -- the same string the table holds at index 2. */
+    DVTExpect([DVTStringFromFindMatchStyle((DVTFindsMatchStyle)4) isEqualToString:@"WholeWords"],
+              @"an out of range style falls back to WholeWords");
+    DVTExpect([DVTStringFromFindMatchStyle((DVTFindsMatchStyle)99) isEqualToString:@"WholeWords"],
+              @"a far out of range style also falls back to WholeWords");
+
+    /* The parser is case sensitive, and compares in the order WholeWords,
+       StartsWith, EndsWith, then Contains. Anything unrecognised is Contains. */
+    DVTExpect(DVTFindMatchStyleFromString(@"WholeWords") == DVTFindsMatchStyleWholeWords, @"WholeWords parses");
+    DVTExpect(DVTFindMatchStyleFromString(@"StartsWith") == DVTFindsMatchStyleStartsWith, @"StartsWith parses");
+    DVTExpect(DVTFindMatchStyleFromString(@"EndsWith") == DVTFindsMatchStyleEndsWith, @"EndsWith parses");
+    DVTExpect(DVTFindMatchStyleFromString(@"Contains") == DVTFindsMatchStyleContains, @"Contains parses");
+    DVTExpect(DVTFindMatchStyleFromString(@"wholewords") == DVTFindsMatchStyleContains,
+              @"a lowercase style is not recognised");
+    DVTExpect(DVTFindMatchStyleFromString(@"wholewords") == 0,
+              @"an unrecognised style parses as Contains, not as an error");
+    DVTExpect(DVTFindMatchStyleFromString(@"") == DVTFindsMatchStyleContains,
+              @"the empty string parses as Contains");
+    DVTExpect(DVTFindMatchStyleFromString(@"End") == DVTFindsMatchStyleContains,
+              @"a prefix is not enough to match");
+    /* Every style the parser can return has to survive the round trip. */
+    for (NSInteger i = 0; i <= 3; i++) {
+        DVTExpect(DVTFindMatchStyleFromString(DVTStringFromFindMatchStyle((DVTFindsMatchStyle)i)) == i,
+                  @"each style round trips");
+    }
+
+    /* A plain space separates fragments; an escaped space does not, so "a\ b"
+       stays one fragment that holds a space. */
+    NSArray<NSString *> *plain = DVTTextFragmentsForStringPreservingEscapedSpaces(@"a b c");
+    DVTExpectEqualObjects([plain componentsJoinedByString:@"|"], @"a|b|c",
+                          @"plain spaces split into fragments");
+    DVTExpect(plain.count == 3, @"three words give three fragments");
+
+    NSArray<NSString *> *escaped = DVTTextFragmentsForStringPreservingEscapedSpaces(@"a\\ b c");
+    DVTExpectEqualObjects([escaped componentsJoinedByString:@"|"], @"a b|c",
+                          @"an escaped space stays inside its fragment");
+    DVTExpect(escaped.count == 2, @"an escaped space does not add a fragment");
+
+    /* Runs of spaces vanish: empty pieces are dropped rather than kept, so a
+       string of nothing but spaces yields an empty array and not a run of empty
+       strings. */
+    DVTExpect(DVTTextFragmentsForStringPreservingEscapedSpaces(@"").count == 0,
+              @"the empty string has no fragments");
+    DVTExpect(DVTTextFragmentsForStringPreservingEscapedSpaces(@"   ").count == 0,
+              @"spaces alone yield no fragments");
+    NSArray<NSString *> *padded = DVTTextFragmentsForStringPreservingEscapedSpaces(@"  a  b  ");
+    DVTExpectEqualObjects([padded componentsJoinedByString:@"|"], @"a|b",
+                          @"leading, trailing and doubled spaces all collapse");
+    DVTExpect(padded.count == 2, @"collapsing does not leave holes");
+
+    /* A lone escaped space is a fragment holding a space. */
+    NSArray<NSString *> *lone = DVTTextFragmentsForStringPreservingEscapedSpaces(@"\\ ");
+    DVTExpect(lone.count == 1, @"an escaped space alone is one fragment");
+    DVTExpectEqualObjects(lone.firstObject, @" ", @"and that fragment holds a space");
+
+    /* The placeholder Apple substitutes is itself unescaped back into a space,
+       so passing that literal text is indistinguishable from an escape. */
+    NSArray<NSString *> *literal = DVTTextFragmentsForStringPreservingEscapedSpaces(@"\\<space>");
+    DVTExpect(literal.count == 1, @"the placeholder literal is one fragment");
+    DVTExpectEqualObjects(literal.firstObject, @" ", @"the placeholder literal decodes to a space");
+
+    /* Tabs and newlines are not separators, so they stay inside a fragment. */
+    NSArray<NSString *> *tabbed = DVTTextFragmentsForStringPreservingEscapedSpaces(@"a\tb");
+    DVTExpectEqualObjects(tabbed.firstObject, @"a\tb", @"a tab does not split");
+    NSArray<NSString *> *newlined = DVTTextFragmentsForStringPreservingEscapedSpaces(@"a\nb");
+    DVTExpectEqualObjects(newlined.firstObject, @"a\nb", @"a newline does not split");
+
+    /* Non-ASCII text must survive the protect/restore round trip byte for byte. */
+    NSArray<NSString *> *unicode = DVTTextFragmentsForStringPreservingEscapedSpaces(@"ünïcøde 日本語 x");
+    DVTExpect(unicode.count == 3, @"unicode words split on spaces normally");
+    DVTExpectEqualObjects([unicode componentsJoinedByString:@"|"], @"ünïcøde|日本語|x",
+                          @"unicode survives unchanged");
+}
+
+static void DVTTestFilterExpression(void)
+{
+    /* Compound operators are the only two, and they are the obvious spelling. */
+    DVTExpectEqualObjects(DVTStringForFilterExpressionOperator(DVTFilterCompoundExpressionOperatorAnd),
+                          @"AND", @"operator 0 is AND");
+    DVTExpectEqualObjects(DVTStringForFilterExpressionOperator(DVTFilterCompoundExpressionOperatorOr),
+                          @"OR", @"operator 1 is OR");
+
+    /* Numeric comparisons render as bare single characters -- there is no >= or
+       <= variant in this enum, only the three strict ones. */
+    DVTExpectEqualObjects(DVTNumericalFilterComparisonTypeDisplayString(DVTNumericalFilterComparisonTypeEqualTo),
+                          @"=", @"numeric 0 is equals");
+    DVTExpectEqualObjects(DVTNumericalFilterComparisonTypeDisplayString(DVTNumericalFilterComparisonTypeLessThan),
+                          @"<", @"numeric 1 is less than");
+    DVTExpectEqualObjects(DVTNumericalFilterComparisonTypeDisplayString(DVTNumericalFilterComparisonTypeGreaterThan),
+                          @">", @"numeric 2 is greater than");
+
+    /* Textual comparisons spell the operator out in full. */
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeEquals),
+                          @"Equals", @"text 0 is Equals");
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeContains),
+                          @"Contains", @"text 1 is Contains");
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeDoesNotContain),
+                          @"Does Not Contain", @"text 2 is Does Not Contain");
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeBeginsWith),
+                          @"Begins With", @"text 3 is Begins With");
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeEndsWith),
+                          @"Ends With", @"text 4 is Ends With");
+    DVTExpectEqualObjects(DVTTextFilterComparisonTypeDisplayString(DVTTextFilterComparisonTypeLike),
+                          @"Like", @"text 5 is Like");
+
+    /* Note the contrast with the find-style table, which falls back quietly: these
+       three assert instead, so there is no out of range case to check here. The
+       abort is verified out of process in the differential, because an assert
+       would take the test runner down with it. */
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -1297,6 +1432,8 @@ int main(int argc, const char *argv[])
         DVTTestDispatch();
         DVTTestBlockPerformers();
         DVTTestGeometry();
+        DVTTestTextExtras();
+        DVTTestFilterExpression();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();
