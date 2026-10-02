@@ -37,6 +37,7 @@
 #import "DVTFoundationErrors.h"
 #import "DVTSimpleSerialization.h"
 #import "DVTDocumentLocation.h"
+#import "DVTDocumentLocationConversion.h"
 #import "DVTTextDocumentLocation.h"
 #import "DVTMachO.h"
 #import "DVTVersion.h"

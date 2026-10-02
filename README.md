@@ -773,6 +773,51 @@ Apple's `T@,&,V_representedObject`. And `DVTTextDocumentLocation` has no
 `.cxx_destruct`, because that method only exists to tear down a strong ivar and
 clang rejects a strong ivar backing an assign property.
 
+### Location encoding conversion
+
+`+DVTConvertLocationToUTF8EncodedLocation` and
+`+DVTConvertLocationToNativeNSStringEncodedLocation` translate a text location
+between the two coordinate systems, taking the string and its line-offset table.
+Both are three-argument C functions returning an autoreleased location, and both
+are reproduced from the disassembly rather than from a header, since Apple exports
+no declaration for them.
+
+**Each converter returns its argument unchanged when there is nothing to do**, and
+the two differ on what counts as nothing. Asking for UTF-8 and already having UTF-8
+returns the receiver; so does asking for native offsets with native offsets. Only
+the native converter also treats a location with no character range *and* no
+starting column as nothing to do — asking for UTF-8 on that same location builds a
+copy. The URL, the timestamp and both line numbers always pass through, because a
+line number means the same thing in either encoding.
+
+**A column is translated inside its own line, not against the whole string.** The
+converter slices out the line — running to the *next* line's start, not to this
+line's last character, so a column naming the position just past the terminator
+still resolves — and translates the column within that slice. A column or line
+that is `NSNotFound` is left alone rather than being handed to the correspondence
+helper, which would reinterpret `NSNotFound` as an offset from the end of the
+string.
+
+**Neither conversion is a bijection across a character boundary.** Column 2 of a
+line whose second character is an emoji names the middle of that character, which
+has no UTF-8 counterpart: going out to UTF-8 yields byte 5, and byte 5 comes back
+as column 3. Likewise a range ending inside a character is widened to cover the
+whole character — `{3, 2}` over `b😀` becomes `{4, 5}`, not `{4, 3}`. An unspecified
+range location keeps its own length untouched, since that length is meaningful on
+its own and reinterpreting it would invent a position the caller never named.
+
+**A line number past the end of the table is clamped, not rejected.** The table
+records one offset per line start plus one at the end of the string, so the last
+entry is the last nameable line; a location naming a line beyond it is pulled back
+to that entry. A column on a line the table cannot describe is then translated
+against an empty slice rather than dropped.
+
+Verified against Apple's binary over 13,000 cases — five strings (two-line ASCII,
+two-line text with an astral-plane character, empty, a single unterminated line,
+and a trailing newline) crossed with every valid span of columns, lines and ranges.
+Output is byte-identical, including which cases hand back the receiver and which
+build a copy.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -800,7 +845,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **55,792 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **55,812 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

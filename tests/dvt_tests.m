@@ -2211,6 +2211,139 @@ static void DVTTestTextDocumentLocation(void)
     }
 }
 
+static void DVTTestDocumentLocationConversion(void)
+{
+    NSURL *url = [NSURL fileURLWithPath:@"/tmp/doc.txt"];
+
+    /* "aé\nb\U0001F600c\nd": line 1 starts at UTF-16 index 3 and the emoji on
+       it is four UTF-8 bytes wide but only two code units. */
+    NSString *text = @"aé\nb\U0001F600c\nd";
+    DVTTextLineOffsetTable table;
+    memset(&table, 0x5A, sizeof(table));
+    DVTInitializeLineOffsetTable(&table, text);
+
+    NSString *ascii = @"ab\ncd";
+    DVTTextLineOffsetTable asciiTable;
+    memset(&asciiTable, 0x5A, sizeof(asciiTable));
+    DVTInitializeLineOffsetTable(&asciiTable, ascii);
+
+    /* ASCII needs no translation, but the result is still a new object: a
+       location is only reused when its encoding already matches. */
+    DVTTextDocumentLocation *native = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                               timestamp:@(1234)
+                                                                    startingColumnNumber:0
+                                                                      endingColumnNumber:1
+                                                                       startingLineNumber:1
+                                                                         endingLineNumber:1
+                                                                          characterRange:NSMakeRange(3, 2)
+                                                                        locationEncoding:DVTLocationEncodingNative];
+    DVTTextDocumentLocation *asciiUTF8 = DVTConvertLocationToUTF8EncodedLocation(native, ascii, &asciiTable);
+
+    DVTExpect(asciiUTF8 != native, @"converting ASCII to UTF-8 still builds a new location");
+    DVTExpect(asciiUTF8.locationEncoding == DVTLocationEncodingUTF8, @"the converted location reports UTF-8");
+    DVTExpect(NSEqualRanges(asciiUTF8.characterRange, NSMakeRange(3, 2)),
+              @"ASCII offsets are the same in either encoding");
+    DVTExpect(asciiUTF8.startingColumnNumber == 0 && asciiUTF8.endingColumnNumber == 1,
+              @"and so are its columns");
+    DVTExpectEqualObjects(asciiUTF8.documentURL, url, @"the URL survives conversion");
+    DVTExpectEqualObjects(asciiUTF8.timestamp, @(1234), @"the timestamp survives conversion");
+    DVTExpect(asciiUTF8.startingLineNumber == 1 && asciiUTF8.endingLineNumber == 1,
+              @"line numbers mean the same in either encoding, so they pass through");
+
+    /* A range straddling the emoji has to widen going out and shrink coming back. */
+    DVTTextDocumentLocation *emojiNative = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                                  timestamp:@(7)
+                                                                           startingColumnNumber:0
+                                                                             endingColumnNumber:0
+                                                                              startingLineNumber:1
+                                                                                endingLineNumber:1
+                                                                                 characterRange:NSMakeRange(1, 2)
+                                                                               locationEncoding:DVTLocationEncodingNative];
+    DVTTextDocumentLocation *emojiUTF8 = DVTConvertLocationToUTF8EncodedLocation(emojiNative, text, &table);
+
+    DVTExpect(NSEqualRanges(emojiUTF8.characterRange, NSMakeRange(1, 3)),
+              @"a range covering a two-byte character widens to its UTF-8 width");
+    DVTExpect(emojiUTF8.locationEncoding == DVTLocationEncodingUTF8, @"and the result reports UTF-8");
+
+    DVTTextDocumentLocation *emojiBack = DVTConvertLocationToNativeNSStringEncodedLocation(emojiUTF8, text, &table);
+    DVTExpect(NSEqualRanges(emojiBack.characterRange, NSMakeRange(1, 2)), @"converting back restores the range");
+    DVTExpect(emojiBack.locationEncoding == DVTLocationEncodingNative, @"and the encoding");
+
+    /* A column is relative to its line, so it is translated inside that line's
+       substring. Column 2 on line 1 sits just past the emoji: one byte for 'b'
+       plus four for the emoji. */
+    DVTTextDocumentLocation *emojiColumn = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                                  timestamp:@(7)
+                                                                           startingColumnNumber:2
+                                                                             endingColumnNumber:2
+                                                                              startingLineNumber:1
+                                                                                endingLineNumber:1
+                                                                                 characterRange:NSMakeRange(NSNotFound, 0)
+                                                                               locationEncoding:DVTLocationEncodingNative];
+    DVTTextDocumentLocation *emojiColumnUTF8 = DVTConvertLocationToUTF8EncodedLocation(emojiColumn, text, &table);
+    DVTExpect(emojiColumnUTF8.startingColumnNumber == 5,
+              @"a column past the emoji counts its four UTF-8 bytes");
+
+    DVTTextDocumentLocation *emojiColumnBack = DVTConvertLocationToNativeNSStringEncodedLocation(emojiColumnUTF8, text,
+                                                                                                 &table);
+    /* Not 2: column 2 names the middle of the emoji, which has no UTF-8
+       counterpart, so the round trip lands just past it instead. */
+    DVTExpect(emojiColumnBack.startingColumnNumber == 3, @"byte 5 lands just past the emoji, not inside it");
+
+    /* Reusing the location is observable, so it is worth pinning down. */
+    DVTExpect(DVTConvertLocationToUTF8EncodedLocation(asciiUTF8, ascii, &asciiTable) == asciiUTF8,
+              @"a UTF-8 location asked for UTF-8 hands back itself");
+    DVTExpect(DVTConvertLocationToNativeNSStringEncodedLocation(native, ascii, &asciiTable) == native,
+              @"a native location asked for native hands back itself");
+
+    /* Nothing to translate means nothing to copy. */
+    DVTTextDocumentLocation *empty = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                              timestamp:@(7)
+                                                                   startingColumnNumber:NSNotFound
+                                                                     endingColumnNumber:NSNotFound
+                                                                      startingLineNumber:NSNotFound
+                                                                        endingLineNumber:NSNotFound
+                                                                         characterRange:NSMakeRange(NSNotFound, 0)
+                                                                       locationEncoding:DVTLocationEncodingUTF8];
+    DVTExpect(DVTConvertLocationToNativeNSStringEncodedLocation(empty, ascii, &asciiTable) == empty,
+              @"a location with no range and no column is handed back itself");
+
+    /* An unspecified range location keeps its length. The length is meaningful on
+       its own, and reinterpreting it as an offset from the end of the string would
+       invent a position the caller never named. */
+    DVTTextDocumentLocation *noRange = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                              timestamp:@(7)
+                                                                   startingColumnNumber:0
+                                                                     endingColumnNumber:0
+                                                                      startingLineNumber:0
+                                                                        endingLineNumber:0
+                                                                         characterRange:NSMakeRange(NSNotFound, 7)
+                                                                       locationEncoding:DVTLocationEncodingNative];
+    DVTTextDocumentLocation *noRangeUTF8 = DVTConvertLocationToUTF8EncodedLocation(noRange, text, &table);
+
+    DVTExpect(noRangeUTF8.characterRange.location == NSNotFound, @"an unspecified range stays unspecified");
+    DVTExpect(noRangeUTF8.characterRange.length == 7, @"and keeps its length");
+
+    /* An unspecified column stays unspecified rather than picking up whatever the
+       correspondence helper makes of NSNotFound. */
+    DVTTextDocumentLocation *noColumn = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                               timestamp:@(7)
+                                                                    startingColumnNumber:NSNotFound
+                                                                      endingColumnNumber:NSNotFound
+                                                                       startingLineNumber:0
+                                                                         endingLineNumber:1
+                                                                          characterRange:NSMakeRange(3, 2)
+                                                                        locationEncoding:DVTLocationEncodingNative];
+    DVTTextDocumentLocation *noColumnUTF8 = DVTConvertLocationToUTF8EncodedLocation(noColumn, text, &table);
+
+    DVTExpect(noColumnUTF8.startingColumnNumber == NSNotFound && noColumnUTF8.endingColumnNumber == NSNotFound,
+              @"unspecified columns survive conversion");
+    /* The range ends inside the emoji, which has no UTF-8 midpoint, so it is
+       widened to cover the whole character rather than split. */
+    DVTExpect(NSEqualRanges(noColumnUTF8.characterRange, NSMakeRange(4, 5)),
+              @"a range ending mid-character widens to cover all of it");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -2233,6 +2366,7 @@ int main(int argc, const char *argv[])
         DVTTestStringIndexQueryContext();
         DVTTestDocumentLocation();
         DVTTestTextDocumentLocation();
+        DVTTestDocumentLocationConversion();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();
