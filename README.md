@@ -548,6 +548,52 @@ characters that matter here (space, tab, newline, backslash, and the
 range-safe two are driven past their ends on purpose, which is where their `nil`
 and fallback behaviour lives.
 
+### Line offset tables
+
+`DVTLineOffsetTableTextExtras` maps UTF-16 offsets onto line indices for the
+editor, and was recovered by probing Apple rather than by reading the
+disassembly alone — the struct layout and three of the four behaviours are not
+what a plausible implementation would choose.
+
+**The table stores line *starts*, then one extra entry holding the string
+length.** `count` is therefore the number of line starts plus one, so an empty
+string still yields `[0, 0]` and there is never a table with fewer than two
+entries. The terminator is what makes `DVTCharacterRangeForLineRange` work
+without being handed a length separately: line `i` runs from `offsets[i]` up to
+`offsets[i + 1]`.
+
+**Offsets are UTF-16 code units, so they agree with `-[NSString length]` rather
+than with a user-perceived character count.** An astral character costs two
+units and a combining mark costs one of its own. This is observable in the
+tests, where an emoji followed by a newline puts the second line start at 3.
+
+**Line breaks are `\n`, `\r`, `\r\n`, `U+0085`, `U+2028` and `U+2029` — but not
+vertical tab or form feed.** `CRLF` counts as a single break, so the next line
+starts past both characters.
+
+`DVTCharacterRangeForLineRange` **clamps** a range that runs past the last line
+rather than rejecting it, and a zero-length line range is empty wherever it
+starts.
+
+`DVTLineRangeForCharacterRange` has the one genuinely surprising rule. It
+returns the line holding `location` extended far enough to cover `length`, but
+the extension is capped at one line past where it started **and** at the last
+addressable line, and it deliberately does *not* spill into the terminating
+entry. The difference is visible only on strings ending in a break, where the
+offsets repeat: for `"\n"` (offsets `[0, 1, 1]`) a two-character range at 0
+covers lines 0 and 1 but not the terminator, while a range that already starts
+on the last line is allowed to grow into it. Fitting this took most of the
+differential work — the naive "advance while the range is not covered" loop
+over-extends on exactly these degenerate tables.
+
+Differential against Apple covers all four functions: **250,811 checks, zero
+mismatches**. The corpus includes empty strings, lone and doubled breaks,
+trailing breaks that produce empty lines, runs of nothing but breaks, the
+Unicode separators, and astral and combining characters. The struct is compared
+field by field — including `capacity`, `baseLine` and `baseOffset`, which
+initialisation sets to `count`, `NSNotFound` and `0` — and the `malloc`-owned
+offset array is compared element by element before both are released.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -559,19 +605,20 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 417 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 464 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
-  including their out-of-range fallbacks, the filter display strings, and the
+  including their out-of-range fallbacks, the filter display strings, the line
+  offset tables including their degenerate trailing-break shapes, and the
   dispatch wrappers and block performers.
 - `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **417 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **464 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the

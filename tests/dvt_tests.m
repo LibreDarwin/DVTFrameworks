@@ -10,6 +10,7 @@
 #import <mach-o/fat.h>
 #import <mach-o/loader.h>
 #import <stdio.h>
+#import <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -1417,6 +1418,215 @@ static void DVTTestFilterExpression(void)
        would take the test runner down with it. */
 }
 
+/** Compares ranges field by field, exactly. */
+static void DVTExpectEqualRanges(NSRange actual, NSRange expected, NSString *what)
+{
+    BOOL equal = actual.location == expected.location && actual.length == expected.length;
+    if (!equal) {
+        printf("       actual:   {%lu,%lu}\n", (unsigned long)actual.location, (unsigned long)actual.length);
+        printf("       expected: {%lu,%lu}\n", (unsigned long)expected.location, (unsigned long)expected.length);
+    }
+    DVTExpect(equal, what);
+}
+
+/** Builds a table for `text`, poisoning the bytes first so a field the
+    initialiser forgets to write shows up as junk rather than as zero. */
+static DVTTextLineOffsetTable DVTTableForText(NSString *text)
+{
+    DVTTextLineOffsetTable table;
+    memset(&table, 0x5A, sizeof(table));
+    DVTInitializeLineOffsetTable(&table, text);
+    return table;
+}
+
+/** Compares a table against an explicit list of expected line starts. */
+static void DVTExpectOffsets(DVTTextLineOffsetTable table, const NSUInteger *expected, NSUInteger count,
+                             NSString *what)
+{
+    DVTExpect(table.count == count, [NSString stringWithFormat:@"%@ has %lu entries, wanted %lu",
+                                               what, (unsigned long)table.count, (unsigned long)count]);
+    if (table.count != count) {
+        return;
+    }
+    BOOL equal = YES;
+    for (NSUInteger i = 0; i < count; i++) {
+        if (table.offsets[i] != expected[i]) {
+            equal = NO;
+        }
+    }
+    if (!equal) {
+        printf("       actual:   [");
+        for (NSUInteger i = 0; i < count; i++) {
+            printf("%lu%s", (unsigned long)table.offsets[i], i + 1 < count ? "," : "");
+        }
+        printf("]\n       expected: [");
+        for (NSUInteger i = 0; i < count; i++) {
+            printf("%lu%s", (unsigned long)expected[i], i + 1 < count ? "," : "");
+        }
+        printf("]\n");
+    }
+    DVTExpect(equal, [NSString stringWithFormat:@"%@ line starts", what]);
+}
+
+static void DVTTestLineOffsetTableTextExtras(void)
+{
+    fprintf(stdout, "\n== line offset table text extras ==\n");
+
+    /* An empty string still has one line, so the table is the start plus the
+       length, and both happen to be zero. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"");
+        const NSUInteger expected[] = { 0, 0 };
+        DVTExpectOffsets(table, expected, 2, @"an empty string");
+        DVTExpect(table.count == 2, @"an empty string reports two entries");
+        DVTExpect(table.capacity == table.count, @"capacity tracks count after initialisation");
+        DVTExpect(table.baseLine == NSNotFound, @"baseLine starts as NSNotFound");
+        DVTExpect(table.baseOffset == 0, @"baseOffset starts as zero");
+        free(table.offsets);
+    }
+
+    /* The last entry is always the length, which is what lets a line index be
+       turned into a half-open range without knowing the length separately. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"one\ntwo\nthree\nfour");
+        const NSUInteger expected[] = { 0, 4, 8, 14, 18 };
+        DVTExpectOffsets(table, expected, 5, @"four lines of text");
+        DVTExpect(table.offsets[table.count - 1] == @"one\ntwo\nthree\nfour".length,
+                  @"the final entry is the string length");
+        DVTExpect(table.count == 5, @"four lines plus the terminator");
+
+        /* Each line covers its start up to the next start. */
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), table), NSMakeRange(0, 4),
+                             @"line 0 of four");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 1), table), NSMakeRange(14, 4),
+                             @"the last line of four");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 2), table), NSMakeRange(4, 10),
+                             @"lines 1 and 2 of four");
+
+        /* A zero-length range is empty wherever it starts. */
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 0), table), NSMakeRange(8, 0),
+                             @"an empty line range at line 2");
+
+        /* A range running off the end is clamped rather than rejected. */
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 9), table), NSMakeRange(14, 4),
+                             @"a line range past the end is clamped");
+
+        /* Characters map back onto the line that holds them. */
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 0), table), NSMakeRange(0, 1),
+                             @"the very first character");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(9, 0), table), NSMakeRange(2, 1),
+                             @"a character in the middle of line 2");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(17, 0), table), NSMakeRange(3, 1),
+                             @"the last character");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(18, 0), table), NSMakeRange(3, 1),
+                             @"a character at the end of the string");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(40, 0), table), NSMakeRange(3, 2),
+                             @"a character well past the end");
+
+        /* A range that crosses a break covers both lines; one that stops
+           exactly on the boundary does not. */
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 1), table), NSMakeRange(0, 1),
+                             @"a range ending exactly on the boundary");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 2), table), NSMakeRange(0, 2),
+                             @"a range crossing one break");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 10), table), NSMakeRange(0, 3),
+                             @"a range crossing two breaks");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 12), table), NSMakeRange(0, 4),
+                             @"a range crossing three breaks");
+        free(table.offsets);
+    }
+
+    /* CRLF is one break, so the next line starts past both characters. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"a\r\nb\r\n");
+        const NSUInteger expected[] = { 0, 3, 6, 6 };
+        DVTExpectOffsets(table, expected, 4, @"CRLF line endings");
+        free(table.offsets);
+    }
+
+    /* A lone carriage return breaks too. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"a\rb\rc");
+        const NSUInteger expected[] = { 0, 2, 4, 5 };
+        DVTExpectOffsets(table, expected, 4, @"lone carriage returns");
+        free(table.offsets);
+    }
+
+    /* Trailing breaks produce empty lines, which is where the offsets repeat. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"a\nb\n");
+        const NSUInteger expected[] = { 0, 2, 4, 4 };
+        DVTExpectOffsets(table, expected, 4, @"a trailing newline");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 1), table), NSMakeRange(4, 0),
+                             @"the empty line after a trailing newline");
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 3), table), NSMakeRange(0, 2),
+                             @"a range across a trailing newline");
+        free(table.offsets);
+    }
+
+    /* Unicode separators break lines; vertical tab and form feed do not. */
+    {
+        DVTTextLineOffsetTable ls = DVTTableForText([NSString stringWithCharacters:(unichar[]){ 'a', 0x2028, 'b' }
+                                                                          length:3]);
+        const NSUInteger lsExpected[] = { 0, 2, 3 };
+        DVTExpectOffsets(ls, lsExpected, 3, @"U+2028 LINE SEPARATOR");
+        free(ls.offsets);
+
+        DVTTextLineOffsetTable ps = DVTTableForText([NSString stringWithCharacters:(unichar[]){ 'a', 0x2029, 'b' }
+                                                                          length:3]);
+        const NSUInteger psExpected[] = { 0, 2, 3 };
+        DVTExpectOffsets(ps, psExpected, 3, @"U+2029 PARAGRAPH SEPARATOR");
+        free(ps.offsets);
+
+        DVTTextLineOffsetTable nel = DVTTableForText([NSString stringWithCharacters:(unichar[]){ 'a', 0x0085, 'b' }
+                                                                           length:3]);
+        const NSUInteger nelExpected[] = { 0, 2, 3 };
+        DVTExpectOffsets(nel, nelExpected, 3, @"U+0085 NEXT LINE");
+        free(nel.offsets);
+
+        DVTTextLineOffsetTable vt = DVTTableForText([NSString stringWithCharacters:(unichar[]){ 'a', 0x000B, 'b' }
+                                                                        length:3]);
+        const NSUInteger vtExpected[] = { 0, 3 };
+        DVTExpectOffsets(vt, vtExpected, 2, @"vertical tab does not break");
+        free(vt.offsets);
+
+        DVTTextLineOffsetTable ff = DVTTableForText([NSString stringWithCharacters:(unichar[]){ 'a', 0x000C, 'b' }
+                                                                        length:3]);
+        const NSUInteger ffExpected[] = { 0, 3 };
+        DVTExpectOffsets(ff, ffExpected, 2, @"form feed does not break");
+        free(ff.offsets);
+    }
+
+    /* Offsets count UTF-16 code units, matching -[NSString length], so a
+       character outside the basic plane costs two. */
+    {
+        NSString *text = @"\U0001F600\na";
+        DVTTextLineOffsetTable table = DVTTableForText(text);
+        const NSUInteger expected[] = { 0, 3, 4 };
+        DVTExpectOffsets(table, expected, 3, @"an astral character");
+        DVTExpect(text.length == 4, @"the test string is four UTF-16 units");
+        free(table.offsets);
+    }
+
+    /* The exported scan and the table agree with each other. */
+    {
+        NSString *text = @"alpha\r\nbeta\r\ngamma";
+        DVTTextLineOffsetTable table = DVTTableForText(text);
+        NSUInteger *offsets = NULL;
+        NSUInteger count = DVTGetLineStartOffsets(text, &offsets);
+        DVTExpect(count == table.count, @"the scan and the table report the same count");
+        BOOL equal = (count == table.count);
+        for (NSUInteger i = 0; equal && i < count; i++) {
+            if (offsets[i] != table.offsets[i]) {
+                equal = NO;
+            }
+        }
+        DVTExpect(equal, @"the scan and the table report the same offsets");
+        free(offsets);
+        free(table.offsets);
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -1434,6 +1644,7 @@ int main(int argc, const char *argv[])
         DVTTestGeometry();
         DVTTestTextExtras();
         DVTTestFilterExpression();
+        DVTTestLineOffsetTableTextExtras();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

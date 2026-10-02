@@ -37,6 +37,7 @@
 #import "DVTMachO.h"
 #import "DVTTextExtras.h"
 #import "DVTFilterExpression.h"
+#import "DVTLineOffsetTableTextExtras.h"
 #import "DVTFoundationClassAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */
