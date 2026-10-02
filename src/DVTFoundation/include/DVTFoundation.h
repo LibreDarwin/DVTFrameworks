@@ -28,6 +28,7 @@
 
 #import "DVTDefines.h"
 #import "DVTAssertions.h"
+#import "DVTArchitecture.h"
 #import "DVTComparison.h"
 #import "DVTDispatch.h"
 #import "DVTGeometryAdditions.h"
@@ -35,6 +36,7 @@
 #import "DVTEnvironmentSnapshot.h"
 #import "DVTFoundationErrors.h"
 #import "DVTMachO.h"
+#import "DVTVersion.h"
 #import "DVTTextExtras.h"
 #import "DVTFilterExpression.h"
 #import "DVTLineOffsetTableTextExtras.h"

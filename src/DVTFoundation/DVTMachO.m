@@ -27,16 +27,13 @@
 
 #import <Foundation/NSData.h>
 #import <Foundation/NSFileManager.h>
+#import <fcntl.h>
 #import <mach-o/fat.h>
 #import <stddef.h>
 #import <string.h>
+#import <unistd.h>
 
 NSString *const DVTMachOErrorDomain = @"DVTMachOErrorDomain";
-
-enum {
-    DVTMachOErrorCodeUnreadable = 1,
-    DVTMachOErrorCodeTruncated = 2,
-};
 
 #pragma mark - Byte order
 
@@ -194,7 +191,7 @@ static NSArray<NSData *> *DVTSlicesInData(NSData *fileData, NSError **error)
     }
 
     if (!DVTIsFatMagic(magic)) {
-        DVTFillError(error, DVTMachOErrorCodeTruncated, @"file is not a Mach-O image");
+        DVTFillError(error, DVTMachOErrorCodeNotMachO, @"file is not a Mach-O image");
         return nil;
     }
 
@@ -324,144 +321,361 @@ static void DVTForEachLoadCommand(NSData *slice,
     }
 }
 
+#pragma mark - Reading a file the way the original does
+
+/**
+  Reads `executablePath` for the path-taking API.
+
+  A directory, or anything else the file system can describe but not read as a
+  file, reports the `NSCocoaErrorDomain` failure the reading API produced. A
+  file that is present but cannot be turned into a Mach-O reports
+  `DVTMachOErrorCodeFileUnreadable`, which is what the original reports for the
+  binaries that now live only in the dyld shared cache.
+ */
+static NSData *DVTReadMachOFile(NSString *executablePath, NSError **error)
+{
+    if (executablePath == nil) {
+        DVTFillError(error, DVTMachOErrorCodeFileUnreadable, @"no path given");
+        return nil;
+    }
+
+    NSError *readError = nil;
+    NSData *data = [NSData dataWithContentsOfFile:executablePath options:0 error:&readError];
+    if (data == nil) {
+        if (readError != nil && [readError.domain isEqualToString:NSCocoaErrorDomain]) {
+            /*
+             A directory (NSFileReadUnknownError) or a path that is not a file
+             at all: report the reading failure itself rather than a Mach-O
+             error, because the file was never the problem.
+             */
+            if (error != NULL) {
+                *error = readError;
+            }
+            return nil;
+        }
+        DVTFillError(error, DVTMachOErrorCodeFileUnreadable, @"file could not be read");
+        return nil;
+    }
+    return data;
+}
+
+#pragma mark - Slice iteration over data
+
+/** The `cputype`/`cpusubtype` of a slice, read from its Mach-O header. */
+static void DVTSliceCPU(NSData *slice, BOOL swap, BOOL is64Bit, cpu_type_t *outType, cpu_subtype_t *outSubType)
+{
+    const uint8_t *bytes = (const uint8_t *)[slice bytes];
+    uint32_t fieldOffset = is64Bit ? offsetof(struct mach_header_64, cputype) : offsetof(struct mach_header, cputype);
+    *outType = (cpu_type_t)DVTRead32(bytes, fieldOffset, swap);
+    fieldOffset = is64Bit ? offsetof(struct mach_header_64, cpusubtype) : offsetof(struct mach_header, cpusubtype);
+    *outSubType = (cpu_subtype_t)DVTRead32(bytes, fieldOffset, swap);
+}
+
+/** Invokes `visit` for every slice, reporting the slice's CPU to the callback. */
+static BOOL DVTForEachSliceInData(NSData *fileData,
+                                 NSError **error,
+                                 void (^visit)(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType, BOOL is64Bit,
+                                               BOOL swap))
+{
+    NSArray<NSData *> *slices = DVTSlicesInData(fileData, error);
+    if (slices == nil) {
+        return NO;
+    }
+
+    for (NSData *slice in slices) {
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32([slice bytes], 0, NO), &is64Bit, &swap);
+        cpu_type_t cpuType = CPU_TYPE_ANY;
+        cpu_subtype_t cpuSubType = 0;
+        DVTSliceCPU(slice, swap, is64Bit, &cpuType, &cpuSubType);
+        visit(slice, cpuType, cpuSubType, is64Bit, swap);
+    }
+    return YES;
+}
+
 #pragma mark - Public API: file classification
 
-BOOL DVTMachOIsArchive(NSString *executablePath)
+NSNumber *DVTMachOIsArchive(NSData *fileData, NSError **error)
 {
-    NSData *fileData = DVTReadFile(executablePath, NULL);
-    if (fileData == nil || fileData.length == 0) {
-        return NO;
+    /*
+     The original answers "no" only for a file it could parse. Data that holds
+     no Mach-O at all yields nil plus an error, so a caller can distinguish
+     "not an archive" from "not something this function understands".
+     */
+    __block BOOL isArchive = NO;
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        isArchive = isArchive || DVTIsArchiveMagic((const uint8_t *)[slice bytes], slice.length);
+        return YES;
+    });
+    if (!parsed) {
+        return nil;
     }
-    return DVTIsArchiveMagic((const uint8_t *)[fileData bytes], fileData.length);
+    return [NSNumber numberWithBool:isArchive];
 }
 
-BOOL DVTMachOHasFatHeader(NSString *executablePath)
+NSNumber *DVTMachOHasFatHeader(NSData *fileData, NSError **error)
 {
-    NSData *fileData = DVTReadFile(executablePath, NULL);
+    (void)error;
     if (fileData == nil || fileData.length < sizeof(uint32_t)) {
-        return NO;
+        return [NSNumber numberWithBool:NO];
     }
-    return DVTIsFatMagic(DVTRead32((const uint8_t *)[fileData bytes], 0, NO));
+    /*
+     The name is literal: this reports whether the data starts with a *fat*
+     header, so a thin Mach-O answers NO. Only FAT_MAGIC/FAT_CIGAM qualify.
+     */
+    uint32_t magic = DVTRead32((const uint8_t *)[fileData bytes], 0, NO);
+    return [NSNumber numberWithBool:DVTIsFatMagic(magic)];
 }
 
-BOOL DVTMachOEnumerateSlices(NSString *executablePath,
-                             NSError **error,
-                             DVTMachOEnumerationBlock block)
+BOOL DVTMachOEnumerateSlices(NSData *fileData, NSError **error, DVTMachOEnumerationBlock block)
 {
-    if (block == nil) {
+    if (block == nil || fileData == nil) {
         return NO;
     }
 
     __block BOOL keepGoing = YES;
-    BOOL read = DVTForEachSelectedSlice(executablePath, -1, error, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)swap;
+    __block BOOL stop = NO;
+    __block NSError *blockError = nil;
+    BOOL parsed = DVTForEachSliceInData(fileData, error, ^(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
+                                                           BOOL is64Bit, BOOL swap) {
         (void)is64Bit;
-        if (!keepGoing) {
+        (void)swap;
+        if (!keepGoing || stop) {
             return;
         }
-        if (!block(slice, index)) {
+        NSError *sliceError = nil;
+        if (!block(slice, cpuType, cpuSubType, &stop, &sliceError)) {
+            keepGoing = NO;
+        }
+        if (sliceError != nil) {
+            blockError = sliceError;
             keepGoing = NO;
         }
     });
-    return read && keepGoing;
+    if (blockError != nil && error != NULL) {
+        *error = blockError;
+    }
+    return parsed && keepGoing;
 }
 
-BOOL DVTMachOEnumerateLoadCommands(NSString *executablePath,
-                                   uint32_t cmd,
-                                   uint32_t cmdsize,
-                                   NSError **error,
-                                   DVTMachOEnumerationLoadCommandsBlock block)
+BOOL DVTMachOEnumerateLoadCommands(NSData *fileData, NSError **error, DVTMachOEnumerationLoadCommandsBlock block)
 {
-    if (block == nil) {
+    if (block == nil || fileData == nil) {
         return NO;
     }
 
     __block BOOL keepGoing = YES;
-    return DVTForEachSelectedSlice(executablePath, -1, error, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)index;
-        if (!keepGoing) {
+    __block BOOL stop = NO;
+    __block NSError *blockError = nil;
+    BOOL parsed = DVTForEachSliceInData(fileData, error, ^(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
+                                                           BOOL is64Bit, BOOL swap) {
+        (void)cpuType;
+        (void)cpuSubType;
+        if (!keepGoing || stop) {
             return;
         }
         DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
-            if (!keepGoing) {
+            (void)commandSize;
+            if (!keepGoing || stop) {
                 return;
             }
-            uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
-            if (cmd != 0 && commandType != cmd) {
-                return;
+            NSError *commandError = nil;
+            if (!block(command, &stop, &commandError)) {
+                keepGoing = NO;
             }
-            if (cmdsize != 0 && commandSize != cmdsize) {
-                return;
-            }
-            if (!block(command, slice)) {
+            if (commandError != nil) {
+                blockError = commandError;
                 keepGoing = NO;
             }
         });
-    }) && keepGoing;
+    });
+    if (blockError != nil && error != NULL) {
+        *error = blockError;
+    }
+    return parsed && keepGoing;
+}
+
+BOOL DVTMachOEnumerateSegments(NSData *fileData, NSError **error, DVTMachOEnumerationSegmentsBlock block)
+{
+    if (block == nil || fileData == nil) {
+        return NO;
+    }
+
+    __block BOOL keepGoing = YES;
+    __block BOOL stop = NO;
+    __block NSError *blockError = nil;
+    BOOL parsed = DVTForEachSliceInData(fileData, error, ^(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
+                                                           BOOL is64Bit, BOOL swap) {
+        (void)cpuType;
+        (void)cpuSubType;
+        if (!keepGoing || stop) {
+            return;
+        }
+        DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
+            uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
+            if (!keepGoing || stop) {
+                return;
+            }
+            const struct segment_command *command32 = NULL;
+            const struct segment_command_64 *command64 = NULL;
+            if (commandType == LC_SEGMENT && commandSize >= sizeof(struct segment_command)) {
+                command32 = (const struct segment_command *)command;
+            } else if (commandType == LC_SEGMENT_64 && commandSize >= sizeof(struct segment_command_64)) {
+                command64 = (const struct segment_command_64 *)command;
+            }
+            if (command32 == NULL && command64 == NULL) {
+                return;
+            }
+            NSError *segmentError = nil;
+            if (!block(command32, command64, &stop, &segmentError)) {
+                keepGoing = NO;
+            }
+            if (segmentError != nil) {
+                blockError = segmentError;
+                keepGoing = NO;
+            }
+        });
+    });
+    if (blockError != nil && error != NULL) {
+        *error = blockError;
+    }
+    return parsed && keepGoing;
+}
+
+BOOL DVTMachOEnumerateSections(NSData *fileData,
+                               const struct segment_command *command32,
+                               const struct segment_command_64 *command64,
+                               NSError **error,
+                               DVTMachOEnumerationSectionsBlock block)
+{
+    if (block == nil || fileData == nil || (command32 == NULL && command64 == NULL)) {
+        return NO;
+    }
+
+    /*
+     The section list lives inside the segment command, so this reads the
+     segment's own bytes rather than walking load commands: the caller already
+     has the command and only needs the buffer to resolve its offsets.
+     `sections` is a trailing flexible array, so the list starts at the size of
+     the command itself.
+     */
+    const uint8_t *segmentBytes = (const uint8_t *)(command32 != NULL ? (const void *)command32 : (const void *)command64);
+    uint32_t nsects = command32 != NULL ? command32->nsects : command64->nsects;
+    uint32_t sectionSize = command32 != NULL ? (uint32_t)sizeof(struct section) : (uint32_t)sizeof(struct section_64);
+    uint32_t listOffset = command32 != NULL ? (uint32_t)sizeof(struct segment_command)
+                                            : (uint32_t)sizeof(struct segment_command_64);
+
+    /* A segment command cannot claim more sections than the file can hold. */
+    uint64_t listEnd = (uint64_t)listOffset + (uint64_t)nsects * (uint64_t)sectionSize;
+    NSUInteger available = fileData.length;
+    NSUInteger commandStart = (NSUInteger)(segmentBytes - (const uint8_t *)[fileData bytes]);
+    if (commandStart > available || listEnd > (uint64_t)(available - commandStart)) {
+        DVTFillError(error, DVTMachOErrorCodeTruncated, @"section list runs past end of file");
+        return NO;
+    }
+
+    for (uint32_t index = 0; index < nsects; index++) {
+        const uint8_t *entry = segmentBytes + listOffset + (uint64_t)index * sectionSize;
+        const struct section *section32 = NULL;
+        const struct section_64 *section64 = NULL;
+        if (command32 != NULL) {
+            section32 = (const struct section *)entry;
+        } else {
+            section64 = (const struct section_64 *)entry;
+        }
+        BOOL stop = NO;
+        NSError *sectionError = nil;
+        if (!block(section32, section64, &stop, &sectionError)) {
+            return NO;
+        }
+        if (sectionError != nil) {
+            if (error != NULL) {
+                *error = sectionError;
+            }
+            return NO;
+        }
+        if (stop) {
+            return YES;
+        }
+    }
+    return YES;
 }
 
 #pragma mark - Public API: slice metadata
 
-NSArray<NSNumber *> *DVTMachOFileTypes(NSString *executablePath)
+NSArray<NSNumber *> *DVTMachOFileTypes(NSData *fileData, NSError **error)
 {
     NSMutableArray<NSNumber *> *types = [NSMutableArray arrayWithCapacity:1];
-    DVTForEachSelectedSlice(executablePath, -1, NULL, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)slice;
-        (void)index;
-        uint32_t fileType = DVTRead32((const uint8_t *)[slice bytes],
-                                     is64Bit ? offsetof(struct mach_header_64, filetype)
-                                            : offsetof(struct mach_header, filetype),
-                                     swap);
-        [types addObject:[NSNumber numberWithUnsignedInt:fileType]];
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
+        uint32_t fieldOffset = is64Bit ? offsetof(struct mach_header_64, filetype) : offsetof(struct mach_header, filetype);
+        uint32_t fileType = DVTRead32((const uint8_t *)[slice bytes], fieldOffset, swap);
+        [types addObject:@(fileType)];
+        return YES;
     });
+    if (!parsed) {
+        return nil;
+    }
     return types;
 }
 
-static NSString *DVTArchitectureName(cpu_type_t cpuType, cpu_subtype_t cpuSubtype)
+NSArray<NSString *> *DVTMachOArchitecturesForExecutable(NSString *executablePath, NSError **error)
 {
-    switch (cpuType) {
-    case CPU_TYPE_X86_64:
-        return @"x86_64";
-    case CPU_TYPE_X86:
-        return (cpuSubtype == 3) ? @"i386" : @"x86";
-    case CPU_TYPE_ARM64:
-        return @"arm64";
-    case CPU_TYPE_ARM:
-        return @"arm";
-    case CPU_TYPE_POWERPC:
-        return @"ppc";
-    case CPU_TYPE_POWERPC64:
-        return @"ppc64";
-    default:
-        return [NSString stringWithFormat:@"cpu(%d,%d)", (int)cpuType, (int)cpuSubtype];
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
     }
-}
 
-NSArray<NSString *> *DVTMachOArchitecturesForExecutable(NSString *executablePath)
-{
     NSMutableArray<NSString *> *names = [NSMutableArray arrayWithCapacity:1];
-    DVTForEachSelectedSlice(executablePath, -1, NULL, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
+    BOOL parsed = DVTForEachSliceInData(fileData, error, ^(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
+                                                           BOOL is64Bit, BOOL swap) {
         (void)slice;
-        (void)index;
-        const uint8_t *bytes = (const uint8_t *)[slice bytes];
-        uint32_t cpuType = DVTRead32(bytes, is64Bit ? offsetof(struct mach_header_64, cputype)
-                                                    : offsetof(struct mach_header, cputype),
-                                     swap);
-        uint32_t cpuSubtype = DVTRead32(bytes, is64Bit ? offsetof(struct mach_header_64, cpusubtype)
-                                                       : offsetof(struct mach_header, cpusubtype),
-                                        swap);
-        [names addObject:DVTArchitectureName((cpu_type_t)cpuType, (cpu_subtype_t)cpuSubtype)];
+        (void)is64Bit;
+        (void)swap;
+        DVTArchitecture *architecture = [DVTArchitecture architectureWithCPUType:cpuType subType:cpuSubType];
+        NSString *name = architecture.canonicalName;
+        if (name == nil) {
+            name = [NSString stringWithFormat:@"cpu(%d,%d)", (int)cpuType, (int)cpuSubType];
+        }
+        [names addObject:name];
     });
+    if (!parsed) {
+        return nil;
+    }
     return names;
 }
 
-NSArray<NSString *> *DVTMachOUUIDsForExecutable(NSString *executablePath)
+NSArray<NSString *> *DVTMachOUUIDsForExecutable(NSString *executablePath, NSError **error)
 {
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
+    }
+
     NSMutableArray<NSString *> *uuids = [NSMutableArray arrayWithCapacity:1];
-    DVTForEachSelectedSlice(executablePath, -1, NULL, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)index;
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
         DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
-            (void)commandSize;
             if (DVTRead32(command, offsetof(struct load_command, cmd), swap) != LC_UUID) {
                 return;
             }
@@ -471,11 +685,64 @@ NSArray<NSString *> *DVTMachOUUIDsForExecutable(NSString *executablePath)
             const struct uuid_command *uuidCommand = (const struct uuid_command *)command;
             [uuids addObject:DVTUUIDStringFromBytes(uuidCommand->uuid)];
         });
+        return YES;
     });
+    if (!parsed) {
+        return nil;
+    }
     return uuids;
 }
 
+NSArray<NSNumber *> *DVTMachOSwiftABIVersion(NSString *executablePath, NSError **error)
+{
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
+    }
+
+    NSMutableArray<NSNumber *> *versions = [NSMutableArray arrayWithCapacity:1];
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
+        DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
+            uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
+            /*
+             LC_SWIFT_VERSION and `struct swift_version_command` are not in the
+             public headers, but the layout is fixed: a load command followed by
+             a single uint32_t version field.
+             */
+            const uint32_t swiftVersionCommandType = 0x2A;
+            const uint32_t versionOffset = offsetof(struct load_command, cmdsize) + sizeof(uint32_t);
+            if (commandType != swiftVersionCommandType || commandSize < versionOffset + sizeof(uint32_t)) {
+                return;
+            }
+            [versions addObject:@(DVTRead32(command, versionOffset, swap))];
+        });
+        return YES;
+    });
+    if (!parsed) {
+        return nil;
+    }
+    return versions;
+}
+
 #pragma mark - Public API: platforms
+
+/** Collects the `platform` value of every `LC_BUILD_VERSION`/`LC_VERSION_MIN_*`. */
+/** Appends a platform unless that platform is already listed, preserving order. */
+static void DVTAddPlatform(NSMutableArray<NSNumber *> *platforms, uint32_t platform)
+{
+    NSNumber *value = @(platform);
+    if (![platforms containsObject:value]) {
+        [platforms addObject:value];
+    }
+}
 
 static void DVTCollectPlatform(NSData *slice, BOOL swap, BOOL is64Bit, NSMutableArray<NSNumber *> *platforms)
 {
@@ -486,28 +753,80 @@ static void DVTCollectPlatform(NSData *slice, BOOL swap, BOOL is64Bit, NSMutable
                 return;
             }
             const struct build_version_command *build = (const struct build_version_command *)command;
-            [platforms addObject:[NSNumber numberWithUnsignedInt:build->platform]];
-        } else if (commandType == LC_VERSION_MIN_MACOSX) {
-            [platforms addObject:[NSNumber numberWithUnsignedInt:PLATFORM_MACOS]];
+            DVTAddPlatform(platforms, (uint32_t)build->platform);
+        } else if (commandType == LC_VERSION_MIN_MACOSX || commandType == LC_VERSION_MIN_IPHONEOS ||
+                   commandType == LC_VERSION_MIN_WATCHOS || commandType == LC_VERSION_MIN_TVOS) {
+            /* The pre-LC_BUILD_VERSION commands only ever describe macOS. */
+            DVTAddPlatform(platforms, PLATFORM_MACOS);
         }
     });
 }
 
-NSSet<NSNumber *> *DVTMachOPlatformsForExecutable(NSString *executablePath)
+/**
+  Reports a failure the way the platform queries do.
+
+  A file that is not a Mach-O at all is reported as an unsupported format
+  rather than as a generic "not a Mach-O", which is the distinction the original
+  draws between the platform lookups and the slice-level ones.
+ */
+static void DVTFillPlatformError(NSError **error, NSError *cause)
 {
-    NSMutableArray<NSNumber *> *platforms = [NSMutableArray arrayWithCapacity:1];
-    DVTForEachSelectedSlice(executablePath, -1, NULL, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)index;
-        DVTCollectPlatform(slice, swap, is64Bit, platforms);
-    });
-    return [NSSet setWithArray:platforms];
+    if (error == NULL) {
+        return;
+    }
+    if (cause != nil && [cause.domain isEqualToString:DVTMachOErrorDomain] &&
+        cause.code == DVTMachOErrorCodeNotMachO) {
+        *error = [NSError errorWithDomain:DVTMachOErrorDomain
+                                      code:DVTMachOErrorCodeUnsupportedFormat
+                                  userInfo:cause.userInfo];
+        return;
+    }
+    *error = cause;
 }
 
-BOOL DVTMachOHasPlatform(NSString *executablePath, uint32_t platform)
+NSArray<NSNumber *> *DVTMachOPlatformsForExecutable(NSString *executablePath, NSError **error)
 {
-    NSSet<NSNumber *> *platforms = DVTMachOPlatformsForExecutable(executablePath);
-    return [platforms containsObject:[NSNumber numberWithUnsignedInt:platform]];
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
+    }
+
+    NSMutableArray<NSNumber *> *platforms = [NSMutableArray arrayWithCapacity:1];
+    NSError *sliceError = nil;
+    BOOL parsed = DVTForEachSliceInData(fileData, &sliceError, ^(NSData *slice, cpu_type_t cpuType,
+                                                                cpu_subtype_t cpuSubType, BOOL is64Bit, BOOL swap) {
+        (void)cpuType;
+        (void)cpuSubType;
+        DVTCollectPlatform(slice, swap, is64Bit, platforms);
+    });
+    if (!parsed) {
+        DVTFillPlatformError(error, sliceError);
+        return nil;
+    }
+    return platforms;
 }
+
+NSNumber *DVTMachOHasPlatform(NSString *executablePath, DVTMachOPlatform platform, NSError **error)
+{
+    NSArray<NSNumber *> *platforms = DVTMachOPlatformsForExecutable(executablePath, error);
+    if (platforms == nil) {
+        return nil;
+    }
+    for (NSNumber *candidate in platforms) {
+        if (candidate.unsignedIntegerValue == (NSUInteger)platform) {
+            return [NSNumber numberWithBool:YES];
+        }
+    }
+    return [NSNumber numberWithBool:NO];
+}
+
+DVTMachOPlatform DVTMachOPlatformForExecutable(NSString *executablePath, NSError **error)
+{
+    NSArray<NSNumber *> *platforms = DVTMachOPlatformsForExecutable(executablePath, error);
+    NSUInteger first = platforms.firstObject.unsignedIntegerValue;
+    return (DVTMachOPlatform)first;
+}
+
 
 #pragma mark - Public API: libraries and rpaths
 
@@ -630,12 +949,23 @@ NSArray<NSString *> *DVTMachORPathsForExecutable(NSString *executablePath, NSInt
 
 #pragma mark - Public API: code presence
 
-BOOL DVTMachOBinaryHasAnyMachineCode(NSString *executablePath)
+NSNumber *DVTMachOBinaryHasAnyMachineCode(NSString *executablePath, NSError **error)
 {
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
+    }
+
     __block BOOL hasCode = NO;
-    DVTForEachSelectedSlice(executablePath, -1, NULL, ^(NSData *slice, NSUInteger index, BOOL swap, BOOL is64Bit) {
-        (void)slice;
-        (void)index;
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
         DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
             (void)commandSize;
             uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
@@ -651,8 +981,236 @@ BOOL DVTMachOBinaryHasAnyMachineCode(NSString *executablePath)
                 hasCode = YES;
             }
         });
+        return YES;
     });
-    return hasCode;
+    if (!parsed) {
+        return nil;
+    }
+    return [NSNumber numberWithBool:hasCode];
+}
+
+#pragma mark - Public API: is this file a Mach-O at all
+
+NSNumber *DVTFileAtPathIsMachO(NSString *path, NSError **error)
+{
+    if (path == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOENT userInfo:nil];
+        }
+        return nil;
+    }
+
+    /*
+     Read four bytes with open/pread rather than through NSData so the failure
+     reported is the one the file system actually gave — which is what callers
+     use to tell "not a file" from "not a Mach-O".
+     */
+    int descriptor = open(path.fileSystemRepresentation, O_RDONLY);
+    if (descriptor < 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+        }
+        return nil;
+    }
+
+    uint32_t magic = 0;
+    ssize_t read = pread(descriptor, &magic, sizeof(magic), 0);
+    int readErrno = errno;
+    close(descriptor);
+
+    if (read < 0) {
+        /*
+         A directory opens but cannot be read, and the original reports that as
+         a plain "no" rather than an error: a directory is simply not a Mach-O.
+         Every other read failure is a real filesystem error worth surfacing.
+         */
+        if (readErrno == EISDIR) {
+            return [NSNumber numberWithBool:NO];
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:readErrno userInfo:nil];
+        }
+        return nil;
+    }
+    if (read != (ssize_t)sizeof(magic)) {
+        return [NSNumber numberWithBool:NO];
+    }
+
+    BOOL is64Bit = NO;
+    BOOL swap = NO;
+    BOOL isMachO = DVTIsMachMagic(magic, &is64Bit, &swap) || DVTIsFatMagic(magic);
+    return [NSNumber numberWithBool:isMachO];
+}
+
+#pragma mark - Public API: minimum OS and source versions
+
+/** Expands a packed `x.y.z` version as `LC_BUILD_VERSION` stores it. */
+static DVTVersion *DVTVersionFromPacked32(uint32_t packed)
+{
+    return [DVTVersion versionWithMajorComponent:(packed >> 16) & 0xFFFFu
+                                 minorComponent:(packed >> 8) & 0xFFu
+                                 updateComponent:packed & 0xFFu];
+}
+
+/**
+  Expands a 64-bit `LC_SOURCE_VERSION`.
+
+  The load command packs the version into a single 64-bit field, most
+  significant byte first, so the components are read back out as bytes: that
+  reproduces the original's dotted rendering, including the trailing components
+  a short version leaves at zero.
+ */
+static NSString *DVTSourceVersionString(uint64_t packed)
+{
+    NSUInteger length = 0;
+    while (length < sizeof(packed) && ((packed >> (8 * (sizeof(packed) - 1 - length))) & 0xFFu) != 0) {
+        length++;
+    }
+    if (length == 0) {
+        length = 1;
+    }
+
+    NSMutableString *result = [NSMutableString string];
+    for (NSUInteger index = 0; index < length; index++) {
+        if (index != 0) {
+            [result appendString:@"."];
+        }
+        uint8_t component = (uint8_t)((packed >> (8 * (sizeof(packed) - 1 - index))) & 0xFFu);
+        [result appendFormat:@"%u", component];
+    }
+    return result;
+}
+
+/** The `LC_VERSION_MIN_*` value of `slice`, or `nil` when it declares none. */
+static DVTVersion *DVTSliceMinimumVersion(NSData *slice, BOOL swap, BOOL is64Bit)
+{
+    (void)is64Bit;
+    __block DVTVersion *minimum = nil;
+    DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
+        uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
+        if (minimum != nil) {
+            return;
+        }
+        if (commandType == LC_BUILD_VERSION) {
+            if (commandSize >= offsetof(struct build_version_command, minos) + sizeof(uint32_t)) {
+                minimum = DVTVersionFromPacked32(DVTRead32(command, offsetof(struct build_version_command, minos), swap));
+            }
+        } else {
+            uint32_t offset = UINT32_MAX;
+            if (commandType == LC_VERSION_MIN_MACOSX && commandSize >= sizeof(struct version_min_command)) {
+                offset = offsetof(struct version_min_command, version);
+            } else if (commandType == LC_VERSION_MIN_IPHONEOS && commandSize >= sizeof(struct version_min_command)) {
+                offset = offsetof(struct version_min_command, version);
+            } else if (commandType == LC_VERSION_MIN_TVOS && commandSize >= sizeof(struct version_min_command)) {
+                offset = offsetof(struct version_min_command, version);
+            } else if (commandType == LC_VERSION_MIN_WATCHOS && commandSize >= sizeof(struct version_min_command)) {
+                offset = offsetof(struct version_min_command, version);
+            }
+            if (offset != UINT32_MAX) {
+                minimum = DVTVersionFromPacked32(DVTRead32(command, offset, swap));
+            }
+        }
+    });
+    return minimum;
+}
+
+DVTVersion *DVTMachOOSVersionMinForArch(NSData *fileData,
+                                        DVTArchitecture *architecture,
+                                        DVTMachOPlatform platform,
+                                        NSError **error)
+{
+    (void)platform;
+    if (fileData == nil || architecture == nil) {
+        return nil;
+    }
+
+    __block DVTVersion *minimum = nil;
+    __block BOOL found = NO;
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)stop;
+        (void)sliceError;
+        if (![architecture matchesCPUType:cpuType andSubType:cpuSubType]) {
+            return YES;
+        }
+        found = YES;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
+        minimum = DVTSliceMinimumVersion(slice, swap, is64Bit);
+        return YES;
+    });
+    if (!parsed || !found) {
+        return nil;
+    }
+    return minimum;
+}
+
+NSDictionary<DVTArchitecture *, DVTVersion *> *DVTMachOOSVersionMinForPlatform(NSString *executablePath,
+                                                                               DVTMachOPlatform platform,
+                                                                               NSError **error)
+{
+    NSData *fileData = DVTReadMachOFile(executablePath, error);
+    if (fileData == nil) {
+        return nil;
+    }
+
+    NSMutableDictionary<DVTArchitecture *, DVTVersion *> *result = [NSMutableDictionary dictionary];
+    BOOL parsed = DVTForEachSliceInData(fileData, error, ^(NSData *slice, cpu_type_t cpuType, cpu_subtype_t cpuSubType,
+                                                           BOOL is64Bit, BOOL swap) {
+        DVTVersion *minimum = DVTSliceMinimumVersion(slice, swap, is64Bit);
+        if (minimum == nil) {
+            return;
+        }
+        DVTArchitecture *architecture = [DVTArchitecture architectureWithCPUType:cpuType subType:cpuSubType];
+        if (architecture != nil) {
+            result[architecture] = minimum;
+        }
+    });
+    if (!parsed) {
+        return nil;
+    }
+    if (result.count == 0) {
+        /* No slice declared a minimum version, which is a failure, not an empty answer. */
+        DVTFillError(error, DVTMachOErrorCodeTruncated, @"no LC_BUILD_VERSION or LC_VERSION_MIN_* found");
+        return nil;
+    }
+    return result;
+}
+
+NSString *DVTMachOSourceVersionForArch(NSData *fileData, DVTArchitecture *architecture, NSError **error)
+{
+    if (fileData == nil || architecture == nil) {
+        return nil;
+    }
+
+    __block NSString *sourceVersion = nil;
+    __block BOOL found = NO;
+    BOOL parsed = DVTMachOEnumerateSlices(fileData, error, ^BOOL(NSData *slice, cpu_type_t cpuType,
+                                                                 cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)stop;
+        (void)sliceError;
+        if (![architecture matchesCPUType:cpuType andSubType:cpuSubType]) {
+            return YES;
+        }
+        found = YES;
+        BOOL is64Bit = NO;
+        BOOL swap = NO;
+        DVTIsMachMagic(DVTRead32((const uint8_t *)[slice bytes], 0, NO), &is64Bit, &swap);
+        DVTForEachLoadCommand(slice, swap, is64Bit, ^(const struct load_command *command, uint32_t commandSize) {
+            uint32_t commandType = DVTRead32(command, offsetof(struct load_command, cmd), swap);
+            if (commandType != LC_SOURCE_VERSION || commandSize < sizeof(struct source_version_command)) {
+                return;
+            }
+            uint64_t packed = DVTRead64(command, offsetof(struct source_version_command, version), swap);
+            sourceVersion = DVTSourceVersionString(packed);
+        });
+        return YES;
+    });
+    if (!parsed || !found) {
+        return nil;
+    }
+    return sourceVersion;
 }
 
 void DVTSetupWeakPropertyKVOAssertions(void)

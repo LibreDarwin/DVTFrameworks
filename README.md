@@ -148,10 +148,35 @@ big-endian hosts:
 - load-command enumeration, bounded by the `sizeofcmds` region the header
   actually declares
 - `@rpath` entries, linked libraries, weak links, and re-exported libraries
+- `DVTFileAtPathIsMachO`, which reports whether a path holds a Mach-O at all
+  without reading the whole file
+- `DVTMachOHasAnyMachineCode`, i.e. whether a binary carries an executable
+  `__TEXT` segment
+- `DVTMachOSourceVersionForArch` and `DVTMachOOSVersionMinForArch`, exposed as
+  `DVTVersion`
+- `DVTMachOOSVersionMinForPlatform` and `DVTMachOPlatformForExecutable`
+
+Classifications report through `NSNumber *` plus an `NSError **` out-parameter
+rather than a bare `BOOL`, so "is not a Mach-O" is distinguishable from "the
+file could not be read". `DVTMachOHasFatHeader` takes the name literally: only a
+fat header qualifies, so a thin image answers `NO`.
 
 Architectures are reported as strings (`@"arm64"`, `"x86_64"`, …) and UUIDs as
 canonical uppercase dashed strings, because the reduced Foundation in this SDK
 has no `NSUUID`.
+
+### Versions and architectures
+
+`DVTVersion` and `DVTArchitecture` are reimplemented to match the originals'
+selector lists, property types, and property attributes, so callers that reach
+for them through the runtime see the same surface:
+
+- `DVTVersion` parses `major[.minor[.update]]`, ignores extra components, and
+  renders `15.0` but not `15.0.0`. `hash` is `major * 10000 + minor * 100 +
+  update`; equality and ordering ignore the build number.
+- `DVTArchitecture` looks up by canonical name or by `(cpuType, cpuSubType)`.
+  Capability bits in the high byte of a subtype are ignored, which keeps
+  `arm64` and `arm64e` distinct.
 
 ### Assertions
 

@@ -150,6 +150,12 @@ static uint32_t DVTBuildSlice(uint8_t *buffer,
     return cursor;
 }
 
+/** Reads a written file back for the parsing entry points that take NSData. */
+static NSData *DVTDataAtPath(NSString *path)
+{
+    return [NSData dataWithContentsOfFile:path];
+}
+
 /** Writes a thin 64-bit Mach-O with one LC_RPATH and one LC_LOAD_DYLIB. */
 static NSString *DVTWriteSyntheticMachO(NSString *name)
 {
@@ -607,20 +613,42 @@ static void DVTTestMachO(void)
     NSArray<NSString *> *arguments = [NSProcessInfo processInfo].arguments;
     NSString *self = arguments.count > 0 ? [arguments objectAtIndex:0] : nil;
     DVTExpect(self.length > 0, @"test runner has an executable path");
-    DVTExpect(!DVTMachOIsArchive(self), @"a Mach-O is not an archive");
-    DVTExpect(!DVTMachOHasFatHeader(self) || DVTMachOHasFatHeader(self), @"fat header query does not trap");
-    DVTExpect(DVTMachOFileTypes(self).count >= 1, @"at least one file type reported");
-    DVTExpect(DVTMachOUUIDsForExecutable(self).count >= 1, @"at least one UUID reported");
-    DVTExpect(DVTMachOArchitecturesForExecutable(self).count >= 1, @"at least one architecture reported");
-    DVTExpect(DVTMachOBinaryHasAnyMachineCode(self), @"a real executable has machine code");
+
+    NSData *selfData = DVTDataAtPath(self);
+    DVTExpect(selfData.length > 0, @"test runner executable is readable");
+
+    NSError *error = nil;
+    NSNumber *isArchive = DVTMachOIsArchive(selfData, &error);
+    DVTExpect(isArchive != nil && error == nil, @"archive query on a real Mach-O succeeds");
+    DVTExpect(!isArchive.boolValue, @"a Mach-O is not an archive");
+
+    NSNumber *hasHeader = DVTMachOHasFatHeader(selfData, &error);
+    DVTExpect(hasHeader != nil, @"header query on a real Mach-O succeeds");
+
+    DVTExpect(DVTMachOFileTypes(selfData, NULL).count >= 1, @"at least one file type reported");
+    DVTExpect(DVTMachOUUIDsForExecutable(self, NULL).count >= 1, @"at least one UUID reported");
+    DVTExpect(DVTMachOArchitecturesForExecutable(self, NULL).count >= 1, @"at least one architecture reported");
+
+    NSNumber *hasMachineCode = DVTMachOBinaryHasAnyMachineCode(self, &error);
+    DVTExpect(hasMachineCode != nil && error == nil, @"machine code query succeeds");
+    DVTExpect(hasMachineCode.boolValue, @"a real executable has machine code");
+
+    NSNumber *isMachO = DVTFileAtPathIsMachO(self, &error);
+    DVTExpect(isMachO != nil && isMachO.boolValue && error == nil, @"test runner is recognised as Mach-O");
 
     __block NSUInteger sliceCount = 0;
-    DVTMachOEnumerateSlices(self, NULL, ^BOOL(NSData *sliceData, NSUInteger sliceIndex) {
-        (void)sliceIndex;
+    BOOL enumerated = DVTMachOEnumerateSlices(selfData, NULL,
+                                              ^BOOL(NSData *sliceData, cpu_type_t cpuType,
+                                                    cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
         sliceCount++;
         DVTExpect(sliceData.length > 0, @"each enumerated slice is non-empty");
         return YES;
     });
+    DVTExpect(enumerated, @"slice enumeration succeeds");
     DVTExpect(sliceCount >= 1, @"enumerated at least one slice");
 
     NSArray *rpaths = DVTMachORPathsForExecutable(self, -1, NULL);
@@ -637,17 +665,18 @@ static void DVTTestMachO(void)
               @"libSystem shows up among the linked libraries");
 
     NSString *synthetic = DVTWriteSyntheticMachO(@"dvt_synthetic.dylib");
-    DVTExpectEqualObjects(DVTMachOFileTypes(synthetic), @[@(MH_DYLIB)], @"synthetic file type");
+    NSData *syntheticData = DVTDataAtPath(synthetic);
+    DVTExpectEqualObjects(DVTMachOFileTypes(syntheticData, NULL), @[@(MH_DYLIB)], @"synthetic file type");
     DVTExpectEqualObjects(DVTMachORPathsForExecutable(synthetic, -1, NULL),
                           @[@"@executable_path/../Frameworks"], @"synthetic rpath extracted");
     DVTExpectEqualObjects(DVTMachORPathsForExecutable(synthetic, 0, NULL),
                           @[@"@executable_path/../Frameworks"], @"synthetic rpath for slice 0");
     DVTExpectEqualObjects(DVTMachOLinkedLibrariesForExecutable(synthetic, 0, NULL),
                           @[@"/usr/lib/libSystem.B.dylib"], @"synthetic dylib extracted");
-    DVTExpectEqualObjects(DVTMachOUUIDsForExecutable(synthetic), @[], @"synthetic file carries no UUID");
-    DVTExpect(DVTMachOBinaryHasAnyMachineCode(synthetic) == NO,
+    DVTExpectEqualObjects(DVTMachOUUIDsForExecutable(synthetic, NULL), @[], @"synthetic file carries no UUID");
+    DVTExpect(DVTMachOBinaryHasAnyMachineCode(synthetic, NULL).boolValue == NO,
               @"synthetic file has no __TEXT segment");
-    DVTExpect(DVTMachOHasPlatform(synthetic, PLATFORM_MACOS) == NO,
+    DVTExpect(DVTMachOHasPlatform(synthetic, PLATFORM_MACOS, NULL).boolValue == NO,
               @"synthetic file declares no platform");
 
     NSArray *rpathsSlice1 = DVTMachORPathsForExecutable(synthetic, 1, NULL);
@@ -657,9 +686,17 @@ static void DVTTestMachO(void)
 
     /* A byte-swapped file must be read through the swapped accessors. */
     NSString *swapped = DVTWriteSwappedMachO(@"dvt_swapped");
-    DVTExpect(DVTMachOHasFatHeader(swapped) == NO, @"a swapped thin file has no fat header");
-    DVTExpectEqualObjects(DVTMachOFileTypes(swapped), (@[@(MH_EXECUTE)]), @"swapped file type");
-    DVTExpectEqualObjects(DVTMachOArchitecturesForExecutable(swapped), (@[@"x86_64"]),
+    NSData *swappedData = DVTDataAtPath(swapped);
+    /*
+     The name is literal: only a fat header counts, so a swapped thin image is
+     still "no" even though it carries a valid Mach-O magic.
+     */
+    DVTExpect(DVTMachOHasFatHeader(swappedData, NULL).boolValue == NO,
+              @"a swapped thin image has no fat header");
+    DVTExpect(DVTMachOHasFatHeader([@"not a mach-o" dataUsingEncoding:NSUTF8StringEncoding], NULL).boolValue == NO,
+              @"plain text is not a fat header");
+    DVTExpectEqualObjects(DVTMachOFileTypes(swappedData, NULL), (@[@(MH_EXECUTE)]), @"swapped file type");
+    DVTExpectEqualObjects(DVTMachOArchitecturesForExecutable(swapped, NULL), (@[@"x86_64"]),
                           @"swapped architecture name");
     DVTExpectEqualObjects(DVTMachORPathsForExecutable(swapped, 0, NULL), (@[@"@loader_path/."]),
                           @"swapped rpath extracted");
@@ -677,10 +714,11 @@ static void DVTTestMachO(void)
 
     /* Both slices of a fat file must be addressable by index. */
     NSString *fat = DVTWriteFatMachO(@"dvt_fat");
-    DVTExpect(DVTMachOHasFatHeader(fat), @"fat header detected");
-    DVTExpectEqualObjects(DVTMachOFileTypes(fat), (@[@(MH_EXECUTE), @(MH_DYLIB)]),
+    NSData *fatData = DVTDataAtPath(fat);
+    DVTExpect(DVTMachOHasFatHeader(fatData, NULL).boolValue, @"fat header detected");
+    DVTExpectEqualObjects(DVTMachOFileTypes(fatData, NULL), (@[@(MH_EXECUTE), @(MH_DYLIB)]),
                           @"both slice file types reported");
-    NSArray *fatArchitectures = DVTMachOArchitecturesForExecutable(fat);
+    NSArray *fatArchitectures = DVTMachOArchitecturesForExecutable(fat, NULL);
     DVTExpect(fatArchitectures.count == 2, @"both slice architectures reported");
     DVTExpect([fatArchitectures containsObject:@"arm64"] && [fatArchitectures containsObject:@"x86_64"],
               @"fat architectures are named");
@@ -689,9 +727,15 @@ static void DVTTestMachO(void)
     DVTExpectEqualObjects(DVTMachORPathsForExecutable(fat, 2, NULL), (@[]), @"absent slice 2 has no rpaths");
 
     __block NSUInteger fatSlices = 0;
-    DVTMachOEnumerateSlices(fat, NULL, ^BOOL(NSData *sliceData, NSUInteger sliceIndex) {
+    DVTMachOEnumerateSlices(fatData, NULL,
+                            ^BOOL(NSData *sliceData, cpu_type_t cpuType,
+                                  cpu_subtype_t cpuSubType, BOOL *stop, NSError **sliceError) {
         (void)sliceData;
-        fatSlices = sliceIndex + 1;
+        (void)cpuType;
+        (void)cpuSubType;
+        (void)stop;
+        (void)sliceError;
+        fatSlices++;
         return YES;
     });
     DVTExpect(fatSlices == 2, @"fat file enumerates two slices");
