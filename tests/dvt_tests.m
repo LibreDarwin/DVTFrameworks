@@ -1826,6 +1826,149 @@ static void DVTTestTextUTF8Correspondence(void)
     }
 }
 
+static void DVTTestStringIndexQueryContext(void)
+{
+    {
+        /* The struct is part of the ABI: a caller allocates it on the stack, so
+           its size and the offsets the initializer writes have to match. */
+        DVTExpect(sizeof(DVTStringIndexQueryContext) == 264, @"the query context is 264 bytes");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, isASCIIBacked) == 0,
+                  @"the flag sits at the front of the query context");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, string) == 0x88,
+                  @"the query context keeps the string at 0x88");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, characters) == 0x90,
+                  @"the query context keeps the code-unit buffer at 0x90");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, asciiBytes) == 0x98,
+                  @"the query context keeps the ASCII buffer at 0x98");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, length) == 0xC0,
+                  @"the query context keeps the length at 0xC0");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, cachedByteOffsets) == 0xC8,
+                  @"the cache of queried offsets starts at 0xC8");
+        DVTExpect(offsetof(DVTStringIndexQueryContext, cachedUTF16Indices) == 0xE8,
+                  @"the cache of answers starts at 0xE8");
+    }
+
+    {
+        /* An ASCII string is answered from the flag alone, and the initializer
+           writes nothing else: every offset is already an offset, so nothing
+           else is needed and nothing else is stored. */
+        NSString *ascii = @"hello";
+        DVTStringIndexQueryContext context;
+        memset(&context, 0, sizeof(context));
+        DVTInitializeIndexOfStringQueryContext(ascii, &context);
+
+        DVTExpect(context.isASCIIBacked != 0, @"an ASCII literal is flagged as ASCII-backed");
+        DVTExpect(context.string == NULL, @"an ASCII context is left without the string");
+        DVTExpect(context.length == 0, @"an ASCII context is left without a length");
+
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(3, &context) == 3,
+                  @"an ASCII context answers an offset unchanged");
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(99, &context) == 99,
+                  @"an ASCII context passes an out-of-range offset straight through");
+    }
+
+    {
+        /* A context holds nothing a cached answer can change: walking every
+           offset forwards over one warm context has to agree with a context
+           that has answered nothing yet. */
+        NSString *text = @"a\U0001F600b\U0001F680c";
+        NSUInteger length = [text length];
+
+        DVTStringIndexQueryContext warm;
+        DVTInitializeIndexOfStringQueryContext(text, &warm);
+        DVTExpect(warm.isASCIIBacked == 0, @"a string with a surrogate pair is not ASCII-backed");
+        DVTExpect((__bridge NSString *)warm.string == text, @"the context keeps the string it was given");
+        DVTExpect(warm.length == length, @"the context records the length");
+
+        /* A warm context does not have to agree with the plain function, and the
+           original does not make it. Asking forwards for every offset in turn
+           fills the cache, and a slot is then reused as the starting point for
+           the next walk, which skips code units the plain function would have
+           counted again. For a surrogate pair that lands on the pair's trailing
+           half, so an offset can answer differently than it does uncached.
+
+           The same string walked from a fresh context does agree with the plain
+           function, and that is the property worth holding on to. */
+        for (NSUInteger offset = 0; offset <= length * 4 + 4; offset++) {
+            DVTStringIndexQueryContext cold;
+            DVTInitializeIndexOfStringQueryContext(text, &cold);
+
+            NSUInteger coldAnswer = DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(offset, &cold);
+            NSUInteger plainAnswer = DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, offset);
+
+            DVTExpect(coldAnswer == plainAnswer,
+                      [NSString stringWithFormat:@"a fresh context answers offset %lu like the plain function",
+                                                   (unsigned long)offset]);
+            if (coldAnswer != plainAnswer) {
+                printf("       actual: cold %lu, plain %lu\n", (unsigned long)coldAnswer,
+                       (unsigned long)plainAnswer);
+            }
+
+            DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(offset, &warm);
+        }
+
+        /* Asking the warm context twice for one offset is stable, which is the
+           point of recording anything at all. */
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(2, &warm) ==
+                      DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(2, &warm),
+                  @"a repeated offset answers the same twice");
+
+        /* Asking twice for the same offset has to be stable, which is the whole
+           reason the context records anything. */
+        DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(2, &warm) ==
+                      DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(2, &warm),
+                  @"a repeated offset answers the same twice");
+    }
+
+    {
+        /* The range form converts the two ends separately, so the length comes
+           out in characters, and it takes its context last. */
+        NSString *text = @"a\U0001F600b";
+        DVTStringIndexQueryContext context;
+        DVTInitializeIndexOfStringQueryContext(text, &context);
+
+        /* The range ends at one past its last byte, and an offset landing inside
+           a pair resolves to the start of the whole character. Five bytes from
+           zero is one byte for 'a' plus the pair's four, so it covers three code
+           units. */
+        NSRange firstPair = DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(0, 5, &context);
+        DVTExpect(firstPair.location == 0, @"a range at the start converts its location to 0");
+        DVTExpect(firstPair.length == 3, @"five UTF-8 bytes cover 'a' and the pair");
+
+        NSRange afterPair = DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(1, 4, &context);
+        DVTExpect(afterPair.location == 1, @"a range starting on the pair converts its location to 1");
+        DVTExpect(afterPair.length == 2, @"four UTF-8 bytes from there cover just the pair");
+
+        /* Byte 1 is the pair's first byte and resolves to the pair. Bytes 2, 3
+           and 4 land inside the pair, belong to no character of their own, and
+           resolve to the next whole character, which is 'b' at index 3. */
+        NSRange onPair = DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(1, 0, &context);
+        DVTExpect(onPair.location == 1, @"the pair's first byte resolves to the pair");
+
+        NSRange insidePair = DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(3, 0, &context);
+        DVTExpect(insidePair.location == 3, @"an offset inside the pair resolves to the next whole character");
+
+        NSRange empty = DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(1, 0, &context);
+        DVTExpect(empty.length == 0, @"a range of no bytes has no length once converted");
+    }
+
+    {
+        /* A lone surrogate is the case the plain helpers already call out, and
+           the context has to inherit the behaviour rather than tidy it up. */
+        unichar lone[] = {'a', 0xD83D, 'b'};
+        NSString *text = DVTUnits(lone, 3);
+        DVTStringIndexQueryContext context;
+        DVTInitializeIndexOfStringQueryContext(text, &context);
+
+        for (NSUInteger offset = 0; offset <= 8; offset++) {
+            DVTExpect(DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(offset, &context) ==
+                          DVTIndexInStringWithCorrespondingUtf8ByteIndex(text, offset),
+                      [NSString stringWithFormat:@"a lone surrogate converts back the same at offset %lu",
+                                                   (unsigned long)offset]);
+        }
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -1845,6 +1988,7 @@ int main(int argc, const char *argv[])
         DVTTestFilterExpression();
         DVTTestLineOffsetTableTextExtras();
         DVTTestTextUTF8Correspondence();
+        DVTTestStringIndexQueryContext();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

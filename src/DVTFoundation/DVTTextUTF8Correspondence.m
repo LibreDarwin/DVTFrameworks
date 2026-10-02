@@ -193,3 +193,106 @@ NSRange DVTRangeOfStringWithCorrespondingUtf8ByteRange(NSString *string, NSRange
     NSUInteger length = DVTUTF16IndexFromUTF8Index(string, location, utf8ByteRange.length);
     return NSMakeRange(location, length);
 }
+
+/**
+  The context stores the string's length and its two code-unit buffers at the
+  offsets the original uses, so a caller that initialized the context with one
+  implementation can query it with the other. The originals are private types,
+  so they are described here rather than imported.
+
+  An ASCII-backed string needs nothing but the flag: every offset is already an
+  offset, so the query functions answer without looking at the string. The
+  original stops after writing the flag in that case and leaves the rest of the
+  context as the caller had it, so this does too.
+ */
+void DVTInitializeIndexOfStringQueryContext(NSString *string, DVTStringIndexQueryContext *context)
+{
+    context->isASCIIBacked = DVTStringIsASCIIBacked(string) ? 1 : 0;
+    if (context->isASCIIBacked) {
+        return;
+    }
+
+    context->string = (__bridge void *)string;
+    context->characters = CFStringGetCharactersPtr((__bridge CFStringRef)string);
+    context->asciiBytes = CFStringGetCStringPtr((__bridge CFStringRef)string, kCFStringEncodingASCII);
+    context->reserved2[0] = 0;
+    context->reserved2[1] = [string length];
+    context->reserved2[2] = 0;
+    context->reserved2[3] = 0;
+    context->length = [string length];
+
+    memset(context->cachedByteOffsets, 0, sizeof(context->cachedByteOffsets));
+    memset(context->cachedUTF16Indices, 0, sizeof(context->cachedUTF16Indices));
+}
+
+NSUInteger DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(NSUInteger utf8ByteIndex,
+                                                                          DVTStringIndexQueryContext *context)
+{
+    if (context->isASCIIBacked) {
+        return utf8ByteIndex;
+    }
+
+    NSString *string = (__bridge NSString *)context->string;
+    NSUInteger length = (NSUInteger)context->length;
+
+    /* Reusing a slot means resuming the walk from there, so the answer can
+       differ from an uncached one: on a surrogate pair, resuming from the
+       pair's trailing half skips the pair's leading half and lands one unit
+       further on. The original behaves the same way, which is why a warm
+       context is not expected to agree with `DVTIndexInStringWithCorrespondingUtf8ByteIndex`.
+       A slot at or before the wanted offset is the only safe one to resume
+       from, since the mapping only moves forward.
+
+       `from` counts code units, so the number of bytes to walk is measured from
+       the slot rather than from the start of the string: passing the absolute
+       offset instead would start the walk already past the target and
+       overshoot. */
+    NSUInteger from = 0;
+    NSUInteger bytesToWalk = utf8ByteIndex;
+    NSUInteger slot = 4;
+
+    for (NSUInteger i = 0; i < 4; i++) {
+        NSUInteger cachedOffset = (NSUInteger)context->cachedByteOffsets[i];
+        NSUInteger cachedIndex = (NSUInteger)context->cachedUTF16Indices[i];
+
+        if (cachedOffset == utf8ByteIndex) {
+            return cachedIndex;
+        }
+        if (cachedOffset <= utf8ByteIndex && cachedIndex <= length && cachedIndex > from) {
+            from = cachedIndex;
+            bytesToWalk = utf8ByteIndex - cachedOffset;
+            slot = i;
+        }
+    }
+
+    NSUInteger result = from + DVTUTF16IndexFromUTF8Index(string, from, bytesToWalk);
+
+    if (slot == 4) {
+        /* No slot qualified as a starting point, so take the next free one and
+           otherwise reuse the first. Which slot is written is not observable:
+           each slot answers only for the offset recorded beside it. */
+        for (NSUInteger i = 0; i < 4; i++) {
+            if (context->cachedByteOffsets[i] == 0 && context->cachedUTF16Indices[i] == 0) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == 4) {
+            slot = 0;
+        }
+    }
+    context->cachedByteOffsets[slot] = utf8ByteIndex;
+    context->cachedUTF16Indices[slot] = result;
+
+    return result;
+}
+
+NSRange DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(NSUInteger utf8ByteLocation,
+                                                                       NSUInteger utf8ByteLength,
+                                                                       DVTStringIndexQueryContext *context)
+{
+    NSUInteger location = DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(utf8ByteLocation, context);
+    NSUInteger end =
+        DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(utf8ByteLocation + utf8ByteLength, context);
+    return NSMakeRange(location, end - location);
+}

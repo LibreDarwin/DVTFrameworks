@@ -657,6 +657,39 @@ UTF-8 ranges separate rather than converting one into the other and reusing it.
 aborts, which is why the differential counts aborts as carefully as it counts
 values; the assert is load-bearing and the tests do not route around it.
 
+### Caching a string's conversions
+
+Converting one offset walks the string from the start, so a caller translating a
+long run of offsets pays for that walk every time.
+`DVTInitializeIndexOfStringQueryContext` prepares a
+`DVTStringIndexQueryContext` for one string, and the two `…WithQueryContext`
+functions convert offsets and ranges against it, remembering the last few
+answers and resuming from one when it helps.
+
+The struct is part of the ABI rather than an implementation detail: a caller
+allocates it on the stack, so its size and field offsets match the original's
+(`sizeof` 264, the string at `0x88`, the two buffers at `0x90` and `0x98`, the
+length at `0xC0`, and the two four-entry caches at `0xC8` and `0xE8`). A context
+initialized by one implementation can be queried by the other, which the
+cross-implementation checks cover in both directions.
+
+Two things about the original are easy to trip over, and both are reproduced:
+
+**An ASCII-backed string stores nothing but the flag.** Every offset is already
+an offset there, so the queries answer without consulting the string, and the
+initializer returns before writing the string, the buffers, or the length. A
+caller that inspects those fields on an ASCII context finds whatever it had
+there before.
+
+**A warm cache does not have to agree with the uncached answer.** Asking forwards
+for every offset in turn fills the cache, and a filled slot is then used as the
+starting point for the next walk, skipping code units an uncached walk would
+count again. On a surrogate pair that resumes from the pair's trailing half, so
+`emoji` offset 3 answers 4 from a warm context and 3 from a fresh one. This is
+the original's behaviour, confirmed against it rather than inferred: a fresh
+context always agrees with the uncached function, while a warm one can differ,
+and the tests assert only the former.
+
 The general path reads the string in blocks of 64 code units, so a surrogate
 pair landing on a block boundary has to carry its skip into the next block. The
 implementation does, and the mutation tests below are what established that this

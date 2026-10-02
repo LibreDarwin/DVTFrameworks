@@ -61,3 +61,56 @@ DVT_EXTERN NSRange DVTCorrespondingUTF8ByteRangeWithRangeOfString(NSString *stri
 
 /** As above, for a range. The length is measured from the converted location. */
 DVT_EXTERN NSRange DVTRangeOfStringWithCorrespondingUtf8ByteRange(NSString *string, NSRange utf8ByteRange);
+
+/**
+  State threaded through repeated conversions of one string.
+
+  The struct is laid out to match the original's private layout field for field,
+  because a caller allocates it on the stack and a context initialized by one
+  implementation can be queried by the other. Only the offsets and the total
+  size are part of the contract; nothing outside the library needs to read the
+  fields, and the middle of the struct is padding the original leaves alone.
+ */
+typedef struct DVTStringIndexQueryContext {
+    /** Non-zero once CoreFoundation has an ASCII buffer for the string. */
+    uint8_t isASCIIBacked;
+    uint8_t reserved[0x87];
+    /** The string, retained for the lifetime of the context. */
+    void *string;
+    /** The string's code units, or NULL when the storage is one byte wide. */
+    void *characters;
+    /** The string's ASCII bytes, or NULL when it has no ASCII buffer. */
+    void *asciiBytes;
+    uint64_t reserved2[4];
+    /** The string's length in UTF-16 code units. */
+    uint64_t length;
+    /** Byte offsets already converted, most recently used last. */
+    uint64_t cachedByteOffsets[4];
+    /** The answers for those offsets. */
+    uint64_t cachedUTF16Indices[4];
+} DVTStringIndexQueryContext;
+
+/**
+  Prepares `context` to convert offsets within `string`.
+
+  Converting one byte offset means walking the whole string, so a caller
+  translating a long run of offsets pays for the walk every time. The context
+  remembers the last few results and reuses them. The answers are identical
+  either way; only the work differs.
+ */
+DVT_EXTERN void DVTInitializeIndexOfStringQueryContext(NSString *string, DVTStringIndexQueryContext *context);
+
+/** As `DVTIndexInStringWithCorrespondingUtf8ByteIndex`, using a context. */
+DVT_EXTERN NSUInteger DVTIndexInStringWithCorrespondingUtf8ByteIndexWithQueryContext(
+    NSUInteger utf8ByteIndex, DVTStringIndexQueryContext *context);
+
+/**
+  As `DVTRangeOfStringWithCorrespondingUtf8ByteRange`, using a context.
+
+  The location and the location one past the end are converted separately and
+  the difference becomes the length, so a length is measured in characters
+  rather than in bytes. The range arrives as two indices rather than as an
+  `NSRange`, with the context last.
+ */
+DVT_EXTERN NSRange DVTRangeOfStringWithCorrespondingUtf8ByteRangeWithQueryContext(
+    NSUInteger utf8ByteLocation, NSUInteger utf8ByteLength, DVTStringIndexQueryContext *context);
