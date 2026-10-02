@@ -335,6 +335,105 @@ static void DVTTestDispatch(void)
     DVTExpect(cancelled, @"source cancel handler runs on cancellation");
 }
 
+static void DVTTestBlockPerformers(void)
+{
+    /* Generation counters. The increment returns the value *after* advancing, so
+       a generation can be stamped on a block and compared back later. */
+    uint32_t generation = 0;
+    for (uint32_t want = 1; want <= 4; want++) {
+        uint32_t got = DVTDispatchBlockGenerationIncrement(&generation);
+        DVTExpect(got == want, @"generation increment returns the new value");
+    }
+    DVTExpect(generation == 4, @"generation counter advanced once per call");
+    DVTExpect(DVTDispatchBlockGenerationIsCurrent(&generation, 4),
+              @"the newest generation is current");
+    DVTExpect(!DVTDispatchBlockGenerationIsCurrent(&generation, 3),
+              @"a superseded generation is not current");
+    DVTExpect(!DVTDispatchBlockGenerationIsCurrent(&generation, 5),
+              @"a generation from the future is not current");
+
+    /* Main-thread queues are recognised by provenance, not by identity. */
+    dispatch_queue_t mainThreadQueue = DVTDispatchGetMainQueue("dvt.test.mainthread");
+    DVTExpect(mainThreadQueue != NULL, @"main-thread queue is created");
+    DVTExpectEqualCStrings(dispatch_queue_get_label(mainThreadQueue), "dvt.test.mainthread",
+                           @"main-thread queue keeps its label");
+    DVTExpect(DVTDispatchIsMainQueue(mainThreadQueue),
+              @"a main-thread queue is recognised as one");
+    DVTExpect(DVTDispatchIsMainQueue(dispatch_get_main_queue()),
+              @"the real main queue is recognised too");
+    DVTExpect(!DVTDispatchIsMainQueue(dispatch_queue_create("dvt.test.plain", DISPATCH_QUEUE_SERIAL)),
+              @"an ordinary queue is not a main-thread queue");
+
+    /* Async performers on an ordinary queue. */
+    __block int asyncRan = 0;
+    __block pthread_t asyncThread = 0;
+    pthread_t caller = pthread_self();
+    dispatch_queue_t serial = dispatch_queue_create("dvt.test.perform", DISPATCH_QUEUE_SERIAL);
+    DVTAsyncPerformBlock(serial, ^{
+        asyncRan = 1;
+        asyncThread = pthread_self();
+    });
+    DVTExpect(!asyncRan, @"async block performer defers");
+    DVTDispatchSync(serial, ^{});
+    DVTExpect(asyncRan, @"async block performer runs on its queue");
+    DVTExpect(!pthread_equal(asyncThread, caller),
+              @"async block performer does not run on the calling thread");
+
+    /* The sync performer returns only once the block has finished. */
+    __block int syncRan = 0;
+    DVTSyncPerformBlock(serial, ^{
+        syncRan = 1;
+    });
+    DVTExpect(syncRan, @"sync block performer completes before returning");
+
+    /* Sync on a main-thread queue waits on the main run loop, so the main thread
+       has to keep servicing it while another thread makes the call. */
+    __block int runLoopRan = 0;
+    __block pthread_t runLoopThread = 0;
+    pthread_t mainThread = pthread_self();
+    dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        DVTSyncPerformBlock(mainThreadQueue, ^{
+            runLoopRan = 1;
+            runLoopThread = pthread_self();
+        });
+        dispatch_semaphore_signal(finished);
+    });
+    for (int i = 0; i < 200 && dispatch_semaphore_wait(finished, DISPATCH_TIME_NOW) != 0; i++) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    }
+    DVTExpect(runLoopRan, @"sync performer on a main-thread queue completes");
+    DVTExpect(pthread_equal(runLoopThread, mainThread),
+              @"main-thread queue runs the block on the main thread");
+
+    /* Operation queues: an ordinary one takes the operation as given. */
+    __block int opRan = 0;
+    NSOperationQueue *operationQueue = [NSOperationQueue new];
+    operationQueue.maxConcurrentOperationCount = 1;
+    DVTAsyncPerformBlockOnOperationQueue(operationQueue, ^{
+        opRan = 1;
+    });
+    [operationQueue waitUntilAllOperationsAreFinished];
+    DVTExpect(opRan, @"operation-queue block performer runs");
+
+    /* A NULL queue is ignored rather than trapping. */
+    __block int nilRan = 0;
+    DVTAsyncPerformBlockOnOperationQueue(nil, ^{
+        nilRan = 1;
+    });
+    DVTExpect(!nilRan, @"a nil operation queue runs nothing");
+
+    /* A main operation queue routes to the run loop, so spin it. */
+    __block int mainOpRan = 0;
+    DVTAsyncPerformBlockOnOperationQueue([NSOperationQueue mainQueue], ^{
+        mainOpRan = 1;
+    });
+    for (int i = 0; i < 200 && !mainOpRan; i++) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    }
+    DVTExpect(mainOpRan, @"main operation queue runs the block on the run loop");
+}
+
 static void DVTTestEnvironmentSnapshot(void)
 {
     fprintf(stdout, "\n== environment snapshot ==\n");
@@ -1088,6 +1187,7 @@ int main(int argc, const char *argv[])
         fprintf(stdout, "DVTFoundation tests\n");
         DVTTestEnvironmentSnapshot();
         DVTTestDispatch();
+        DVTTestBlockPerformers();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

@@ -398,6 +398,61 @@ that the others do not, and submits through it rather than the source's own
 queue. It is accepted and passed to GCD's own cancel-handler registration,
 which preserves the serialization but not the group submission.
 
+#### Block performers
+
+Five functions that run a block somewhere, and a generation counter that lets a
+caller notice when a block it handed off has been superseded.
+
+`DVTDispatchGetMainQueue` builds a queue that runs on the main thread but keeps
+its own identity, label and priority, by creating one at user-initiated priority
+and retargeting it at the main queue. That sounds roundabout until you try to
+dispatch onto `dispatch_get_main_queue()` from a plain tool: nothing drains it,
+so the block simply never runs. `DVTDispatchIsMainQueue` recognises these by a
+queue-specific tag attached lazily, on first use, rather than by comparing
+pointers — so the real main queue counts too, while every ordinary queue does
+not.
+
+`DVTAsyncPerformBlock` and `DVTSyncPerformBlock` branch on that tag. An ordinary
+queue is handed to the corresponding dispatch wrapper, which preserves its
+diagnostic grouping. A main-thread queue cannot be dispatched onto at all, so
+the block goes to the main run loop in common modes instead — asynchronously for
+the first, behind a semaphore for the second.
+
+The semaphore is signalled from a `finally`, not after the call. An exception
+thrown by the caller's block would otherwise unwind out of the run loop and
+leave the waiting thread asleep forever.
+
+`DVTAsyncPerformBlockOnOperationQueue` compares its queue against
+`[NSOperationQueue mainQueue]` and routes a match to the run loop, since the main
+operation queue has the same problem. Anything else takes a real `NSOperation`.
+
+**Differences from Apple.** Two deliberate ones, both probe-confirmed:
+
+- `DVTDispatchBlockGenerationIsCurrent` answers `*counter == generation`. The
+  condition code in Apple's binary decodes to NE, which would answer the
+  opposite, so the comparison comes from observed behaviour on Apple's own
+  framework. Reading it the intuitive way inverts it and silently rejects every
+  block that is still valid.
+- `DVTSyncPerformBlock` on a main-thread queue, called *from* the main thread,
+  cannot return: it waits on a run loop that the calling thread is itself
+  blocking. This is true of Apple's implementation too, and the header says so.
+  Call it from another thread in that case.
+
+Two smaller ones. Apple builds operations with a private `DVTOperation` subclass
+that adds cancellation-block bookkeeping, decides whether cancellation should hop
+to the main thread, and drops dependencies once finished; the public block
+operation stands in. And a `NULL` queue is ignored by
+`DVTAsyncPerformBlockOnOperationQueue` and answered `NO` by
+`DVTDispatchIsMainQueue`, where Apple asserts on both — the arguments are not
+documented as nullable.
+
+Differential against Apple covers 33 cases across the two harnesses: post-increment
+values and 32-bit wraparound edges, the generation comparison against eight probe
+values, label and concurrency for both queue flavours, sync/async/barrier/after/
+group-notify/source handling, main-queue recognition for four kinds of queue,
+routing and delivery for all three performers, and the semaphore path driven from
+a background thread while the main run loop is genuinely serviced. No mismatches.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -409,7 +464,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 321 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 343 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -418,7 +473,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **321 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **343 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
