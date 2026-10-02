@@ -1969,6 +1969,248 @@ static void DVTTestStringIndexQueryContext(void)
     }
 }
 
+static DVTTextDocumentLocation *DVTTestTextLocation(void)
+{
+    return [[DVTTextDocumentLocation alloc] initWithDocumentURL:[NSURL URLWithString:@"file:///tmp/a.swift"]
+                                                     timestamp:@7
+                                          startingColumnNumber:3
+                                            endingColumnNumber:11
+                                             startingLineNumber:2
+                                               endingLineNumber:4
+                                                characterRange:NSMakeRange(10, 25)
+                                              locationEncoding:4];
+}
+
+static void DVTTestDocumentLocation(void)
+{
+    {
+        DVTDocumentLocation *location = [[DVTDocumentLocation alloc] initWithDocumentURL:
+                                                                    [NSURL URLWithString:@"file:///tmp/a.swift"]
+                                                                           timestamp:@7];
+        DVTExpect([location.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift"],
+                  @"a location keeps the URL it was given");
+        DVTExpect([location.timestamp isEqualToNumber:@7], @"a location keeps the timestamp it was given");
+        DVTExpect([location.documentScheme isEqualToString:@"file"], @"-documentScheme is the URL's scheme");
+        DVTExpect([location.documentPath isEqualToString:@"/tmp/a.swift"], @"-documentPath is the URL's path");
+        DVTExpect([location.locationParameters count] == 0, @"-locationParameters is empty");
+    }
+
+    {
+        /* A location is immutable, so a copy is the receiver and only
+           -copyWithURL: has to build a new object. */
+        DVTDocumentLocation *location = [[DVTDocumentLocation alloc] initWithDocumentURL:
+                                                                    [NSURL URLWithString:@"file:///tmp/a.swift"]
+                                                                           timestamp:@7];
+        DVTExpect([location copy] == location, @"-copyWithZone: returns the receiver");
+        DVTDocumentLocation *moved = [location copyWithURL:[NSURL URLWithString:@"file:///tmp/b.swift"]];
+        DVTExpect(moved != location, @"-copyWithURL: builds a new location");
+        DVTExpect([moved.documentURL.absoluteString isEqualToString:@"file:///tmp/b.swift"],
+                  @"-copyWithURL: carries the new URL");
+        DVTExpect([moved.timestamp isEqualToNumber:@7], @"-copyWithURL: carries the timestamp");
+    }
+
+    {
+        /* Two locations differing only in timestamp are unequal but hash alike,
+           so a location survives a re-resolve as a dictionary key. */
+        NSURL *url = [NSURL URLWithString:@"file:///tmp/a.swift"];
+        DVTDocumentLocation *one = [[DVTDocumentLocation alloc] initWithDocumentURL:url timestamp:@7];
+        DVTDocumentLocation *two = [[DVTDocumentLocation alloc] initWithDocumentURL:url timestamp:@9];
+        DVTExpect(![one isEqual:two], @"a timestamp difference separates two locations");
+        DVTExpect(one.hash == two.hash, @"a timestamp difference does not separate their hashes");
+        DVTExpect([one isEqualDisregardingTimestamp:two], @"-isEqualDisregardingTimestamp: ignores the timestamp");
+        DVTExpect([one isEqual:[[DVTDocumentLocation alloc] initWithDocumentURL:url timestamp:@7]],
+                  @"the same URL and timestamp are equal");
+        DVTExpect(![one isEqual:[[DVTTextDocumentLocation alloc] initWithDocumentURL:url timestamp:@7]],
+                  @"a subclass never equals its superclass");
+    }
+
+    {
+        /* A persistable representation spells its fields into a sorted fragment,
+           and consumes the timestamp back out again on the way in. */
+        DVTTextDocumentLocation *text = DVTTestTextLocation();
+        NSString *className = nil;
+        NSError *error = nil;
+        NSString *persistable =
+            [text persistableStringRepresentationAndDecodableClassName:&className error:&error];
+        DVTExpect(error == nil, @"a text location persists without error");
+        DVTExpect([className isEqualToString:@"DVTTextDocumentLocation"],
+                  @"the persistable form names the class it needs to decode");
+        DVTExpectEqualObjects(
+            persistable,
+            @"file:///tmp/a.swift#CharacterRangeLen=25&CharacterRangeLoc=10&EndingColumnNumber=11"
+             @"&EndingLineNumber=4&LocationEncoding=4&StartingColumnNumber=3&StartingLineNumber=2&Timestamp=7",
+            @"the persistable form spells every field into a sorted fragment");
+
+        NSURL *url = [NSURL URLWithString:persistable];
+        DVTTextDocumentLocation *roundTrip =
+            [[DVTTextDocumentLocation alloc] initWithURL:url locationParameters:@{} error:&error];
+        DVTExpect(error == nil, @"a text location round-trips without error");
+        DVTExpect([roundTrip isEqual:text], @"a text location survives a round trip");
+        DVTExpect([roundTrip.timestamp isEqualToNumber:@7], @"the round trip carries the timestamp");
+        DVTExpect([roundTrip.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift"],
+                  @"a text location consumes its whole fragment, leaving a bare URL");
+        DVTExpect(roundTrip.locationEncoding == 4, @"the round trip carries the encoding");
+    }
+
+    {
+        /* The superclass keeps the fragment keys it does not own -- it only claims
+           the timestamp -- and rebuilds what is left in sorted order. */
+        NSURL *url = [NSURL URLWithString:@"file:///tmp/a.swift#Zebra=1&Timestamp=5&Apple=2"];
+        DVTDocumentLocation *location = [[DVTDocumentLocation alloc] initWithURL:url
+                                                             locationParameters:@{}
+                                                                          error:NULL];
+        DVTExpect([location.timestamp isEqualToNumber:@5], @"the superclass consumes the timestamp");
+        DVTExpect([location.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift#Apple=2&Zebra=1"],
+                  @"the remaining fragment is rebuilt in sorted order");
+    }
+
+    {
+        /* Query and fragment stay part of the document's address, and each is
+           readable on its own. */
+        DVTDocumentLocation *both = [[DVTDocumentLocation alloc] initWithURL:
+                                          [NSURL URLWithString:@"file:///tmp/a.swift?k=1#Frag=2"]
+                                                          locationParameters:@{}
+                                                                       error:NULL];
+        DVTExpect([both.documentParameters[@"k"] isEqualToString:@"1"], @"a query parameter is readable");
+        DVTExpect([both.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift?k=1#Frag=2"],
+                  @"a URL with both query and fragment is kept intact");
+
+        DVTDocumentLocation *queryOnly = [[DVTDocumentLocation alloc] initWithURL:
+                                                [NSURL URLWithString:@"file:///tmp/a.swift?k=1"]
+                                                                locationParameters:@{}
+                                                                             error:NULL];
+        DVTExpect([queryOnly.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift?k=1"],
+                  @"a URL with only a query is kept intact");
+
+        DVTDocumentLocation *fragmentOnly = [[DVTDocumentLocation alloc] initWithURL:
+                                                    [NSURL URLWithString:@"file:///tmp/a.swift#Frag=2"]
+                                                                    locationParameters:@{}
+                                                                                 error:NULL];
+        DVTExpect([fragmentOnly.documentURL.absoluteString isEqualToString:@"file:///tmp/a.swift#Frag=2"],
+                  @"a URL with only a fragment is kept intact");
+    }
+}
+
+static void DVTTestTextDocumentLocation(void)
+{
+    {
+        DVTTextDocumentLocation *location = [[DVTTextDocumentLocation alloc] initWithDocumentURL:
+                                                                         [NSURL URLWithString:@"file:///tmp/a.swift"]
+                                                                                        timestamp:nil];
+        DVTExpect(location.startingColumnNumber == NSNotFound, @"a fresh column number is NSNotFound");
+        DVTExpect(location.endingColumnNumber == NSNotFound, @"a fresh ending column is NSNotFound");
+        DVTExpect(location.startingLineNumber == NSNotFound, @"a fresh line number is NSNotFound");
+        DVTExpect(location.endingLineNumber == NSNotFound, @"a fresh ending line is NSNotFound");
+        DVTExpect(NSEqualRanges(location.characterRange, NSMakeRange(NSNotFound, 0)),
+                  @"a fresh character range is {NSNotFound, 0}");
+        DVTExpect(location.locationEncoding == 0, @"a fresh encoding is 0");
+        DVTExpect(NSEqualRanges(location.lineRange, NSMakeRange(NSNotFound, 0)),
+                  @"an unspecified line collapses the line range");
+    }
+
+    {
+        DVTTextDocumentLocation *location = DVTTestTextLocation();
+        DVTExpect(NSEqualRanges(location.lineRange, NSMakeRange(2, 3)),
+                  @"-lineRange counts the ending line inclusively");
+        DVTExpect([location.pasteboardRepresentation isEqualToString:@"/tmp/a.swift"],
+                  @"-pasteboardRepresentation is the document's path");
+    }
+
+    {
+        /* The stored line numbers are exclusive at the end, so a length-n range
+           becomes {location, location + n - 1}. */
+        DVTTextDocumentLocation *fromRange = [[DVTTextDocumentLocation alloc] initWithDocumentURL:
+                                                                            [NSURL URLWithString:@"file:///tmp/a.swift"]
+                                                                                           timestamp:nil
+                                                                                        lineRange:NSMakeRange(2, 3)];
+        DVTExpect(fromRange.startingLineNumber == 2, @"a line range sets the starting line");
+        DVTExpect(fromRange.endingLineNumber == 4, @"a line range sets an exclusive ending line");
+        DVTExpect(NSEqualRanges(fromRange.lineRange, NSMakeRange(2, 3)), @"a line range reads back unchanged");
+    }
+
+    {
+        /* Hashing folds in the starting line and the character range's length, and
+           nothing else. */
+        DVTTextDocumentLocation *location = DVTTestTextLocation();
+        NSUInteger expected = [[DVTDocumentLocation alloc] initWithDocumentURL:location.documentURL
+                                                                       timestamp:location.timestamp]
+                                  .hash;
+        expected = expected * 33 + 2;
+        expected = expected * 33 + 25;
+        DVTExpect(location.hash == expected, @"-hash folds in the starting line and the range length");
+
+        DVTTextDocumentLocation *otherEncoding = [[DVTTextDocumentLocation alloc]
+            initWithDocumentURL:location.documentURL
+                       timestamp:location.timestamp
+            startingColumnNumber:3
+              endingColumnNumber:11
+               startingLineNumber:2
+                 endingLineNumber:4
+                  characterRange:NSMakeRange(10, 25)
+                locationEncoding:5];
+        DVTExpect(otherEncoding.hash == location.hash, @"the encoding is not part of the hash");
+        DVTExpect(![otherEncoding isEqual:location], @"the encoding is part of equality");
+        DVTExpect([otherEncoding compare:location] == NSOrderedSame,
+                  @"the encoding is not part of the ordering");
+    }
+
+    {
+        NSURL *url = [NSURL URLWithString:@"file:///tmp/a.swift"];
+        DVTTextDocumentLocation *later = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                                 timestamp:nil
+                                                                                  lineRange:NSMakeRange(9, 1)];
+        DVTTextDocumentLocation *earlier = [[DVTTextDocumentLocation alloc] initWithDocumentURL:url
+                                                                                   timestamp:nil
+                                                                                    lineRange:NSMakeRange(2, 1)];
+        DVTExpect([earlier compare:later] == NSOrderedAscending, @"ordering is by starting line");
+    }
+
+    {
+        DVTTextDocumentLocation *location = DVTTestTextLocation();
+        DVTExpect([location.description containsString:@"line and column range: 2:3 - 4:11"],
+                  @"-description reports the line and column range");
+        DVTExpect([location.description containsString:@"character range: {10, 25}"],
+                  @"-description reports the character range");
+        DVTExpect([location.description containsString:@"location encoding: 4"],
+                  @"-description reports the encoding");
+        DVTExpect([location.description containsString:@"timestamp:7"],
+                  @"-description leads with the superclass's own description");
+    }
+
+    {
+        /* Secure coding round-trips through both entry points a coder can take. */
+        DVTTextDocumentLocation *location = DVTTestTextLocation();
+        NSError *error = nil;
+        NSData *archive = [NSKeyedArchiver archivedDataWithRootObject:location requiringSecureCoding:YES
+                                                                error:&error];
+        DVTExpect(error == nil, @"a text location archives without error");
+        DVTTextDocumentLocation *decoded = [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTTextDocumentLocation class]
+                                                                              fromData:archive
+                                                                                 error:&error];
+        DVTExpect(error == nil, @"a text location unarchives without error");
+        DVTExpect([decoded isEqual:location], @"a text location survives an archive round trip");
+        DVTExpect(NSEqualRanges(decoded.characterRange, NSMakeRange(10, 25)),
+                  @"the archived character range survives");
+    }
+
+    {
+        /* An inconsistent location is rejected with the message Apple reports. */
+        NSError *error = nil;
+        BOOL valid = [DVTTextDocumentLocation validateStartingColumnNumber:NSNotFound
+                                                        endingColumnNumber:NSNotFound
+                                                         startingLineNumber:9
+                                                           endingLineNumber:2
+                                                            characterRange:NSMakeRange(NSNotFound, 0)
+                                                          locationEncoding:0
+                                                                    error:&error];
+        DVTExpect(!valid, @"an inverted line range is rejected");
+        DVTExpectEqualObjects(error.domain, @"com.apple.DVTFoundation", @"the failure names Apple's domain");
+        DVTExpect(error.code == -1, @"the failure carries Apple's generic code");
+        DVTExpect([error.localizedDescription containsString:@"startingLine > endingLine"],
+                  @"the failure explains the inversion");
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -1989,6 +2231,8 @@ int main(int argc, const char *argv[])
         DVTTestLineOffsetTableTextExtras();
         DVTTestTextUTF8Correspondence();
         DVTTestStringIndexQueryContext();
+        DVTTestDocumentLocation();
+        DVTTestTextDocumentLocation();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

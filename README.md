@@ -706,6 +706,73 @@ each produce tens of thousands of failures, and removing the clamp alone
 produces 31,168 abort mismatches with *no* value mismatches — which is the
 signature of an assertion-only behaviour that a value-only test would miss.
 
+### Document locations
+
+`DVTDocumentLocation` names a place in a document: a URL, a timestamp, and
+nothing else. `DVTTextDocumentLocation` adds the two coordinate systems an
+editor keeps side by side — a line-and-column range and a UTF-16 character range
+— plus the `-locationEncoding` the range was measured in. There are seven
+initializers taking different subsets of those fields; every one of them ends up
+calling `-_initWithDocumentURL:timestamp:startingColumnNumber:endingColumnNumber:startingLineNumber:endingLineNumber:characterRange:locationEncoding:`,
+which validates before it stores.
+
+**The stored line numbers are exclusive at the end while `-lineRange` is
+inclusive**, so the two are not inverses of each other. The initializer stores
+`-endingLineNumber` as given, and `-lineRange` reports
+`{startingLineNumber, endingLineNumber - startingLineNumber}`. Passing a range
+instead converts back with `+ lineRange.length - 1`, which is what makes a
+`-lineRange:` initializer read back unchanged. A fresh location has every field
+at `NSNotFound` and encoding `0`, and an all-`NSNotFound` line range collapses
+to `{NSNotFound, 0}`.
+
+**`+[DVTTextDocumentLocation validate...]` is asserted, not clamped.** An
+inverted line range, an inverted column range, or a column range outrunning its
+line range all fail through `-_populateLocationParameters:decodableClassName:error:`
+with `com.apple.DVTFoundation` code `-1`, while the initializers abort outright.
+Both entry points are implemented, because callers reach for both.
+
+**A location is immutable and `-copyWithZone:` returns the receiver** — the copy
+is the receiver because there is nothing to copy. `-copyWithURL:` is the one that
+builds a new object, and it carries the timestamp across unchanged. Equality and
+the hash both ignore the timestamp, so a location survives a re-resolve as a
+dictionary key; `-isEqualDisregardingTimestamp:` is spelled out separately for
+callers that want to be explicit about it, and `-isEqualToCounterpartWithIdenticalClass:`
+is the check that refuses to let a subclass equal its superclass.
+
+**`-hash` folds in only the starting line and the character range's length**,
+never the location, the columns or the encoding:
+`((superhash * 33 + startingLineNumber) * 33 + characterRange.length)`. Ordering
+is by timestamp first (when asked for), then URL, then starting line, then
+character range.
+
+**`-pasteboardRepresentation` is the document's path, not its URL.** A persistable
+representation, by contrast, spells every field into a sorted fragment:
+`-persistableStringRepresentationAndDecodableClassName:error:` on a location with
+columns 3–11, lines 2–4, characters `{10, 25}` and encoding 4 returns
+`file:///tmp/a.swift#CharacterRangeLen=25&CharacterRangeLoc=10&EndingColumnNumber=11&EndingLineNumber=4&LocationEncoding=4&StartingColumnNumber=3&StartingLineNumber=2&Timestamp=7`,
+and the class name comes back as `DVTTextDocumentLocation` so the value can be
+decoded later. Unknown fragment keys survive a round trip in sorted order, and
+`-locationParameters` is empty in both directions — it exists for subclasses to
+populate, not for the base to read.
+
+**A text location consumes its whole fragment**, which is why a text location
+built from the persistable string above reports
+`documentURL:file:///tmp/a.swift` with no fragment at all, while a base location
+built from the same string keeps every field except the timestamp. The base hands
+the timestamp over to the superclass through `-locationParameters:`, the one
+channel the superclass still reads before it strips the fragment itself.
+
+Three differences from Apple's binary are forced by the compiler rather than the
+source, and are reproduced here as closely as clang allows. A minimal program
+adopting `NSSecureCoding` and `NSCopying` gets four extra properties — `hash`,
+`superclass`, `description` and `debugDescription` — inherited from `NSObject`'s
+protocols, where Apple lists three properties; Apple's binary predates that
+behaviour. `representedObject` is declared `assign`, but clang no longer emits
+the `&` flag for it, so the property reads `T@,V_representedObject` against
+Apple's `T@,&,V_representedObject`. And `DVTTextDocumentLocation` has no
+`.cxx_destruct`, because that method only exists to tear down a strong ivar and
+clang rejects a strong ivar backing an assign property.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -717,20 +784,23 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 464 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 55,792 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
   including their out-of-range fallbacks, the filter display strings, the line
-  offset tables including their degenerate trailing-break shapes, and the
-  dispatch wrappers and block performers.
+  offset tables including their degenerate trailing-break shapes, the string
+  index query context, both document location classes including their sorted
+  persistable fragments, identity copies, timestamp-insensitive equality and
+  hashing, validation failures, and secure-coding round trips, and the dispatch
+  wrappers and block performers.
 - `tests/dvt_swift_overlay_test.swift` — 13 checks driving `_DVTAssertFromSwift`
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **464 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **55,792 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -800,6 +870,22 @@ Recovered from Apple's binary, or matched against it byte for byte:
   `DVTTextFilterComparisonTypeDisplayString` *assert* on an out-of-range value
   rather than falling back; all three abort with `SIGABRT` in a default
   environment, and the numeric enum has only the three strict comparisons
+- `-copyWithZone:` on both location classes returns the receiver rather than
+  allocating, and `-copyWithURL:` is the only copy that builds a new object
+- location equality and `-hash` both ignore the timestamp, so a location
+  survives a re-resolve as a dictionary key; the text hash folds in the
+  starting line and the character range's *length* and nothing else, as
+  `((superhash * 33 + startingLineNumber) * 33 + characterRange.length)`
+- the stored `-endingLineNumber` is exclusive while `-lineRange` is inclusive,
+  so the initializer stores it as given and the accessor reports
+  `{startingLineNumber, endingLineNumber - startingLineNumber}`
+- `-locationParameters` returns an empty dictionary in both classes, and
+  `-populateLocationParameters:` is a no-op, so the persistable fragment is
+  assembled by a helper that inspects the class rather than by an overridable
+  method a subclass would be expected to override
+- `-pasteboardRepresentation` is the document's *path*, not its URL
+- `DVTTextDocumentLocation` consumes the entire URL fragment, so its
+  `-documentURL` is bare even for a URL that still carries one
 
 Inferred, and therefore liable to differ from Apple:
 
