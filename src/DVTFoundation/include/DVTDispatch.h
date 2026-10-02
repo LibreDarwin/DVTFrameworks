@@ -131,14 +131,14 @@ DVT_EXTERN BOOL DVTDispatchBlockGenerationIsCurrent(const uint32_t *counter,
  @param label  Label for the new queue.
  @return The new queue, or `NULL` if GCD rejects the request.
  */
-DVT_EXTERN dispatch_queue_t _Nullable DVTDispatchGetMainQueue(const char *label);
+DVT_EXTERN dispatch_queue_t _Nullable _DVTDispatchGetMainQueue(const char *label);
 
 /**
  Reports whether `queue` is one of the main-thread queues built by
- `DVTDispatchGetMainQueue`.
+ `_DVTDispatchGetMainQueue`.
 
  True for the real main queue and for the queues built by
- `DVTDispatchGetMainQueue`, and false for every other queue. The real main
+ `_DVTDispatchGetMainQueue`, and false for every other queue. The real main
  queue is recognised by a tag attached to it on first use, so this is a
  question of provenance rather than a pointer comparison.
 
@@ -146,11 +146,11 @@ DVT_EXTERN dispatch_queue_t _Nullable DVTDispatchGetMainQueue(const char *label)
  `DVTConcurrencyUtilities.m`, and the argument is not documented as nullable, so
  nothing should be passing one.
  */
-DVT_EXTERN BOOL DVTDispatchIsMainQueue(dispatch_queue_t _Nullable queue);
+DVT_EXTERN BOOL _DVTDispatchIsMainQueue(dispatch_queue_t _Nullable queue);
 
 /**
  Enqueues `block` on `queue`, routing through the main run loop when `queue` is
- a main-thread queue from `DVTDispatchGetMainQueue`.
+ a main-thread queue from `_DVTDispatchGetMainQueue`.
 
  An ordinary queue is used directly, so the block is submitted through
  `DVTDispatchAsync` and inherits its diagnostic grouping. A main-thread queue

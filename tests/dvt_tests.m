@@ -353,15 +353,15 @@ static void DVTTestBlockPerformers(void)
               @"a generation from the future is not current");
 
     /* Main-thread queues are recognised by provenance, not by identity. */
-    dispatch_queue_t mainThreadQueue = DVTDispatchGetMainQueue("dvt.test.mainthread");
+    dispatch_queue_t mainThreadQueue = _DVTDispatchGetMainQueue("dvt.test.mainthread");
     DVTExpect(mainThreadQueue != NULL, @"main-thread queue is created");
     DVTExpectEqualCStrings(dispatch_queue_get_label(mainThreadQueue), "dvt.test.mainthread",
                            @"main-thread queue keeps its label");
-    DVTExpect(DVTDispatchIsMainQueue(mainThreadQueue),
+    DVTExpect(_DVTDispatchIsMainQueue(mainThreadQueue),
               @"a main-thread queue is recognised as one");
-    DVTExpect(DVTDispatchIsMainQueue(dispatch_get_main_queue()),
+    DVTExpect(_DVTDispatchIsMainQueue(dispatch_get_main_queue()),
               @"the real main queue is recognised too");
-    DVTExpect(!DVTDispatchIsMainQueue(dispatch_queue_create("dvt.test.plain", DISPATCH_QUEUE_SERIAL)),
+    DVTExpect(!_DVTDispatchIsMainQueue(dispatch_queue_create("dvt.test.plain", DISPATCH_QUEUE_SERIAL)),
               @"an ordinary queue is not a main-thread queue");
 
     /* Async performers on an ordinary queue. */

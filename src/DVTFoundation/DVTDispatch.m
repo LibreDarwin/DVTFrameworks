@@ -96,13 +96,13 @@ BOOL DVTDispatchBlockGenerationIsCurrent(const uint32_t *counter, uint32_t gener
     return __atomic_load_n(counter, __ATOMIC_ACQUIRE) == generation;
 }
 
-/* Tag applied to the queues DVTDispatchGetMainQueue builds. A queue-specific
+/* Tag applied to the queues _DVTDispatchGetMainQueue builds. A queue-specific
    value rather than a queue comparison, because the point is to recognise the
    queue by provenance: it is a stand-in for the main thread, not the main
    dispatch queue itself. */
 static const void *DVTDispatchMainQueueKey = &DVTDispatchMainQueueKey;
 
-dispatch_queue_t DVTDispatchGetMainQueue(const char *label)
+dispatch_queue_t _DVTDispatchGetMainQueue(const char *label)
 {
     /* User-initiated: the queue exists only to be retargeted at the main queue,
        so it wants the highest of the standard priorities, not main-queue default. */
@@ -118,7 +118,7 @@ dispatch_queue_t DVTDispatchGetMainQueue(const char *label)
     return queue;
 }
 
-BOOL DVTDispatchIsMainQueue(dispatch_queue_t queue)
+BOOL _DVTDispatchIsMainQueue(dispatch_queue_t queue)
 {
     if (queue == NULL) {
         return NO;
@@ -150,7 +150,7 @@ static void DVTAsyncPerformBlockOnMainRunLoop(const char *label, dispatch_block_
 
 void DVTAsyncPerformBlock(dispatch_queue_t queue, dispatch_block_t block)
 {
-    if (DVTDispatchIsMainQueue(queue)) {
+    if (_DVTDispatchIsMainQueue(queue)) {
         DVTAsyncPerformBlockOnMainRunLoop(dispatch_queue_get_label(queue), block);
     } else {
         DVTDispatchAsync(queue, block);
@@ -159,7 +159,7 @@ void DVTAsyncPerformBlock(dispatch_queue_t queue, dispatch_block_t block)
 
 void DVTSyncPerformBlock(dispatch_queue_t queue, dispatch_block_t block)
 {
-    if (!DVTDispatchIsMainQueue(queue)) {
+    if (!_DVTDispatchIsMainQueue(queue)) {
         DVTDispatchSync(queue, block);
         return;
     }
