@@ -25,6 +25,8 @@
 
 #import <Foundation/Foundation.h>
 #import <Foundation/NSHashTable.h>
+#import <Foundation/NSMapTable.h>
+#import <Foundation/NSOrderedSet.h>
 #import <Foundation/NSIndexSet.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -169,6 +171,10 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
 
+/** `YES` when the receiver has at least one member. Alias of `dvt_hasContent`. */
+@property (nonatomic, readonly) BOOL dvt_hasContent;
+@property (nonatomic, readonly) BOOL dvt_isNonEmpty;
+
 @end
 
 @interface NSMutableSet (DVTFoundationClassAdditions)
@@ -190,6 +196,49 @@ NS_ASSUME_NONNULL_BEGIN
 
 /** Adds `object` only when it is non-`nil`. */
 - (void)dvt_addObjectIfNonNil:(id _Nullable)object;
+
+@end
+
+/* The emptiness pair below is declared by Apple on six classes -- array,
+   dictionary, map table, ordered set, set and string -- but under three
+   different category names, so the names here follow the binary rather than the
+   file: the two Foundation-collection and string cases live in
+   DVTFoundationClassAdditions, and each set-like class gets its own. The names
+   are visible in the category metadata, so matching them keeps a class dump of
+   either binary readable side by side.
+
+   On all six the two selectors answer the same question and always agree; only
+   NSString reaches it a different way, noted on its implementation. */
+
+/** `YES` when the receiver has at least one element. Alias of `dvt_hasContent`. */
+@interface NSDictionary (DVTFoundationClassAdditions)
+
+@property (nonatomic, readonly) BOOL dvt_hasContent;
+@property (nonatomic, readonly) BOOL dvt_isNonEmpty;
+
+@end
+
+/** `YES` when the receiver is longer than zero characters. */
+@interface NSString (DVTFoundationClassAdditions)
+
+@property (nonatomic, readonly) BOOL dvt_hasContent;
+@property (nonatomic, readonly) BOOL dvt_isNonEmpty;
+
+@end
+
+/** `YES` when the receiver has at least one entry. */
+@interface NSMapTable (DVTNSMapTableAdditions)
+
+@property (nonatomic, readonly) BOOL dvt_hasContent;
+@property (nonatomic, readonly) BOOL dvt_isNonEmpty;
+
+@end
+
+/** `YES` when the receiver has at least one element. */
+@interface NSOrderedSet (DVTNSOrderedSetAdditions)
+
+@property (nonatomic, readonly) BOOL dvt_hasContent;
+@property (nonatomic, readonly) BOOL dvt_isNonEmpty;
 
 @end
 

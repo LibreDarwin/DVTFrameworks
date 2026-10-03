@@ -887,6 +887,52 @@ static void DVTTestClassAdditions(void)
     NSMutableSet *set = [NSMutableSet setWithCapacity:0];
     [set dvt_addObjectIfNonNil:nil];
     DVTExpect(set.count == 0, @"NSMutableSet ignores nil");
+
+    /* The emptiness pair on the other five hosts Apple declares it on. Each is
+       empty-then-filled, because a method that returned a constant would pass an
+       empty-only check, and both selectors are asserted every time because they
+       are separate methods that happen to agree. */
+    NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+    DVTExpect(!dictionary.dvt_hasContent, @"empty dictionary has no content");
+    DVTExpect(!dictionary.dvt_isNonEmpty, @"empty dictionary is not non-empty");
+    [dictionary setObject:@1 forKey:@"k"];
+    DVTExpect(dictionary.dvt_hasContent, @"dictionary with an entry has content");
+    DVTExpect(dictionary.dvt_isNonEmpty, @"dictionary with an entry is non-empty");
+    [dictionary removeObjectForKey:@"k"];
+    DVTExpect(!dictionary.dvt_hasContent, @"emptied dictionary has no content again");
+
+    NSMapTable *mapTable = [NSMapTable strongToStrongObjectsMapTable];
+    DVTExpect(!mapTable.dvt_hasContent, @"empty map table has no content");
+    DVTExpect(!mapTable.dvt_isNonEmpty, @"empty map table is not non-empty");
+    [mapTable setObject:@1 forKey:@"k"];
+    DVTExpect(mapTable.dvt_hasContent, @"map table with an entry has content");
+    [mapTable removeObjectForKey:@"k"];
+    DVTExpect(!mapTable.dvt_isNonEmpty, @"emptied map table is not non-empty again");
+
+    NSMutableOrderedSet *ordered = [NSMutableOrderedSet orderedSet];
+    DVTExpect(!ordered.dvt_hasContent, @"empty ordered set has no content");
+    DVTExpect(!ordered.dvt_isNonEmpty, @"empty ordered set is not non-empty");
+    [ordered addObject:@1];
+    DVTExpect(ordered.dvt_hasContent, @"ordered set with an element has content");
+    DVTExpect(ordered.dvt_isNonEmpty, @"ordered set with an element is non-empty");
+
+    NSMutableSet *mutableSet = [NSMutableSet set];
+    DVTExpect(!mutableSet.dvt_hasContent, @"empty set has no content");
+    DVTExpect(!mutableSet.dvt_isNonEmpty, @"empty set is not non-empty");
+    [mutableSet addObject:@1];
+    DVTExpect(mutableSet.dvt_hasContent, @"set with a member has content");
+    DVTExpect(mutableSet.dvt_isNonEmpty, @"set with a member is non-empty");
+
+    /* Strings are the one host where the two are not the same expression, so
+       they get their own cases: whitespace and a multi-unit emoji are non-empty
+       even though neither is "a word", and both agree on every input. */
+    NSString *text = @"";
+    DVTExpect(!text.dvt_hasContent, @"empty string has no content");
+    DVTExpect(!text.dvt_isNonEmpty, @"empty string is not non-empty");
+    for (NSString *nonEmpty in @[@"a", @" ", @"\n", @"0", @"é", @"😀", @"null"]) {
+        DVTExpect(nonEmpty.dvt_hasContent, @"non-empty string has content");
+        DVTExpect(nonEmpty.dvt_isNonEmpty, @"non-empty string is non-empty");
+    }
 }
 
 #pragma mark - Property list values

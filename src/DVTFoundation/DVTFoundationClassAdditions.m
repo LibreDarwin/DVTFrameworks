@@ -591,6 +591,16 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     return DVTAllObjectsPassTest(self, test);
 }
 
+- (BOOL)dvt_hasContent
+{
+    return self.count != 0;
+}
+
+- (BOOL)dvt_isNonEmpty
+{
+    return self.count != 0;
+}
+
 @end
 
 @implementation NSMutableSet (DVTFoundationClassAdditions)
@@ -616,6 +626,72 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     if (object != nil) {
         [self addObject:object];
     }
+}
+
+@end
+
+/* The emptiness pair, continued. Each of these is a `count != 0` in Apple: five
+   instructions, no helper, and the two selectors compile to identical bodies on
+   every collection class here. NSMapTable answers `count` too, so it needs no
+   special case despite not being a collection in the usual sense. */
+
+@implementation NSDictionary (DVTFoundationClassAdditions)
+
+- (BOOL)dvt_hasContent
+{
+    return self.count != 0;
+}
+
+- (BOOL)dvt_isNonEmpty
+{
+    return self.count != 0;
+}
+
+@end
+
+@implementation NSMapTable (DVTNSMapTableAdditions)
+
+- (BOOL)dvt_hasContent
+{
+    return self.count != 0;
+}
+
+- (BOOL)dvt_isNonEmpty
+{
+    return self.count != 0;
+}
+
+@end
+
+@implementation NSOrderedSet (DVTNSOrderedSetAdditions)
+
+- (BOOL)dvt_hasContent
+{
+    return self.count != 0;
+}
+
+- (BOOL)dvt_isNonEmpty
+{
+    return self.count != 0;
+}
+
+@end
+
+/* NSString is the one host where the two are *not* the same expression, and the
+   difference is invisible from the outside: Apple asks `length != 0` for
+   `dvt_hasContent` but `!isEqualToString:@""` for `dvt_isNonEmpty`. Every string
+   agrees, so no caller can tell -- but a subclass that overrode one message and
+   not the other could, so the split is reproduced rather than smoothed over. */
+@implementation NSString (DVTFoundationClassAdditions)
+
+- (BOOL)dvt_hasContent
+{
+    return self.length != 0;
+}
+
+- (BOOL)dvt_isNonEmpty
+{
+    return ![self isEqualToString:@""];
 }
 
 @end

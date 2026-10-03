@@ -222,8 +222,22 @@ case.
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), a command-line
 renderer, and an `NSHashTable` addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 38 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 48 methods
 implemented here.
+
+The emptiness pair `dvt_hasContent` / `dvt_isNonEmpty` is the widest thing
+Apple declares here: one question asked on six classes — `NSArray`,
+`NSDictionary`, `NSMapTable`, `NSOrderedSet`, `NSSet` and `NSString`. All six
+answer it identically for both selectors, and the collections (including
+`NSMapTable`, which is not a collection in the usual sense but does answer
+`count`) are a plain `count != 0`. `NSString` is the one host where the two are
+written differently — `length != 0` for `dvt_hasContent`, but
+`!isEqualToString:@""` for `dvt_isNonEmpty` — which no string can observe, so
+the split is reproduced rather than smoothed into one shared helper. Apple splits
+this family across three category names (`DVTFoundationClassAdditions`,
+`DVTNSSetAdditions`, `DVTNSOrderedSetAdditions`, `DVTNSMapTableAdditions`) and
+so does this project, because the names are readable in the category metadata and
+a class dump of the two binaries lines up only if they match.
 
 ### Property list values
 
@@ -834,7 +848,7 @@ columns and two lines are judged independently, so a location with a starting
 line but no starting column keeps just its lines; `CharacterRangeLoc` is written
 only when it is not `NSNotFound`; `CharacterRangeLen` is written only when it is
 not `0`, so a range at offset 0 of length 0 keeps only its location; and
-`Timestamp` is written only when it is `nil`, meaning a timestamp of `0` is
+`Timestamp` is omitted only when it is `nil`, meaning a timestamp of `0` is
 recorded like any other. Reading this wrong is invisible in a round-trip test —
 the fragment decodes to the same location either way — so the tests assert on the
 key set rather than on the decoded value.
@@ -956,7 +970,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 55,948 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 55,981 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the property list value coercions, the command-line rendering
@@ -973,7 +987,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **55,948 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **55,981 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -985,9 +999,9 @@ This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
 `dvt_` Objective-C methods across its categories, 250 of them in
 `DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
 exported C entry points, so they are absent from `nm`'s export list and only
-show up when the selector itself is read. This project implements 51 of them,
+show up when the selector itself is read. This project implements 61 of them,
 chosen for what `IDETools` and the recovered usage actually reach. Callers using
-any of the other 475 will not find it here.
+any of the other 465 will not find it here.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
