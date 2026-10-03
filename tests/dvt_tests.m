@@ -1540,42 +1540,42 @@ static void DVTTestLineOffsetTableTextExtras(void)
         DVTExpect(table.count == 5, @"four lines plus the terminator");
 
         /* Each line covers its start up to the next start. */
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), table), NSMakeRange(0, 4),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), &table), NSMakeRange(0, 4),
                              @"line 0 of four");
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 1), table), NSMakeRange(14, 4),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 1), &table), NSMakeRange(14, 4),
                              @"the last line of four");
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 2), table), NSMakeRange(4, 10),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 2), &table), NSMakeRange(4, 10),
                              @"lines 1 and 2 of four");
 
         /* A zero-length range is empty wherever it starts. */
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 0), table), NSMakeRange(8, 0),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 0), &table), NSMakeRange(8, 0),
                              @"an empty line range at line 2");
 
         /* A range running off the end is clamped rather than rejected. */
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 9), table), NSMakeRange(14, 4),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(3, 9), &table), NSMakeRange(14, 4),
                              @"a line range past the end is clamped");
 
         /* Characters map back onto the line that holds them. */
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 0), table), NSMakeRange(0, 1),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 0), &table), NSMakeRange(0, 1),
                              @"the very first character");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(9, 0), table), NSMakeRange(2, 1),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(9, 0), &table), NSMakeRange(2, 1),
                              @"a character in the middle of line 2");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(17, 0), table), NSMakeRange(3, 1),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(17, 0), &table), NSMakeRange(3, 1),
                              @"the last character");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(18, 0), table), NSMakeRange(3, 1),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(18, 0), &table), NSMakeRange(3, 1),
                              @"a character at the end of the string");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(40, 0), table), NSMakeRange(3, 2),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(40, 0), &table), NSMakeRange(3, 2),
                              @"a character well past the end");
 
         /* A range that crosses a break covers both lines; one that stops
            exactly on the boundary does not. */
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 1), table), NSMakeRange(0, 1),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 1), &table), NSMakeRange(0, 1),
                              @"a range ending exactly on the boundary");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 2), table), NSMakeRange(0, 2),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 2), &table), NSMakeRange(0, 2),
                              @"a range crossing one break");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 10), table), NSMakeRange(0, 3),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 10), &table), NSMakeRange(0, 3),
                              @"a range crossing two breaks");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 12), table), NSMakeRange(0, 4),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(3, 12), &table), NSMakeRange(0, 4),
                              @"a range crossing three breaks");
         free(table.offsets);
     }
@@ -1601,10 +1601,74 @@ static void DVTTestLineOffsetTableTextExtras(void)
         DVTTextLineOffsetTable table = DVTTableForText(@"a\nb\n");
         const NSUInteger expected[] = { 0, 2, 4, 4 };
         DVTExpectOffsets(table, expected, 4, @"a trailing newline");
-        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 1), table), NSMakeRange(4, 0),
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(2, 1), &table), NSMakeRange(4, 0),
                              @"the empty line after a trailing newline");
-        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 3), table), NSMakeRange(0, 2),
+        DVTExpectEqualRanges(DVTLineRangeForCharacterRange(NSMakeRange(0, 3), &table), NSMakeRange(0, 2),
                              @"a range across a trailing newline");
+        free(table.offsets);
+    }
+
+    /* A line index past the end clamps on both ends, not just the length. */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"one\ntwo\nthree\nfour");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(99, 0), &table), NSMakeRange(18, 0),
+                             @"a start past the end clamps to the last entry");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(NSNotFound, 1), &table), NSMakeRange(18, 0),
+                             @"an absent start clamps to the last entry");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(99, 99), &table), NSMakeRange(18, 0),
+                             @"both ends past the end collapse onto the last entry");
+        free(table.offsets);
+    }
+
+    /*
+     A table adopted onto a larger string names its first line in `baseLine` and
+     adds `baseOffset` to every line from there on. Both endpoints are shifted,
+     and `baseLine` itself is the first line that moves.
+     */
+    {
+        DVTTextLineOffsetTable table = DVTTableForText(@"ab\ncd");
+        const NSUInteger expected[] = { 0, 3, 5 };
+        DVTExpectOffsets(table, expected, 3, @"the text a shifted table describes");
+
+        /* Shifted from the first line: every offset moves by 10. */
+        table.baseLine = 0;
+        table.baseOffset = 10;
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 0), &table), NSMakeRange(10, 0),
+                             @"a shifted zero-length range starts at the shift");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), &table), NSMakeRange(10, 3),
+                             @"a shifted first line");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 1), &table), NSMakeRange(13, 2),
+                             @"a shifted last line");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 2), &table), NSMakeRange(10, 5),
+                             @"a shifted range reaching the terminating entry");
+
+        /*
+         Shifted from the second line: line 0 keeps its offset while the later
+         lines move, so the length of a range spanning the seam absorbs the shift.
+         */
+        table.baseLine = 1;
+        table.baseOffset = 100;
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 0), &table), NSMakeRange(0, 0),
+                             @"a line before the base line does not move");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), &table), NSMakeRange(0, 103),
+                             @"a range spanning the base line absorbs the shift into its length");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 0), &table), NSMakeRange(103, 0),
+                             @"the base line itself is the first that moves");
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 1), &table), NSMakeRange(103, 2),
+                             @"a wholly shifted range");
+
+        /* A shift past the end still clamps first, and the clamped index shifts. */
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(99, 0), &table), NSMakeRange(105, 0),
+                             @"an out-of-range start clamps and then shifts");
+
+        /* An empty table has one line start, which shifts like any other. */
+        DVTTextLineOffsetTable empty = DVTTableForText(@"");
+        empty.baseLine = 0;
+        empty.baseOffset = 10;
+        DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), &empty), NSMakeRange(10, 0),
+                             @"the only line of an empty string still shifts");
+        free(empty.offsets);
+
         free(table.offsets);
     }
 
@@ -2344,6 +2408,249 @@ static void DVTTestDocumentLocationConversion(void)
               @"a range ending mid-character widens to cover all of it");
 }
 
+/** Builds a text location for the conversion and wrapper tests. */
+static DVTTextDocumentLocation *DVTLocation(NSInteger startingColumn, NSInteger endingColumn, NSInteger startingLine,
+                                            NSInteger endingLine, NSRange characterRange, NSInteger encoding)
+{
+    return [[DVTTextDocumentLocation alloc] initWithDocumentURL:[NSURL fileURLWithPath:@"/tmp/dvt-tests.txt"]
+                                                    timestamp:@(5)
+                                        startingColumnNumber:startingColumn
+                                          endingColumnNumber:endingColumn
+                                           startingLineNumber:startingLine
+                                             endingLineNumber:endingLine
+                                              characterRange:characterRange
+                                            locationEncoding:encoding];
+}
+
+/** The keys a persistable representation carries, as a sorted, space-separated list. */
+static NSString *DVTPersistableKeys(DVTTextDocumentLocation *location)
+{
+    NSError *error = nil;
+    NSString *representation = [location persistableStringRepresentationAndDecodableClassName:NULL error:&error];
+    if (representation == nil) {
+        return [NSString stringWithFormat:@"(error: %@)", error.localizedDescription];
+    }
+    NSRange hash = [representation rangeOfString:@"#"];
+    if (hash.location == NSNotFound) {
+        return @"(no fragment)";
+    }
+    NSMutableArray<NSString *> *keys = [NSMutableArray array];
+    for (NSString *pair in [[representation substringFromIndex:hash.location + 1] componentsSeparatedByString:@"&"]) {
+        [keys addObject:[pair componentsSeparatedByString:@"="].firstObject];
+    }
+    [keys sortUsingSelector:@selector(compare:)];
+    return [keys componentsJoinedByString:@" "];
+}
+
+/**
+  A wrapper over "ab\ncd", whose line starts are 0, 3 and 5.
+
+  Every expectation below was read off Apple's DVTFoundation through a
+  differential probe rather than derived from the implementation.
+ */
+static void DVTTestLineOffsetAwareStringWrapper(void)
+{
+    DVTLineOffsetAwareStringWrapper *wrapper = [[DVTLineOffsetAwareStringWrapper alloc] initWithString:@"ab\ncd"];
+
+    DVTExpectEqualObjects(wrapper.string, @"ab\ncd", @"the wrapper hands back the string it was built from");
+
+    /* The copy matters because the line table records offsets into this exact
+       string; a source mutated afterwards would leave those offsets describing
+       characters that have moved. */
+    NSMutableString *mutable = [NSMutableString stringWithString:@"ab\ncd"];
+    DVTLineOffsetAwareStringWrapper *fromMutable = [[DVTLineOffsetAwareStringWrapper alloc] initWithString:mutable];
+    [mutable appendString:@"ef"];
+    [mutable replaceCharactersInRange:NSMakeRange(0, 2) withString:@"zz"];
+    DVTExpectEqualObjects(fromMutable.string, @"ab\ncd", @"the string is copied, so later edits to the source do not show");
+    DVTExpectEqualRanges([fromMutable characterRangeForLineRange:NSMakeRange(1, 1)], NSMakeRange(3, 2),
+                         @"the copied string's line table still describes the original text");
+
+    /* Line ranges. The length is a delta, so a one-line request is {line,1}. */
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(0, 0)], NSMakeRange(0, 0),
+                         @"a zero-length line range is empty at the start of the first line");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(0, 1)], NSMakeRange(0, 3),
+                         @"line 0 runs to the start of line 1, newline included");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(0, 2)], NSMakeRange(0, 5),
+                         @"a two-line delta reaches the end of the string");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(1, 0)], NSMakeRange(3, 0),
+                         @"a zero-length delta starts where the line does");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(1, 1)], NSMakeRange(3, 2),
+                         @"line 1 runs to the start of line 2");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(2, 1)], NSMakeRange(5, 0),
+                         @"the last line is empty, the table carrying a final entry at the end of the string");
+    DVTExpectEqualRanges([wrapper characterRangeForLineRange:NSMakeRange(99, 1)], NSMakeRange(5, 0),
+                         @"a line number past the end is pulled back to the last one");
+
+    /* Character ranges. */
+    DVTExpectEqualRanges([wrapper lineRangeForCharacterRange:NSMakeRange(0, 0)], NSMakeRange(0, 1),
+                         @"the very start belongs to the first line");
+    DVTExpectEqualRanges([wrapper lineRangeForCharacterRange:NSMakeRange(3, 1)], NSMakeRange(1, 1),
+                         @"the start of line 1 belongs to line 1");
+    DVTExpectEqualRanges([wrapper lineRangeForCharacterRange:NSMakeRange(0, 4)], NSMakeRange(0, 2),
+                         @"a range crossing a newline spans two lines");
+    DVTExpectEqualRanges([wrapper lineRangeForCharacterRange:NSMakeRange(99, 1)], NSMakeRange(1, 2),
+                         @"a character index past the end lands on the last line");
+
+    /*
+     A table carrying a fragment's own line numbering shifts its offsets back
+     into whole-document coordinates. No public initialiser produces one, so it
+     is built by hand here; the values are Apple's.
+     */
+    DVTTextLineOffsetTable shifted = DVTTableForText(@"ab\ncd");
+    shifted.baseLine = 0;
+    shifted.baseOffset = 10;
+    DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 1), &shifted), NSMakeRange(10, 3),
+                         @"a shifted table offsets the first line by baseOffset");
+    DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(1, 1), &shifted), NSMakeRange(13, 2),
+                         @"the shift applies to every line of a shifted table");
+    DVTExpectEqualRanges(DVTCharacterRangeForLineRange(NSMakeRange(0, 0), &shifted), NSMakeRange(10, 0),
+                         @"a zero-length range on a shifted table still shifts");
+
+    /* A location's own character range is the answer when it has one. */
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(1, 2, 0, 0, NSMakeRange(2, 1), 0)],
+                         NSMakeRange(2, 1), @"a location's character range is returned as it stands");
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(NSNotFound, NSNotFound, NSNotFound,
+                                                                                 NSNotFound, NSMakeRange(1, 2), 0)],
+                         NSMakeRange(1, 2), @"a location carrying only a character range needs no lines to resolve it");
+
+    /* Failing that, its lines are measured. */
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(NSNotFound, NSNotFound, 1, 1,
+                                                                                 NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(3, 2), @"a single line is measured against its own start");
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(NSNotFound, NSNotFound, 0, 2,
+                                                                                 NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(0, 5), @"a line span is measured from the first line's start");
+
+    /* And with columns, each column is added to the start of its own line. */
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(1, 2, 0, 0, NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(1, 1), @"a single line's columns are measured from that line's start");
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(2, 3, 1, 1, NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(5, 1), @"columns on a later line are measured from that line, not the first");
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(0, 1, 0, 1, NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(0, 4), @"a column span across two lines starts on the first line's start");
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(99, 99, 99, 99, NSMakeRange(NSNotFound, 0), 0)],
+                         NSMakeRange(104, 0), @"a line past the end clamps its columns to the last line's start");
+
+    /* A location that names nothing stays unlocated, but keeps its length. */
+    DVTExpectEqualRanges([wrapper characterRangeFromDocumentLocation:DVTLocation(NSNotFound, NSNotFound, NSNotFound,
+                                                                                 NSNotFound, NSMakeRange(NSNotFound, 3), 0)],
+                         NSMakeRange(NSNotFound, 3), @"a location naming no position reports no position");
+
+    /*
+     The converters re-express the coordinates a location already carries; they do
+     not invent a character range for one that named only lines and columns.
+     Measured over "ab\ncdef" so the columns sit inside line 1 and no clamping is
+     in play, and over an all-ASCII string where the two encodings agree.
+     */
+    DVTLineOffsetAwareStringWrapper *plain = [[DVTLineOffsetAwareStringWrapper alloc] initWithString:@"ab\ncdef"];
+    DVTTextDocumentLocation *asUTF8 = [plain convertLocationToUTF8EncodedLocation:DVTLocation(1, 3, 1, 1, NSMakeRange(NSNotFound, 0), 0)];
+    DVTExpect(asUTF8.locationEncoding == 1, @"the UTF-8 converter marks its result as UTF-8");
+    DVTExpectEqualRanges(asUTF8.characterRange, NSMakeRange(NSNotFound, 0),
+                         @"converting leaves a location that named no characters naming none");
+    DVTExpect(asUTF8.startingColumnNumber == 1 && asUTF8.endingColumnNumber == 3 &&
+                  asUTF8.startingLineNumber == 1 && asUTF8.endingLineNumber == 1,
+              @"an ASCII location's columns and lines are the same in either encoding");
+
+    DVTTextDocumentLocation *backToNative = [plain convertLocationToNativeNSStringEncodedLocation:asUTF8];
+    DVTExpect(backToNative.locationEncoding == 0, @"the native converter marks its result as native");
+    DVTExpect(backToNative.startingColumnNumber == 1 && backToNative.endingColumnNumber == 3 &&
+                  backToNative.startingLineNumber == 1 && backToNative.endingLineNumber == 1,
+              @"a round trip through UTF-8 returns the original columns and lines");
+    DVTExpectEqualRanges(backToNative.characterRange, NSMakeRange(NSNotFound, 0),
+                         @"the round trip still names no characters");
+
+    /* A location that does carry a character range keeps it, only re-expressed. */
+    DVTTextDocumentLocation *rangeCarried = [plain convertLocationToUTF8EncodedLocation:DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound, NSMakeRange(2, 3), 0)];
+    DVTExpectEqualRanges(rangeCarried.characterRange, NSMakeRange(2, 3),
+                         @"a character range is carried across the conversion");
+
+    /*
+     The description quotes the string and escapes only the newline. A quote or
+     backslash inside the string is left alone, so this is not a general-purpose
+     quoting routine.
+     */
+    NSString *described = wrapper.debugDescription;
+    DVTExpect([described hasPrefix:@"<DVTLineOffsetAwareStringWrapper 0x"], @"the description names the class and address");
+    DVTExpect([described hasSuffix:@"  string=\"ab\\ncd\">"], @"the description quotes the string and escapes its newline");
+    DVTExpect([described rangeOfString:@"\n"].location == NSNotFound, @"no real newline survives into the description");
+    NSString *empty = [[[DVTLineOffsetAwareStringWrapper alloc] initWithString:@""] debugDescription];
+    DVTExpect([empty hasSuffix:@"  string=\"\">"], @"an empty string is still quoted");
+    NSString *quoted = [[[DVTLineOffsetAwareStringWrapper alloc] initWithString:@"a\"b"] debugDescription];
+    DVTExpect([quoted hasSuffix:@"  string=\"a\"b\">"], @"a quote inside the string is not escaped");
+
+    /* Secure coding. Only the string is archived; the table is rebuilt on decode. */
+    DVTExpect([DVTLineOffsetAwareStringWrapper supportsSecureCoding], @"the wrapper claims secure coding support");
+    NSError *error = nil;
+    NSData *archived = [NSKeyedArchiver archivedDataWithRootObject:wrapper
+                                            requiringSecureCoding:YES
+                                                            error:&error];
+    DVTExpect(archived != nil && error == nil, @"the wrapper archives under secure coding");
+    DVTLineOffsetAwareStringWrapper *decoded =
+        [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTLineOffsetAwareStringWrapper class] fromData:archived error:&error];
+    DVTExpect(decoded != nil && error == nil, @"the wrapper decodes under secure coding");
+    DVTExpectEqualObjects(decoded.string, @"ab\ncd", @"the string survives the round trip");
+    DVTExpectEqualRanges([decoded characterRangeForLineRange:NSMakeRange(1, 1)], NSMakeRange(3, 2),
+                         @"the line table is rebuilt on decode even though it was never archived");
+}
+
+static void DVTTestPersistableParameterOmission(void)
+{
+    /*
+     Every key that names no position is left out rather than recorded as
+     NSNotFound, and each key is dropped on its own rather than as a group: a
+     range with a length but no location still records that length.
+     */
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound,
+                                                        NSMakeRange(NSNotFound, 0), 0)),
+                          @"Timestamp", @"a location naming nothing carries only the document's timestamp");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound,
+                                                        NSMakeRange(1, 2), 0)),
+                          @"CharacterRangeLen CharacterRangeLoc Timestamp",
+                          @"a location carrying only a character range records no lines or columns");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, 1, 1, NSMakeRange(NSNotFound, 0), 0)),
+                          @"EndingLineNumber StartingLineNumber Timestamp",
+                          @"a location carrying only lines records no character range");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound,
+                                                        NSMakeRange(NSNotFound, 5), 0)),
+                          @"CharacterRangeLen Timestamp",
+                          @"a range with a length but no location keeps the length alone");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound,
+                                                        NSMakeRange(5, 0), 0)),
+                          @"CharacterRangeLoc Timestamp",
+                          @"a range with a location but no length keeps the location alone");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(NSNotFound, NSNotFound, NSNotFound, NSNotFound,
+                                                        NSMakeRange(0, 0), 0)),
+                          @"CharacterRangeLoc Timestamp",
+                          @"a zero length at a real location records the location but not the length");
+
+    /* Native is the default, so only a location that says otherwise records it. */
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(1, 2, 0, 0, NSMakeRange(0, 1), 0)),
+                          @"CharacterRangeLen CharacterRangeLoc EndingColumnNumber EndingLineNumber "
+                          @"StartingColumnNumber StartingLineNumber Timestamp",
+                          @"a fully specified native location does not spell out the encoding");
+    DVTExpectEqualObjects(DVTPersistableKeys(DVTLocation(1, 2, 0, 0, NSMakeRange(0, 1), 1)),
+                          @"CharacterRangeLen CharacterRangeLoc EndingColumnNumber EndingLineNumber LocationEncoding "
+                          @"StartingColumnNumber StartingLineNumber Timestamp",
+                          @"a UTF-8 location records its encoding");
+
+    /*
+     A timestamp of zero is still a timestamp: only its absence is left out. The
+     fully specified initializer takes a nonnull timestamp, so the absent case is
+     not reachable through it and is not asserted here.
+     */
+    DVTTextDocumentLocation *zeroTimestamp =
+        [[DVTTextDocumentLocation alloc] initWithDocumentURL:[NSURL fileURLWithPath:@"/tmp/x.txt"]
+                                                   timestamp:@(0)
+                                       startingColumnNumber:NSNotFound
+                                         endingColumnNumber:NSNotFound
+                                          startingLineNumber:NSNotFound
+                                            endingLineNumber:NSNotFound
+                                             characterRange:NSMakeRange(NSNotFound, 0)
+                                           locationEncoding:0];
+    DVTExpectEqualObjects(DVTPersistableKeys(zeroTimestamp), @"Timestamp",
+                          @"a timestamp of zero is recorded rather than treated as absent");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -2367,6 +2674,8 @@ int main(int argc, const char *argv[])
         DVTTestDocumentLocation();
         DVTTestTextDocumentLocation();
         DVTTestDocumentLocationConversion();
+        DVTTestLineOffsetAwareStringWrapper();
+        DVTTestPersistableParameterOmission();
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestAssertions();

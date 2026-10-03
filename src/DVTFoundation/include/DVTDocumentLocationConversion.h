@@ -84,6 +84,23 @@ DVT_EXTERN DVTTextDocumentLocation *DVTConvertLocationToUTF8EncodedLocation(
 DVT_EXTERN DVTTextDocumentLocation *DVTConvertLocationToNativeNSStringEncodedLocation(
     DVTTextDocumentLocation *location, NSString *string, const DVTTextLineOffsetTable *lineOffsetTable);
 
+/**
+  The characters `location` names, read in the string's own UTF-16 units.
+
+  `location` is converted to native offsets first, so one recorded in UTF-8
+  bytes is read correctly rather than taken at its word. A location that already
+  carries a character range is therefore returned unchanged, and only one that
+  carries just lines and columns is measured against `string`.
+
+  @param location The location to read.
+  @param string The string `location` is measured against.
+  @param lineOffsetTable The line starts of `string`.
+  @return The characters `location` names, or a range located at `NSNotFound`
+          when it names no position at all.
+ */
+DVT_EXTERN NSRange DVTCharacterRangeFromDocumentLocation(DVTDocumentLocation *location, NSString *string,
+                                                         const DVTTextLineOffsetTable *lineOffsetTable);
+
 NS_ASSUME_NONNULL_END
 
 #endif /* DVT_DOCUMENT_LOCATION_CONVERSION_H */

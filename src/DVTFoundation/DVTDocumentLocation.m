@@ -24,6 +24,7 @@
 //
 
 #import "DVTDocumentLocationInternal.h"
+#import "DVTDocumentLocationConversion.h"
 #import "DVTTextDocumentLocation.h"
 
 #import <objc/runtime.h>
@@ -286,6 +287,30 @@ NSDictionary<NSString *, NSString *> *DVTPersistentParametersFromFragment(NSStri
   DVTTextDocumentLocation -- so the fields are selected by class instead. That is
   why this header knows about the subclass.
  */
+/*
+  Records `value` under `key` unless it is `absent`.
+
+  Each key is dropped on its own, not as a group: a location naming only its
+  character range still records that range, and one naming only its lines still
+  records those. That independence is what lets a range with no location
+  (`{NSNotFound, 5}`) survive as a length on its own.
+ */
+static void DVTPutParameter(NSMutableDictionary<NSString *, NSString *> *parameters, NSString *key, NSString *value,
+                            BOOL absent)
+{
+    if (!absent) {
+        parameters[key] = value;
+    }
+}
+
+/*
+  The superclass owns the timestamp and the encoding; a text location adds its
+  four line and column numbers and its character range.
+
+  A key naming no position is left out entirely rather than recorded as
+  `NSNotFound`, which keeps the representation of a location that names nothing
+  down to just the document it belongs to.
+ */
 static void DVTPopulatePersistentParameters(DVTDocumentLocation *location,
                                             NSMutableDictionary<NSString *, NSString *> *parameters)
 {
@@ -297,20 +322,32 @@ static void DVTPopulatePersistentParameters(DVTDocumentLocation *location,
         return;
     }
     DVTTextDocumentLocation *text = (DVTTextDocumentLocation *)location;
-    parameters[DVTPersistentStartingColumnNumberKey] =
-        [NSString stringWithFormat:@"%ld", (long)text.startingColumnNumber];
-    parameters[DVTPersistentEndingColumnNumberKey] =
-        [NSString stringWithFormat:@"%ld", (long)text.endingColumnNumber];
-    parameters[DVTPersistentStartingLineNumberKey] =
-        [NSString stringWithFormat:@"%ld", (long)text.startingLineNumber];
-    parameters[DVTPersistentEndingLineNumberKey] =
-        [NSString stringWithFormat:@"%ld", (long)text.endingLineNumber];
-    parameters[DVTPersistentCharacterRangeLocationKey] =
-        [NSString stringWithFormat:@"%lu", (unsigned long)text.characterRange.location];
-    parameters[DVTPersistentCharacterRangeLengthKey] =
-        [NSString stringWithFormat:@"%lu", (unsigned long)text.characterRange.length];
-    parameters[DVTPersistentLocationEncodingKey] = [NSString stringWithFormat:@"%ld",
-                                                                             (long)text.locationEncoding];
+
+    /* Native is the encoding a location carries unless it says otherwise, so
+       recording it would only make every such location spell out the default. */
+    DVTPutParameter(parameters, DVTPersistentLocationEncodingKey,
+                    [NSString stringWithFormat:@"%ld", (long)text.locationEncoding],
+                    text.locationEncoding == DVTLocationEncodingNative);
+
+    DVTPutParameter(parameters, DVTPersistentStartingColumnNumberKey,
+                    [NSString stringWithFormat:@"%ld", (long)text.startingColumnNumber],
+                    text.startingColumnNumber == NSNotFound);
+    DVTPutParameter(parameters, DVTPersistentEndingColumnNumberKey,
+                    [NSString stringWithFormat:@"%ld", (long)text.endingColumnNumber],
+                    text.endingColumnNumber == NSNotFound);
+    DVTPutParameter(parameters, DVTPersistentStartingLineNumberKey,
+                    [NSString stringWithFormat:@"%ld", (long)text.startingLineNumber],
+                    text.startingLineNumber == NSNotFound);
+    DVTPutParameter(parameters, DVTPersistentEndingLineNumberKey,
+                    [NSString stringWithFormat:@"%ld", (long)text.endingLineNumber],
+                    text.endingLineNumber == NSNotFound);
+
+    NSRange characterRange = text.characterRange;
+    DVTPutParameter(parameters, DVTPersistentCharacterRangeLocationKey,
+                    [NSString stringWithFormat:@"%lu", (unsigned long)characterRange.location],
+                    characterRange.location == NSNotFound);
+    DVTPutParameter(parameters, DVTPersistentCharacterRangeLengthKey,
+                    [NSString stringWithFormat:@"%lu", (unsigned long)characterRange.length], characterRange.length == 0);
 }
 
 - (NSURL *)persistableURLRepresentationAndDecodableClassName:(NSString **)decodableClassName

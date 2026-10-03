@@ -91,38 +91,59 @@ void DVTInitializeLineOffsetTable(DVTTextLineOffsetTable *table, NSString *text)
     table->baseOffset = 0;
 }
 
-NSRange DVTCharacterRangeForLineRange(NSRange lineRange, DVTTextLineOffsetTable offsetTable)
+/*
+ The offset recorded for one line index, with the table's shift applied.
+
+ `DVTInitializeLineOffsetTable` leaves `baseLine` as `NSNotFound`, so a table
+ built for the whole string shifts nothing. A table adopted onto a larger
+ string names the first line it covers in `baseLine` and adds `baseOffset` to
+ every line from there on, which is what keeps the two endpoints of a range
+ expressed in the same units.
+ */
+static NSUInteger DVTOffsetAtLine(const DVTTextLineOffsetTable *offsetTable, NSUInteger line)
 {
-    DVTAssert(offsetTable.count >= 2, @"A line offset table needs at least two entries", nil, @"%lu",
-              (unsigned long)offsetTable.count);
+    NSUInteger offset = offsetTable->offsets[line];
+    if (offsetTable->baseLine != NSNotFound && line >= (NSUInteger)offsetTable->baseLine) {
+        offset += offsetTable->baseOffset;
+    }
+    return offset;
+}
+
+NSRange DVTCharacterRangeForLineRange(NSRange lineRange, const DVTTextLineOffsetTable *offsetTable)
+{
+    DVTAssert(offsetTable->count >= 2, @"A line offset table needs at least two entries", nil, @"%lu",
+              (unsigned long)offsetTable->count);
 
     NSUInteger firstLine = lineRange.location;
     NSUInteger lastLine = firstLine + lineRange.length;
 
     /* count - 1 is the terminating length entry, so it is the last index we may read. */
-    NSUInteger lastIndex = offsetTable.count - 1;
+    NSUInteger lastIndex = offsetTable->count - 1;
+    if (firstLine > lastIndex) {
+        firstLine = lastIndex;
+    }
     if (lastLine > lastIndex) {
         lastLine = lastIndex;
     }
 
-    NSUInteger start = offsetTable.offsets[firstLine];
-    return NSMakeRange(start, offsetTable.offsets[lastLine] - start);
+    NSUInteger start = DVTOffsetAtLine(offsetTable, firstLine);
+    return NSMakeRange(start, DVTOffsetAtLine(offsetTable, lastLine) - start);
 }
 
-NSRange DVTLineRangeForCharacterRange(NSRange characterRange, DVTTextLineOffsetTable offsetTable)
+NSRange DVTLineRangeForCharacterRange(NSRange characterRange, const DVTTextLineOffsetTable *offsetTable)
 {
-    DVTAssert(offsetTable.count >= 2, @"A line offset table needs at least two entries", nil, @"%lu",
-              (unsigned long)offsetTable.count);
+    DVTAssert(offsetTable->count >= 2, @"A line offset table needs at least two entries", nil, @"%lu",
+              (unsigned long)offsetTable->count);
 
     NSUInteger character = characterRange.location;
     NSUInteger characterEnd = character + characterRange.length;
 
     /* Find the last line start that is not past the character. */
     NSUInteger low = 0;
-    NSUInteger high = offsetTable.count - 1;
+    NSUInteger high = offsetTable->count - 1;
     while (low < high) {
         NSUInteger middle = low + ((high - low + 1) / 2);
-        if (offsetTable.offsets[middle] <= character) {
+        if (offsetTable->offsets[middle] <= character) {
             low = middle;
         } else {
             high = middle - 1;
@@ -130,14 +151,14 @@ NSRange DVTLineRangeForCharacterRange(NSRange characterRange, DVTTextLineOffsetT
     }
 
     /* The terminating entry is not a line, so the search cannot select it. */
-    NSUInteger lastLine = offsetTable.count - 2;
+    NSUInteger lastLine = offsetTable->count - 2;
     if (low > lastLine) {
         low = lastLine;
     }
     NSUInteger location = low;
 
     /* Grow the range until it covers every character it was asked about. */
-    while ((low + 1) < offsetTable.count && characterEnd > offsetTable.offsets[low + 1]) {
+    while ((low + 1) < offsetTable->count && characterEnd > offsetTable->offsets[low + 1]) {
         low++;
     }
 

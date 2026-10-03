@@ -598,7 +598,32 @@ starts past both characters.
 
 `DVTCharacterRangeForLineRange` **clamps** a range that runs past the last line
 rather than rejecting it, and a zero-length line range is empty wherever it
-starts.
+starts. The clamp applies to *both* endpoints independently: `{99, 0}` and
+`{NSNotFound, 0}` both collapse onto the terminating entry, and neither reads
+past it.
+
+**Both functions take the table by pointer, never by value.** A by-value
+parameter would copy the struct — harmless for the pointers it holds, but it is
+not Apple's ABI, and the exported symbols are the ones other code links against.
+The table is never modified through the pointer.
+
+**A table adopted onto a larger string shifts its offsets, and
+`DVTCharacterRangeForLineRange` is where the shift happens.** `baseLine` names
+the first line the table covers and `baseOffset` is added to every line from
+there on; `DVTInitializeLineOffsetTable` leaves `baseLine` as `NSNotFound`, so a
+table built for a whole string shifts nothing. Each endpoint is shifted
+independently, so a range spanning the seam has the shift absorbed into its
+*length*: for `"ab\ncd"` (offsets `[0, 3, 5]`) with `baseLine = 1` and
+`baseOffset = 100`, line `{0, 1}` yields `{0, 103}` — the start stays at 0 while
+the end moves from 3 to 103. Clamping happens before the shift is applied, so an
+out-of-range line still resolves to the shifted terminating entry
+(`{99, 0}` → `{105, 0}`).
+
+`DVTLineRangeForCharacterRange` never applies the shift, and neither does Apple:
+handed a shifted table it reads the raw offsets and reports lines against them,
+exactly as this project does. The shift exists to keep `DVTCharacterRangeForLineRange`
+in the units of the larger string; resolving a character back to a line is the
+caller's to line up.
 
 `DVTLineRangeForCharacterRange` has the one genuinely surprising rule. It
 returns the line holding `location` extended far enough to cover `length`, but
@@ -612,8 +637,10 @@ differential work — the naive "advance while the range is not covered" loop
 over-extends on exactly these degenerate tables.
 
 Differential against Apple covers all four functions: **250,811 checks, zero
-mismatches**. The corpus includes empty strings, lone and doubled breaks,
-trailing breaks that produce empty lines, runs of nothing but breaks, the
+mismatches**, plus a shifted-table sweep replaying every line range against
+plain, fully shifted (`baseLine = 0`) and mid-table shifted (`baseLine = 1`)
+tables over eight strings. The corpus includes empty strings, lone and doubled
+breaks, trailing breaks that produce empty lines, runs of nothing but breaks, the
 Unicode separators, and astral and combining characters. The struct is compared
 field by field — including `capacity`, `baseLine` and `baseOffset`, which
 initialisation sets to `count`, `NSNotFound` and `0` — and the `malloc`-owned
@@ -762,6 +789,20 @@ built from the same string keeps every field except the timestamp. The base hand
 the timestamp over to the superclass through `-locationParameters:`, the one
 channel the superclass still reads before it strips the fragment itself.
 
+**A field that is absent, unset or at its default is left out of the fragment
+entirely — the omission is per field, not per location.** Established against
+Apple by reading back the key set from a decoded fragment: `LocationEncoding` is
+written only when it is not `0`, since native is the default; each of the four
+line and column numbers is written only when it is not `NSNotFound`, and the two
+columns and two lines are judged independently, so a location with a starting
+line but no starting column keeps just its lines; `CharacterRangeLoc` is written
+only when it is not `NSNotFound`; `CharacterRangeLen` is written only when it is
+not `0`, so a range at offset 0 of length 0 keeps only its location; and
+`Timestamp` is written only when it is `nil`, meaning a timestamp of `0` is
+recorded like any other. Reading this wrong is invisible in a round-trip test —
+the fragment decodes to the same location either way — so the tests assert on the
+key set rather than on the decoded value.
+
 Three differences from Apple's binary are forced by the compiler rather than the
 source, and are reproduced here as closely as clang allows. A minimal program
 adopting `NSSecureCoding` and `NSCopying` gets four extra properties — `hash`,
@@ -818,6 +859,54 @@ and a trailing newline) crossed with every valid span of columns, lines and rang
 Output is byte-identical, including which cases hand back the receiver and which
 build a copy.
 
+### Line-offset-aware string wrapper
+
+`DVTLineOffsetAwareStringWrapper` pairs a string with its line offset table so
+that a `DVTDocumentLocation` can be resolved against the text it points into. It
+is the class the editor reaches for when a location arrives with line and column
+numbers rather than a character range, and it fronts the encoding converters
+above.
+
+**The table is built on construction and again on decode, and it is never
+derived from the string on demand.** The stored table is what every query uses,
+so the wrapper copies its input string up front; a mutable string the caller
+later edits cannot change what the wrapper reports.
+
+**`-characterRangeFromDocumentLocation:` reads the location in the string's own
+units first, then takes whichever coordinate it was given.** A location recorded
+in UTF-8 bytes is translated to native offsets before anything is read from it,
+because its byte offsets would otherwise index this string to somewhere else in
+the text entirely. After that, a location carrying a character range answers from
+that range alone. Failing that, a location carrying lines and no columns resolves
+to the whole of those lines. A location with lines *and* columns measures each
+column from the start of its own line — not from the start of the range — so the
+answer stays correct when the range begins mid-line; the ending column is
+anchored to its own line only when the range spans more than one line. A location
+that names neither a range nor a line returns `{NSNotFound, length}`, keeping the
+length it was given, since a length is meaningful on its own.
+
+**`-debugDescription` is a fixed shape, not `-description`:** `<Class 0xPOINTER
+string="text">` with two spaces before `string`. Only the newline is escaped, as a
+literal `\n` — quotes, backslashes and every other control character are printed
+raw, so a string containing a quote produces a description that does not round
+trip through a parser. That is Apple's behaviour and it is reproduced exactly.
+
+**Archiving stores only the string, under the key `string`.** The offset table is
+not encoded; it is rebuilt by `initWithCoder:`, which is why a decoded wrapper
+answers range queries correctly instead of returning empty ranges. Secure coding
+is supported.
+
+The runtime metadata matches Apple's: both ivars with the same names, the same
+offsets (`_lineOffsets` at 8, `_string` at 48) and the same 56-byte instance size,
+and identical type encodings for all twelve methods. Method *order* differs, which
+is not part of any contract.
+
+Verified against Apple's binary by a probe that replays every line range against
+plain, shifted and mid-table-shifted tables for eight strings, resolves roughly
+100,000 locations through the wrapper, converts each in both directions, prints
+the debug description, and round-trips through an `NSKeyedArchiver`: **1,613
+lines of output, byte-identical** once object pointers are normalised.
+
 ### Errors
 
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
@@ -829,7 +918,7 @@ relying on it, so it has to remain a real exported symbol.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 55,792 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 55,879 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the command-line rendering table, both assertion report layouts,
@@ -845,7 +934,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **55,812 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **55,879 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -954,6 +1043,21 @@ Objective-C suite could not have found, all now settled:
 
 Known gap: `DVTSetupWeakPropertyKVOAssertions` is a stub, as it is in Apple's
 binary, where it compiles away entirely.
+
+### Deliberate divergence
+
+One input is answered differently rather than matched. Initialising a
+`DVTTextDocumentLocation` with a `nil` document URL **aborts in Apple's binary**
+and survives here: the object is built, and
+`-persistableStringRepresentationAndDecodableClassName:error:` then returns `nil`
+with an error saying the location has no document URL. The URL is declared
+nonnull, so the abort is a programmer-error guard rather than a case Apple
+handles; returning an error keeps a recoverable mistake recoverable. Two
+candidate divergences were checked and turned out **not** to be differences —
+`DVTLineRangeForCharacterRange` on a shifted table ignores `baseLine` and
+`baseOffset` in both implementations, and both abort on a line offset table with
+fewer than two entries, differing only in the text of the assertion.
+
 
 ## License
 

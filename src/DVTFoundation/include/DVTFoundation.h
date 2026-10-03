@@ -43,6 +43,7 @@
 #import "DVTVersion.h"
 #import "DVTTextExtras.h"
 #import "DVTFilterExpression.h"
+#import "DVTLineOffsetAwareStringWrapper.h"
 #import "DVTLineOffsetTableTextExtras.h"
 #import "DVTTextUTF8Correspondence.h"
 #import "DVTFoundationClassAdditions.h"

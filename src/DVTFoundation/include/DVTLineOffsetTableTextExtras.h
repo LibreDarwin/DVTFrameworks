@@ -78,22 +78,31 @@ DVT_EXTERN NSUInteger DVTGetLineStartOffsets(NSString *text, NSUInteger *_Nonnul
 DVT_EXTERN void DVTInitializeLineOffsetTable(DVTTextLineOffsetTable *table, NSString *text);
 
 /**
- Translates a range of lines into the character range they cover.
+  Translates a range of lines into the character range they cover.
 
- `lineRange.location` selects the first line and `lineRange.length` the
- number of lines; a range that runs past the end of the table is clamped to
- the last addressable line.
+  `lineRange.location` selects the first line and `lineRange.length` the
+  number of lines; a range that runs past the end of the table is clamped to
+  the last addressable line. The length is a line *delta*, not a count, so
+  `{0, 1}` is the first line and `{0, 0}` is empty -- which is what makes this
+  the inverse of a location's `-lineRange`, itself reported as
+  `{startingLineNumber, endingLineNumber - startingLineNumber}`.
+
+  The table is taken by pointer and never modified.
  */
-DVT_EXTERN NSRange DVTCharacterRangeForLineRange(NSRange lineRange, DVTTextLineOffsetTable offsetTable);
+DVT_EXTERN NSRange DVTCharacterRangeForLineRange(NSRange lineRange,
+                                                  const DVTTextLineOffsetTable *_Nonnull offsetTable);
 
 /**
- Translates a range of characters into the range of lines it touches.
+  Translates a range of characters into the range of lines it touches.
 
- The result always starts on the line holding `characterRange.location` and
- is long enough to cover `characterRange.length` characters, so a character
- range that straddles a line break spans both lines.
+  The result always starts on the line holding `characterRange.location` and
+  is long enough to cover `characterRange.length` characters, so a character
+  range that straddles a line break spans both lines.
+
+  The table is taken by pointer and never modified.
  */
-DVT_EXTERN NSRange DVTLineRangeForCharacterRange(NSRange characterRange, DVTTextLineOffsetTable offsetTable);
+DVT_EXTERN NSRange DVTLineRangeForCharacterRange(NSRange characterRange,
+                                                  const DVTTextLineOffsetTable *_Nonnull offsetTable);
 
 NS_ASSUME_NONNULL_END
 

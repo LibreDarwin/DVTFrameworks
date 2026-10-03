@@ -29,56 +29,20 @@
 #import "DVTTextUTF8Correspondence.h"
 
 /**
- The character range of `line` together with the start of the line after it.
+  The character range of `line` together with the start of the line after it.
 
- The range deliberately runs to the *next* line's start rather than to this
- line's last character. A column can legitimately name the position just past
- the terminator, and slicing only up to the last character would leave the
- translation helper without the code unit it needs to resolve that position.
-
- Clamping matters here for the same reason `+DVTGetLineStartOffsets` appends a
- final entry: it records one offset per line start *plus* one at the end of the
- string, so the last nameable line is the last entry and a line number past it
- has to be pulled back rather than used to index off the end of the array.
+  `DVTCharacterRangeForLineRange` already expresses this as a one-line delta,
+  and going through it rather than re-deriving the clamping is what keeps a
+  column resolved against the same span the standalone helpers report.
 
   @param line The line number, as `-startingLineNumber` reports it.
   @param lineOffsetTable The line starts of the string.
   @return The range, or a range located at `NSNotFound` when the table has too few
-         entries to describe a line at all.
-
-  @note A table too short to index is a caller error. Apple traps on it, and so
-        does nothing here rather than aborting: every table
-        `+DVTGetLineStartOffsets` or `DVTInitializeLineOffsetTable` produces
-        carries at least two entries -- even for an empty string -- so this
-        cannot be reached by a well-formed table and the two behaviours never
-        meet in practice.
+          entries to describe a line at all.
  */
 static NSRange DVTCharacterRangeForLine(NSUInteger line, const DVTTextLineOffsetTable *lineOffsetTable)
 {
-    if (lineOffsetTable->capacity <= 1) {
-        return NSMakeRange(NSNotFound, 0);
-    }
-
-    NSUInteger lastIndex = lineOffsetTable->capacity - 1;
-    NSUInteger firstIndex = MIN(line, lastIndex);
-    NSUInteger secondIndex = MIN(line + 1, lastIndex);
-
-    NSUInteger start = lineOffsetTable->offsets[firstIndex];
-    NSUInteger end = lineOffsetTable->offsets[secondIndex];
-
-    /*
-     A table built for a fragment carries the fragment's own line numbering, and
-     `baseOffset` shifts its offsets back into the coordinates of the whole
-     document. Applies only once the fragment's first line is reached.
-     */
-    if (lineOffsetTable->baseLine != NSNotFound && lineOffsetTable->baseLine <= (NSInteger)firstIndex) {
-        start += lineOffsetTable->baseOffset;
-    }
-    if (lineOffsetTable->baseLine != NSNotFound && lineOffsetTable->baseLine <= (NSInteger)secondIndex) {
-        end += lineOffsetTable->baseOffset;
-    }
-
-    return NSMakeRange(start, end - start);
+    return DVTCharacterRangeForLineRange(NSMakeRange(line, 1), lineOffsetTable);
 }
 
 /**
@@ -136,6 +100,54 @@ static DVTTextDocumentLocation *DVTLocationByReplacingOffsets(DVTTextDocumentLoc
                                                  endingLineNumber:location.endingLineNumber
                                                   characterRange:characterRange
                                                 locationEncoding:locationEncoding];
+}
+
+NSRange DVTCharacterRangeFromDocumentLocation(DVTDocumentLocation *location, NSString *string,
+                                              const DVTTextLineOffsetTable *lineOffsetTable)
+{
+    /*
+     Read the location in the string's own units first. A location recorded in
+     UTF-8 bytes has offsets this string cannot be indexed with, so taking its
+     character range at its word would report a position somewhere else in the
+     text entirely.
+     */
+    DVTTextDocumentLocation *native =
+        DVTConvertLocationToNativeNSStringEncodedLocation((DVTTextDocumentLocation *)location, string, lineOffsetTable);
+
+    NSRange characterRange = native.characterRange;
+    if (characterRange.location != NSNotFound) {
+        return characterRange;
+    }
+
+    NSRange lineRange = native.lineRange;
+    if (lineRange.location == NSNotFound) {
+        /* No range and no lines: nothing was ever named. The length is kept,
+           since it is meaningful on its own. */
+        return NSMakeRange(NSNotFound, characterRange.length);
+    }
+
+    if (native.startingColumnNumber == NSNotFound) {
+        return DVTCharacterRangeForLineRange(lineRange, lineOffsetTable);
+    }
+
+    /*
+     With columns to work from, anchor on the line the starting column is on and
+     reach for the ending column's line only when the range spans more than one.
+     Measuring from the start of each line keeps a column meaningful: adding it
+     to the start of the range's own first line would be wrong as soon as the
+     range began mid-line.
+     */
+    NSUInteger startOffset = DVTCharacterRangeForLineRange(NSMakeRange(lineRange.location, 1), lineOffsetTable).location;
+    NSUInteger endOffset = startOffset;
+    if (lineRange.length >= 2) {
+        endOffset =
+            DVTCharacterRangeForLineRange(NSMakeRange(lineRange.location + lineRange.length - 1, 1), lineOffsetTable)
+                .location;
+    }
+
+    NSUInteger start = startOffset + native.startingColumnNumber;
+    NSUInteger end = endOffset + native.endingColumnNumber;
+    return NSMakeRange(start, end - start);
 }
 
 DVTTextDocumentLocation *DVTConvertLocationToUTF8EncodedLocation(
