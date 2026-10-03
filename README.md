@@ -225,6 +225,42 @@ renderer, and an `NSHashTable` addition. See
 `src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 38 methods
 implemented here.
 
+### Property list values
+
+A property list can hold exactly six things: string, data, date, number, array,
+dictionary. The `DVTPropertyListValue` category asks any object which of those it
+already is, and the answer is always either the receiver itself or `nil` — these
+are deliberately **not** conversions, because a coercion that could fail has to
+report how it failed, and these report only "not this type". See
+`src/DVTFoundation/include/DVTPropertyListValue.h` for the 38 methods.
+
+Six selectors — `dvt_plistStringValue`, `dvt_plistDataValue`,
+`dvt_plistNumberValue`, `dvt_plistDateValue`, `dvt_plistArrayValue`,
+`dvt_plistDictionaryValue` — are each declared on all six Foundation classes, so
+every receiver answers the question and answers five of them with `nil`. Three
+details are load-bearing:
+
+- The answer is the **receiver**, not an equal copy, so subclasses pass and
+  mutable instances pass. Empty instances are their own type too.
+- `-[NSNumber dvt_plistStringValue]` is the one method that builds something, and
+  it is the family's only exception to "receiver or nil". It returns
+  `-stringValue`, inheriting that method's two sharp edges on purpose: `@YES`
+  stringifies as `1`, not `YES`, and a double keeps its own precision.
+- Nothing parses. `@"12"` is not a number and empty data is not a string.
+
+The two remaining selectors live on `NSDictionary` and are the family's only
+methods that explain themselves, because a container can fail two different ways:
+`dvt_plistArrayForKey:error:` and `dvt_plistDictionaryForKey:error:` distinguish a
+missing key (`Missing NSArray value for key: missing`) from a wrong-typed one
+(`Found NSConstantIntegerNumber value (7), instead of NSArray for key: num`). Both
+fail with `nil`, error domain `DVTPropertyListValueDecoding`, code `0`, and only
+`NSLocalizedDescription` set; `error` may be `NULL` and is left untouched on
+success. The value in that message is rendered with **`-debugDescription`, not
+`-description`** — the two disagree on precisely the types most likely to appear
+here, so empty data prints as `<>` rather than `{length = 0, bytes = 0x}`, and an
+array as `<NSConstantArray 0x…>(\n    1\n)`. Both were confirmed against Apple's
+binary.
+
 ### Comparison helpers
 
 Six exported C functions in `src/DVTFoundation/DVTComparison.m`, declared in
@@ -912,16 +948,19 @@ lines of output, byte-identical** once object pointers are normalised.
 `DVTFoundationErrorDomain` and `DVTMachOErrorDomain` are exported as data
 symbols. `IDETools` resolves `DVTFoundationErrorDomain` with `dlsym` before
 relying on it, so it has to remain a real exported symbol.
+`DVTPropertyListValueDecodingErrorDomain` is exported the same way, and holds
+Apple's `DVTPropertyListValueDecoding` string.
 
 ## Testing
 
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 55,879 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 55,948 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
-  additions, the command-line rendering table, both assertion report layouts,
+  additions, the property list value coercions, the command-line rendering
+  table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
   including their out-of-range fallbacks, the filter display strings, the line
@@ -934,7 +973,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **55,879 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **55,948 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -946,9 +985,9 @@ This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
 `dvt_` Objective-C methods across its categories, 250 of them in
 `DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
 exported C entry points, so they are absent from `nm`'s export list and only
-show up when the selector itself is read. This project implements 43 of them,
+show up when the selector itself is read. This project implements 51 of them,
 chosen for what `IDETools` and the recovered usage actually reach. Callers using
-any of the other 483 will not find it here.
+any of the other 475 will not find it here.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -960,6 +999,11 @@ Recovered from Apple's binary, or matched against it byte for byte:
 
 - install name, dylib versions, and bundle layout
 - `DVTFoundationErrorDomain` (`@"DVTFoundationErrorDomain"`)
+- `DVTPropertyListValueDecodingErrorDomain` (`@"DVTPropertyListValueDecoding"`),
+  reported with code `0` and no user info beyond `NSLocalizedDescription`
+- the `DVTPropertyListValue` coercion family: 36 identity-or-nil methods that
+  compile to a bare return with no conversion, plus two dictionary lookups whose
+  messages render the offending value with `-debugDescription`
 - the assertion report layouts, including that a failure report takes nine
   format arguments and a warning report takes ten
 - `Method: %@%@` in report details, the second component being

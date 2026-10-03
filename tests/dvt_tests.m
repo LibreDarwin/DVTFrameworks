@@ -889,6 +889,175 @@ static void DVTTestClassAdditions(void)
     DVTExpect(set.count == 0, @"NSMutableSet ignores nil");
 }
 
+#pragma mark - Property list values
+
+/** Rebuilds the wrong-type message a dictionary lookup is expected to produce.
+
+    Only the class name and the rendering of the value are under test, and both
+    are Foundation's to choose at runtime, so deriving them here keeps the test
+    honest instead of pinning whichever internal class this build happens to use. */
+static NSString *DVTExpectedWrongTypeMessage(id value, Class plistClass, NSString *key)
+{
+    return [NSString stringWithFormat:@"Found %@ value (%@), instead of %@ for key: %@",
+                                      NSStringFromClass([value class]), [value debugDescription],
+                                      NSStringFromClass(plistClass), key];
+}
+
+/** Exercises the coercion family: every receiver answers one question with
+    itself and the other five with nil, and the two dictionary lookups are the
+    only ones in the family that say why. */
+static void DVTTestPropertyListValue(void)
+{
+    fprintf(stdout, "\n== property list values ==\n");
+
+    /* Identity, not equality: the contract is "here it is", not "an equal
+       copy", so a mutable subclass has to pass too. */
+    NSString *string = @"text";
+    DVTExpect([string dvt_plistStringValue] == string, @"string is its own plist string");
+    DVTExpect([string dvt_plistNumberValue] == nil, @"string is not a plist number");
+    DVTExpect([string dvt_plistDateValue] == nil, @"string is not a plist date");
+    DVTExpect([string dvt_plistArrayValue] == nil, @"string is not a plist array");
+    DVTExpect([string dvt_plistDictionaryValue] == nil, @"string is not a plist dictionary");
+    DVTExpect([string dvt_plistDataValue] == nil, @"string is not a plist data");
+    DVTExpect(@"12".dvt_plistNumberValue == nil, @"a numeric string is not parsed into a number");
+
+    NSData *data = [NSData data];
+    DVTExpect([data dvt_plistDataValue] == data, @"data is its own plist data");
+    DVTExpect([data dvt_plistStringValue] == nil, @"data is not decoded into a string");
+    DVTExpect([data dvt_plistNumberValue] == nil, @"data is not a plist number");
+    DVTExpect([data dvt_plistDateValue] == nil, @"data is not a plist date");
+    DVTExpect([data dvt_plistArrayValue] == nil, @"data is not a plist array");
+    DVTExpect([data dvt_plistDictionaryValue] == nil, @"data is not a plist dictionary");
+
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:0];
+    DVTExpect([date dvt_plistDateValue] == date, @"date is its own plist date");
+    DVTExpect([date dvt_plistStringValue] == nil, @"date is not a plist string");
+    DVTExpect([date dvt_plistDataValue] == nil, @"date is not a plist data");
+    DVTExpect([date dvt_plistNumberValue] == nil, @"a date is not a number");
+    DVTExpect([date dvt_plistArrayValue] == nil, @"date is not a plist array");
+    DVTExpect([date dvt_plistDictionaryValue] == nil, @"date is not a plist dictionary");
+
+    NSArray *array = @[ @1 ];
+    DVTExpect([array dvt_plistArrayValue] == array, @"array is its own plist array");
+    DVTExpect([array dvt_plistStringValue] == nil, @"array is not a plist string");
+    DVTExpect([array dvt_plistDataValue] == nil, @"array is not a plist data");
+    DVTExpect([array dvt_plistNumberValue] == nil, @"array is not a plist number");
+    DVTExpect([array dvt_plistDateValue] == nil, @"array is not a plist date");
+    DVTExpect([array dvt_plistDictionaryValue] == nil, @"array is not a plist dictionary");
+
+    NSDictionary *dictionary = @{ @"x" : @1 };
+    DVTExpect([dictionary dvt_plistDictionaryValue] == dictionary,
+              @"dictionary is its own plist dictionary");
+    DVTExpect([dictionary dvt_plistStringValue] == nil, @"dictionary is not a plist string");
+    DVTExpect([dictionary dvt_plistDataValue] == nil, @"dictionary is not a plist data");
+    DVTExpect([dictionary dvt_plistNumberValue] == nil, @"dictionary is not a plist number");
+    DVTExpect([dictionary dvt_plistDateValue] == nil, @"dictionary is not a plist date");
+    DVTExpect([dictionary dvt_plistArrayValue] == nil, @"dictionary is not a plist array");
+
+    /* The one method that builds something: a number's canonical text. */
+    NSNumber *number = @7;
+    DVTExpect([number dvt_plistNumberValue] == number, @"number is its own plist number");
+    DVTExpectEqualObjects([number dvt_plistStringValue], @"7", @"number stringifies");
+    DVTExpect([number dvt_plistStringValue] != number, @"the stringified number is a new object");
+    DVTExpectEqualObjects(@YES.dvt_plistStringValue, @"1", @"a boolean stringifies as 1, not YES");
+    DVTExpectEqualObjects((@1.5).dvt_plistStringValue, @"1.5", @"a double keeps its decimal point");
+    DVTExpect([@1 dvt_plistDataValue] == nil, @"number is not a plist data");
+    DVTExpect([@1 dvt_plistDateValue] == nil, @"number is not a plist date");
+    DVTExpect([@1 dvt_plistArrayValue] == nil, @"number is not a plist array");
+    DVTExpect([@1 dvt_plistDictionaryValue] == nil, @"number is not a plist dictionary");
+
+    /* Empty instances are still their own type, and so are subclasses. */
+    DVTExpect(@"".dvt_plistStringValue != nil, @"an empty string is a plist string");
+    DVTExpect([NSData data].dvt_plistDataValue != nil, @"empty data is a plist data");
+    DVTExpect([NSArray array].dvt_plistArrayValue != nil, @"an empty array is a plist array");
+    DVTExpect([NSDictionary dictionary].dvt_plistDictionaryValue != nil,
+              @"an empty dictionary is a plist dictionary");
+    NSMutableString *mutableString = [NSMutableString stringWithString:@"m"];
+    DVTExpect([mutableString dvt_plistStringValue] == mutableString, @"a mutable string passes");
+    NSMutableArray *mutableArray = [NSMutableArray array];
+    DVTExpect([mutableArray dvt_plistArrayValue] == mutableArray, @"a mutable array passes");
+    NSMutableDictionary *mutableDictionary = [NSMutableDictionary dictionary];
+    DVTExpect([mutableDictionary dvt_plistDictionaryValue] == mutableDictionary,
+              @"a mutable dictionary passes");
+    NSMutableData *mutableData = [NSMutableData data];
+    DVTExpect([mutableData dvt_plistDataValue] == mutableData, @"mutable data passes");
+
+    /* The two lookups: a hit is silent, a miss explains itself. */
+    NSDictionary *container = @{ @"arr" : @[ @1 ], @"dic" : dictionary, @"num" : @7,
+                                 @"data" : [NSData data], @"null" : [NSNull null] };
+    NSError *error = nil;
+    NSArray *foundArray = [container dvt_plistArrayForKey:@"arr" error:&error];
+    DVTExpect(foundArray == container[@"arr"], @"the stored array comes back");
+    DVTExpect(error == nil, @"a hit sets no error");
+    DVTExpect([container dvt_plistDictionaryForKey:@"dic" error:NULL] == dictionary,
+              @"the stored dictionary comes back");
+
+    /* A pre-set error must be left alone on success. */
+    NSError *sentinel = [NSError errorWithDomain:@"sentinel" code:99 userInfo:nil];
+    error = sentinel;
+    [container dvt_plistArrayForKey:@"arr" error:&error];
+    DVTExpect(error == sentinel, @"a hit does not touch the caller's error");
+
+    error = nil;
+    DVTExpect([container dvt_plistArrayForKey:@"missing" error:&error] == nil,
+              @"a missing key yields nil");
+    DVTExpectEqualObjects(error.domain, DVTPropertyListValueDecodingErrorDomain,
+                          @"a miss reports the decoding domain");
+    DVTExpect(error.code == 0, @"a miss uses code 0");
+    DVTExpectEqualObjects(error.localizedDescription, @"Missing NSArray value for key: missing",
+                          @"a missing key says so");
+    DVTExpect(error.userInfo.count == 1, @"the error carries only a description");
+
+    error = nil;
+    DVTExpect([container dvt_plistDictionaryForKey:@"missing" error:&error] == nil,
+              @"a missing key yields nil for dictionaries too");
+    DVTExpectEqualObjects(error.localizedDescription, @"Missing NSDictionary value for key: missing",
+                          @"the dictionary miss names NSDictionary");
+
+    /* A wrong-typed key reports the class, the value, and what was wanted --
+       and renders the value with -debugDescription, where empty data is `<>`.
+       The class names in these messages are Foundation internals that vary with
+       tagged-pointer state (`NSConstantIntegerNumber` vs `__NSCFNumber`), so the
+       expectation names the value's real class rather than freezing one. */
+    error = nil;
+    DVTExpect([container dvt_plistArrayForKey:@"num" error:&error] == nil,
+              @"a wrong-typed key yields nil");
+    DVTExpectEqualObjects(error.localizedDescription,
+                          DVTExpectedWrongTypeMessage(container[@"num"], [NSArray class], @"num"),
+                          @"a wrong-typed key names the class, the value and the wanted type");
+    DVTExpect([error.localizedDescription containsString:@"instead of NSArray for key: num"],
+              @"the message names the type that was wanted");
+
+    error = nil;
+    [container dvt_plistArrayForKey:@"data" error:&error];
+    DVTExpectEqualObjects(error.localizedDescription,
+                          DVTExpectedWrongTypeMessage(container[@"data"], [NSArray class], @"data"),
+                          @"a data value is reported like any other");
+    DVTExpect([error.localizedDescription containsString:@"value (<>), instead of"],
+              @"an empty data value is rendered as <>, not as {length = 0, bytes = 0x}");
+
+    error = nil;
+    [container dvt_plistArrayForKey:@"null" error:&error];
+    DVTExpectEqualObjects(error.localizedDescription,
+                          @"Found NSNull value (<null>), instead of NSArray for key: null",
+                          @"NSNull is reported as itself");
+
+    error = nil;
+    [container dvt_plistDictionaryForKey:@"arr" error:&error];
+    DVTExpectEqualObjects(error.localizedDescription,
+                          DVTExpectedWrongTypeMessage(container[@"arr"], [NSDictionary class], @"arr"),
+                          @"an array under a dictionary lookup is reported like any other");
+    DVTExpect([error.localizedDescription containsString:@"(<"],
+              @"an array value is rendered with -debugDescription, not -description");
+
+    /* A NULL error pointer is legal. */
+    DVTExpect([container dvt_plistArrayForKey:@"missing" error:NULL] == nil,
+              @"a NULL error pointer is tolerated");
+
+    DVTExpectEqualObjects(DVTPropertyListValueDecodingErrorDomain, @"DVTPropertyListValueDecoding",
+                          @"the domain symbol holds Apple's domain string");
+}
+
 #pragma mark - Assertions
 
 /** Captures reports instead of aborting. */
@@ -2678,6 +2847,7 @@ int main(int argc, const char *argv[])
         DVTTestPersistableParameterOmission();
         DVTTestMachO();
         DVTTestClassAdditions();
+        DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();
         DVTTestCertificateComparison();

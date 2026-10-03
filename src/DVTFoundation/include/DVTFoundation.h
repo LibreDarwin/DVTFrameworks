@@ -47,5 +47,6 @@
 #import "DVTLineOffsetTableTextExtras.h"
 #import "DVTTextUTF8Correspondence.h"
 #import "DVTFoundationClassAdditions.h"
+#import "DVTPropertyListValue.h"
 
 #endif /* DVT_FOUNDATION_H */
