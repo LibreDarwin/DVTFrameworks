@@ -184,6 +184,79 @@ NS_ASSUME_NONNULL_BEGIN
 /** Appends every element of `objects` that is not already present. */
 - (void)dvt_addObjectsFromArrayIfAbsent:(NSArray *)objects;
 
+/** Reverses the receiver in place with `exchangeObjectAtIndex:` pairs. */
+- (void)dvt_reverseObjects;
+
+/**
+ Removes and returns the first element, or returns `nil` and changes nothing
+ when the receiver is empty.
+ */
+- (id _Nullable)dvt_popFirstObject;
+
+/**
+ Removes and returns the last element, or returns `nil` and changes nothing when
+ the receiver is empty.
+ */
+- (id _Nullable)dvt_popLastObject;
+
+/**
+ Drops everything past `maxCount`. A `maxCount` at or above the current count
+ leaves the receiver alone.
+ */
+- (void)dvt_truncateToMaxCount:(NSUInteger)maxCount;
+
+/**
+ Removes elements by *pointer identity* against `objects`, not by equality, and
+ removes only the first match for each entry of `objects`.
+
+ So `[p p z]` minus `@[p]` leaves `[p z]`, where `-removeObjectIdenticalTo:`
+ would leave `[z]`. `nil` removes nothing.
+ */
+- (void)dvt_removeObjectsIdenticalToObjectsInArray:(NSArray *_Nullable)objects;
+
+/**
+ Removes every element for which `test` returns `NO`, evaluating it once per
+ element.
+
+ This deviates from Apple, which faults on a non-empty receiver with a `nil`
+ block; the guard is kept deliberately.
+ */
+- (void)dvt_keepObjectsPassingTest:(BOOL (^_Nullable)(id object))test;
+
+/**
+ Removes elements that `set` contains by equality, so this differs from
+ `dvt_removeObjectsIdenticalToObjectsInArray:`. An empty or `nil` set removes
+ nothing.
+ */
+- (void)dvt_removeObjectsInSet:(NSSet *_Nullable)set;
+
+/**
+ Appends `object` only when the receiver does not already contain it by
+ equality. A `nil` argument raises `NSInvalidArgumentException`.
+ */
+- (void)dvt_addObjectIfAbsent:(id _Nullable)object;
+
+/** Appends each element of `set` in enumeration order. A `nil` set appends nothing. */
+- (void)dvt_addObjectsFromSet:(NSSet *_Nullable)set;
+
+/**
+ Inserts `object` at `index`, doing nothing when `object` is `nil`.
+
+ The `nil` test runs first, so a `nil` object with an out-of-range `index` is
+ still a no-op; a real object past the end raises `NSRangeException`.
+ */
+- (void)dvt_insertObjectIfNonNil:(id _Nullable)object atIndex:(NSUInteger)index;
+
+/** Inserts every element of `objects` at `index`, in order. */
+- (void)dvt_insertObjects:(NSArray *_Nullable)objects atIndex:(NSUInteger)index;
+
+/**
+ Moves the element at `fromIndex` to `toIndex`.
+
+ Equal indices are a no-op and never raise, even when both are out of range.
+ */
+- (void)dvt_moveObjectAtIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
+
 @end
 
 @interface NSSet (DVTNSSetAdditions)

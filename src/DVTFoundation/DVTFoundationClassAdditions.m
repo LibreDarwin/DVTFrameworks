@@ -666,6 +666,177 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     }
 }
 
+- (void)dvt_reverseObjects
+{
+    /* Apple's method reads -count, skips the loop entirely below 2, then walks
+       two indices inward (0 and count-1) calling
+       -exchangeObjectAtIndex:withObjectAtIndex: count/2 times. */
+    NSUInteger count = self.count;
+    if (count < 2) {
+        return;
+    }
+    NSUInteger forward = 0;
+    NSUInteger backward = count - 1;
+    while (forward < count / 2) {
+        [self exchangeObjectAtIndex:forward withObjectAtIndex:backward];
+        forward++;
+        backward--;
+    }
+}
+
+- (id)dvt_popFirstObject
+{
+    /* Apple fetches -firstObject and calls -removeObjectAtIndex: 0 only when
+       that fetch was non-nil (cbz branches past it), so an empty receiver
+       returns nil and raises nothing. */
+    id object = self.firstObject;
+    if (object != nil) {
+        [self removeObjectAtIndex:0];
+    }
+    return object;
+}
+
+- (id)dvt_popLastObject
+{
+    /* -lastObject followed by -removeLastObject behind the same nil guard. */
+    id object = self.lastObject;
+    if (object != nil) {
+        [self removeLastObject];
+    }
+    return object;
+}
+
+- (void)dvt_truncateToMaxCount:(NSUInteger)maxCount
+{
+    /* Apple reads -count and skips when count <= maxCount (b.ls); otherwise it
+       reads -count a second time and tail-calls -removeObjectsInRange: with
+       {maxCount, count - maxCount}. A maxCount at or above the count is a
+       no-op. */
+    if (self.count <= maxCount) {
+        return;
+    }
+    [self removeObjectsInRange:NSMakeRange(maxCount, self.count - maxCount)];
+}
+
+- (void)dvt_removeObjectsIdenticalToObjectsInArray:(NSArray *)objects
+{
+    /* Apple allocates a mutable index set and then fast-enumerates the
+       *argument*, not the receiver: for each argument element it asks the
+       receiver for -indexOfObjectIdenticalTo: and records that single index when
+       one is found, then calls -removeObjectsAtIndexes: on the receiver.
+
+       Two details the obvious implementation gets wrong, both verified against
+       Apple:
+         - the test is pointer identity, not -isEqual:, so an equal-but-distinct
+           element survives;
+         - only the FIRST identical element goes per argument entry, so a
+           receiver of [p p z] minus @[p] is left as [p z]. Foundation's own
+           -removeObjectIdenticalTo: would leave just [z].
+       Duplicate argument entries are harmless: they record the same index
+       again. */
+    NSMutableIndexSet *doomed = [NSMutableIndexSet indexSet];
+    for (id object in objects) {
+        NSUInteger index = [self indexOfObjectIdenticalTo:object];
+        if (index != NSNotFound) {
+            [doomed addIndex:index];
+        }
+    }
+    [self removeObjectsAtIndexes:doomed];
+}
+
+- (void)dvt_keepObjectsPassingTest:(BOOL (^)(id object))test
+{
+    /* Apple allocates a mutable index set, fast-enumerates the *receiver*, and
+       records the index of every element the block rejects before calling
+       -removeObjectsAtIndexes:. The test therefore runs once per element and
+       only the failures are dropped.
+
+       This deviates from Apple, which invokes `test` without checking it and so
+       faults on a non-empty receiver with a `nil` block. The guard is kept
+       deliberately, matching dvt_allObjectsPassTest:. */
+    if (test == nil) {
+        return;
+    }
+    NSMutableIndexSet *doomed = [NSMutableIndexSet indexSet];
+    [self enumerateObjectsUsingBlock:^(id object, NSUInteger index, BOOL *stop) {
+        if (!test(object)) {
+            [doomed addIndex:index];
+        }
+    }];
+    [self removeObjectsAtIndexes:doomed];
+}
+
+- (void)dvt_removeObjectsInSet:(NSSet *)set
+{
+    /* Apple reads -count on the set and skips the work altogether when it is
+       zero, otherwise it calls dvt_keepObjectsPassingTest: with a block that
+       rejects any element the set contains. Membership is -containsObject:, so
+       this is -isEqual: based rather than identity, and a nil set keeps
+       everything. */
+    if (set.count == 0) {
+        return;
+    }
+    [self dvt_keepObjectsPassingTest:^BOOL(id object) {
+        return ![set containsObject:object];
+    }];
+}
+
+- (void)dvt_addObjectIfAbsent:(id)object
+{
+    /* -containsObject:, then -addObject: when that is NO. There is no nil guard,
+       so a nil argument reaches -addObject: and raises
+       NSInvalidArgumentException, matching Apple. */
+    if (![self containsObject:object]) {
+        [self addObject:object];
+    }
+}
+
+- (void)dvt_addObjectsFromSet:(NSSet *)set
+{
+    /* Apple fast-enumerates the set, with the usual mutation check, appending
+       each element in turn. A nil set therefore appends nothing. */
+    for (id object in set) {
+        [self addObject:object];
+    }
+}
+
+- (void)dvt_insertObjectIfNonNil:(id)object atIndex:(NSUInteger)index
+{
+    /* The nil test precedes any bounds work: cbz on the object branches
+       straight to the return. So a nil object with an out-of-range index is a
+       silent no-op, while a real object past the end raises NSRangeException. */
+    if (object == nil) {
+        return;
+    }
+    [self insertObject:object atIndex:index];
+}
+
+- (void)dvt_insertObjects:(NSArray *)objects atIndex:(NSUInteger)index
+{
+    /* Apple reads -count on the argument, builds
+       +[NSIndexSet indexSetWithIndexesInRange:] spanning {index, count}, and
+       calls -insertObjects:atIndexes:. */
+    [self insertObjects:objects
+              atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(index, objects.count)]];
+}
+
+- (void)dvt_moveObjectAtIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex
+{
+    /* Apple compares the two indices first and returns when they are equal
+       (cmp x3, x2 ; b.ne ; ret), skipping the remove-and-reinsert pair. That
+       guard is observable: a 5 -> 5 move on a two-element array is a silent
+       no-op, where the sequence below would raise NSRangeException.
+
+       Otherwise it retains -objectAtIndex:fromIndex, removes that index, and
+       re-inserts the object at toIndex. */
+    if (fromIndex == toIndex) {
+        return;
+    }
+    id object = [self objectAtIndex:(NSUInteger)fromIndex];
+    [self removeObjectAtIndex:(NSUInteger)fromIndex];
+    [self insertObject:object atIndex:(NSUInteger)toIndex];
+}
+
 @end
 
 @implementation NSSet (DVTNSSetAdditions)

@@ -952,6 +952,190 @@ static void DVTTestClassAdditions(void)
     [mutable dvt_addObjectsFromArrayIfAbsent:@[@"a", @"b"]];
     DVTExpectEqualObjects(mutable, (@[@"a", @"b"]), @"dvt_addObjectsFromArrayIfAbsent: skips duplicates");
 
+    /* dvt_reverseObjects: exchanges index pairs inward, so length parity and
+       duplicates must both survive it. */
+    NSMutableArray *reversed = [@[@"a", @"b", @"c"] mutableCopy];
+    [reversed dvt_reverseObjects];
+    DVTExpectEqualObjects(reversed, (@[@"c", @"b", @"a"]), @"dvt_reverseObjects: reverses three elements");
+    NSMutableArray *reversedOdd = [@[@"a", @"b", @"c", @"d", @"e"] mutableCopy];
+    [reversedOdd dvt_reverseObjects];
+    DVTExpectEqualObjects(reversedOdd, (@[@"e", @"d", @"c", @"b", @"a"]),
+                          @"dvt_reverseObjects: an odd length keeps its middle element");
+    NSMutableArray *reversedDupes = [@[@"a", @"a", @"b"] mutableCopy];
+    [reversedDupes dvt_reverseObjects];
+    DVTExpectEqualObjects(reversedDupes, (@[@"b", @"a", @"a"]), @"dvt_reverseObjects: reverses duplicates");
+    NSMutableArray *reversedSingle = [@[@"only"] mutableCopy];
+    [reversedSingle dvt_reverseObjects];
+    DVTExpectEqualObjects(reversedSingle, (@[@"only"]), @"dvt_reverseObjects: a single element is unchanged");
+    NSMutableArray *reversedEmpty = [NSMutableArray array];
+    [reversedEmpty dvt_reverseObjects];
+    DVTExpect(reversedEmpty.count == 0, @"dvt_reverseObjects: an empty array is unchanged");
+
+    /* The pops guard on the fetched element, so an empty array yields nil
+       instead of raising the way -removeObjectAtIndex: would. */
+    NSMutableArray *popped = [@[@"a", @"b", @"c"] mutableCopy];
+    DVTExpectEqualObjects([popped dvt_popFirstObject], @"a", @"dvt_popFirstObject: returns the first element");
+    DVTExpectEqualObjects(popped, (@[@"b", @"c"]), @"dvt_popFirstObject: removes it");
+    DVTExpectEqualObjects([popped dvt_popLastObject], @"c", @"dvt_popLastObject: returns the last element");
+    DVTExpectEqualObjects(popped, (@[@"b"]), @"dvt_popLastObject: removes it");
+    DVTExpectEqualObjects([popped dvt_popFirstObject], @"b", @"dvt_popFirstObject: drains the last element");
+    DVTExpect([popped dvt_popFirstObject] == nil, @"dvt_popFirstObject: yields nil once empty");
+    DVTExpect([NSMutableArray array].dvt_popLastObject == nil, @"dvt_popLastObject: yields nil on an empty array");
+
+    NSMutableArray *truncated = [@[@"a", @"b", @"c"] mutableCopy];
+    [truncated dvt_truncateToMaxCount:0];
+    DVTExpect(truncated.count == 0, @"dvt_truncateToMaxCount: 0 empties the receiver");
+    [truncated dvt_truncateToMaxCount:2];
+    DVTExpect(truncated.count == 0, @"dvt_truncateToMaxCount: above the count is a no-op");
+    NSMutableArray *truncatedExact = [@[@"a", @"b", @"c"] mutableCopy];
+    [truncatedExact dvt_truncateToMaxCount:3];
+    DVTExpectEqualObjects(truncatedExact, (@[@"a", @"b", @"c"]),
+                          @"dvt_truncateToMaxCount: equal to the count is a no-op");
+    NSMutableArray *truncatedPartial = [@[@"a", @"b", @"c"] mutableCopy];
+    [truncatedPartial dvt_truncateToMaxCount:1];
+    DVTExpectEqualObjects(truncatedPartial, (@[@"a"]), @"dvt_truncateToMaxCount: keeps the leading elements");
+    [truncatedPartial dvt_truncateToMaxCount:0];
+    DVTExpect(truncatedPartial.count == 0, @"dvt_truncateToMaxCount: 0 works after a partial truncation");
+    NSMutableArray *truncatedEmpty = [NSMutableArray array];
+    [truncatedEmpty dvt_truncateToMaxCount:1];
+    DVTExpect(truncatedEmpty.count == 0, @"dvt_truncateToMaxCount: above the count of an empty array is a no-op");
+
+    /* Identity, not equality, and only the first match per argument entry:
+       Apple enumerates the argument and asks the receiver for
+       -indexOfObjectIdenticalTo:, so [p p z] minus @[p] is [p z]. Foundation's
+       own -removeObjectIdenticalTo: would leave [z]. */
+    DVTPicky *identityPicky = [DVTPicky new];
+    NSMutableArray *identities = [NSMutableArray arrayWithObjects:identityPicky, identityPicky, @"z", nil];
+    [identities dvt_removeObjectsIdenticalToObjectsInArray:@[identityPicky]];
+    DVTExpectEqualObjects(identities, (@[identityPicky, @"z"]),
+                          @"dvt_removeObjectsIdenticalToObjectsInArray: removes only the first identical element");
+    NSMutableArray *repeatedIdentities = [NSMutableArray arrayWithObjects:identityPicky, identityPicky, @"z", nil];
+    [repeatedIdentities dvt_removeObjectsIdenticalToObjectsInArray:@[identityPicky, identityPicky]];
+    DVTExpectEqualObjects(repeatedIdentities, (@[identityPicky, @"z"]),
+                          @"dvt_removeObjectsIdenticalToObjectsInArray: a repeated entry does not cascade to the next match");
+    NSString *distinctA = [@"x" mutableCopy];
+    NSString *distinctB = [@"x" mutableCopy];
+    NSMutableArray *distinctIdentities = [NSMutableArray arrayWithObjects:distinctA, distinctB, @"z", nil];
+    [distinctIdentities dvt_removeObjectsIdenticalToObjectsInArray:@[distinctA, distinctB]];
+    DVTExpectEqualObjects(distinctIdentities, (@[@"z"]),
+                          @"dvt_removeObjectsIdenticalToObjectsInArray: distinct entries each take a match");
+    NSMutableArray *equalNotIdentical = [NSMutableArray arrayWithObjects:[@"x" mutableCopy], @"z", nil];
+    [equalNotIdentical dvt_removeObjectsIdenticalToObjectsInArray:@[@"x"]];
+    DVTExpectEqualObjects(equalNotIdentical, (@[[@"x" mutableCopy], @"z"]),
+                          @"dvt_removeObjectsIdenticalToObjectsInArray: an equal-but-distinct element survives");
+    NSMutableArray *duplicateArgs = [NSMutableArray arrayWithObjects:@"m", @"n", nil];
+    [duplicateArgs dvt_removeObjectsIdenticalToObjectsInArray:@[@"m", @"m", @"m"]];
+    DVTExpectEqualObjects(duplicateArgs, (@[@"n"]),
+                          @"dvt_removeObjectsIdenticalToObjectsInArray: repeated arguments are idempotent");
+    NSMutableArray *nilIdentities = [NSMutableArray arrayWithObject:@"m"];
+    [nilIdentities dvt_removeObjectsIdenticalToObjectsInArray:nil];
+    DVTExpectEqualObjects(nilIdentities, (@[@"m"]), @"dvt_removeObjectsIdenticalToObjectsInArray: nil removes nothing");
+    NSMutableArray *emptyIdentities = [NSMutableArray arrayWithObject:@"m"];
+    [emptyIdentities dvt_removeObjectsIdenticalToObjectsInArray:@[]];
+    DVTExpectEqualObjects(emptyIdentities, (@[@"m"]), @"dvt_removeObjectsIdenticalToObjectsInArray: an empty array removes nothing");
+
+    /* dvt_keepObjectsPassingTest: applies the test once per element and drops
+       only the failures. A nil block is a deliberate deviation from Apple,
+       which faults on a non-empty receiver; here it changes nothing. */
+    NSMutableArray *kept = [@[@"a", @"b", @"c"] mutableCopy];
+    [kept dvt_keepObjectsPassingTest:^BOOL(id object) { return [object isEqualToString:@"b"]; }];
+    DVTExpectEqualObjects(kept, (@[@"b"]), @"dvt_keepObjectsPassingTest: keeps only the passing elements");
+    [kept dvt_keepObjectsPassingTest:^BOOL(id object) { return YES; }];
+    DVTExpectEqualObjects(kept, (@[@"b"]), @"dvt_keepObjectsPassingTest: keeping everything is a no-op");
+    [kept dvt_keepObjectsPassingTest:^BOOL(id object) { return NO; }];
+    DVTExpect(kept.count == 0, @"dvt_keepObjectsPassingTest: keeping nothing empties the receiver");
+    NSMutableArray *nilBlockReceiver = [@[@"a"] mutableCopy];
+    [nilBlockReceiver dvt_keepObjectsPassingTest:nil];
+    DVTExpectEqualObjects(nilBlockReceiver, (@[@"a"]), @"dvt_keepObjectsPassingTest: a nil block changes nothing");
+
+    /* Set membership here is -containsObject:, so it is equality based, which
+       is what separates it from the identity variant above. */
+    NSMutableArray *bySet = [@[@"a", @"bb", @"c"] mutableCopy];
+    [bySet dvt_removeObjectsInSet:[NSSet setWithObject:@"bb"]];
+    DVTExpectEqualObjects(bySet, (@[@"a", @"c"]), @"dvt_removeObjectsInSet: removes contained elements");
+    NSMutableArray *bySetEqual = [NSMutableArray arrayWithObjects:[@"x" mutableCopy], @"z", nil];
+    [bySetEqual dvt_removeObjectsInSet:[NSSet setWithObjects:[@"x" mutableCopy], nil]];
+    DVTExpectEqualObjects(bySetEqual, (@[@"z"]),
+                          @"dvt_removeObjectsInSet: an equal element matches by equality, a non-member survives");
+    NSMutableArray *byNilSet = [NSMutableArray arrayWithObject:@"a"];
+    [byNilSet dvt_removeObjectsInSet:nil];
+    DVTExpectEqualObjects(byNilSet, (@[@"a"]), @"dvt_removeObjectsInSet: a nil set removes nothing");
+    NSMutableArray *byEmptySet = [NSMutableArray arrayWithObject:@"a"];
+    [byEmptySet dvt_removeObjectsInSet:[NSSet set]];
+    DVTExpectEqualObjects(byEmptySet, (@[@"a"]), @"dvt_removeObjectsInSet: an empty set removes nothing");
+
+    NSMutableArray *absent = [NSMutableArray array];
+    [absent dvt_addObjectIfAbsent:@"a"];
+    [absent dvt_addObjectIfAbsent:@"a"];
+    DVTExpectEqualObjects(absent, (@[@"a"]), @"dvt_addObjectIfAbsent: appends a new element only once");
+    NSMutableArray *absentEqual = [NSMutableArray arrayWithObjects:[@"x" mutableCopy], nil];
+    [absentEqual dvt_addObjectIfAbsent:[@"x" mutableCopy]];
+    DVTExpect(absentEqual.count == 1, @"dvt_addObjectIfAbsent: an equal element counts as present");
+    @try {
+        [[NSMutableArray array] dvt_addObjectIfAbsent:nil];
+        DVTExpect(NO, @"dvt_addObjectIfAbsent: a nil argument raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                  @"dvt_addObjectIfAbsent: a nil argument raises NSInvalidArgumentException");
+    }
+
+    NSMutableArray *fromSet = [NSMutableArray array];
+    [fromSet dvt_addObjectsFromSet:[NSSet setWithObjects:@"p", @"q", nil]];
+    DVTExpectEqualObjects([NSSet setWithArray:fromSet], ([NSSet setWithObjects:@"p", @"q", nil]),
+                          @"dvt_addObjectsFromSet: appends every member");
+    NSMutableArray *fromNilSet = [NSMutableArray arrayWithObject:@"a"];
+    [fromNilSet dvt_addObjectsFromSet:nil];
+    DVTExpectEqualObjects(fromNilSet, (@[@"a"]), @"dvt_addObjectsFromSet: a nil set appends nothing");
+
+    /* The nil test runs before any bounds work, so a nil object at an absurd
+       index is still a no-op, while a real object past the end raises. */
+    NSMutableArray *inserted = [@[@"a"] mutableCopy];
+    [inserted dvt_insertObjectIfNonNil:nil atIndex:99];
+    DVTExpectEqualObjects(inserted, (@[@"a"]),
+                          @"dvt_insertObjectIfNonNil:atIndex: a nil object is a no-op even out of range");
+    [inserted dvt_insertObjectIfNonNil:@"b" atIndex:0];
+    DVTExpectEqualObjects(inserted, (@[@"b", @"a"]), @"dvt_insertObjectIfNonNil:atIndex: inserts at the front");
+    [inserted dvt_insertObjectIfNonNil:@"c" atIndex:inserted.count];
+    DVTExpectEqualObjects(inserted, (@[@"b", @"a", @"c"]), @"dvt_insertObjectIfNonNil:atIndex: appends at count");
+    @try {
+        [inserted dvt_insertObjectIfNonNil:@"d" atIndex:99];
+        DVTExpect(NO, @"dvt_insertObjectIfNonNil:atIndex: past the end raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSRangeException],
+                  @"dvt_insertObjectIfNonNil:atIndex: past the end raises NSRangeException");
+    }
+
+    NSMutableArray *insertedMany = [@[@"a"] mutableCopy];
+    [insertedMany dvt_insertObjects:@[@"x", @"y"] atIndex:0];
+    DVTExpectEqualObjects(insertedMany, (@[@"x", @"y", @"a"]), @"dvt_insertObjects:atIndex: inserts at the front");
+    [insertedMany dvt_insertObjects:@[@"z"] atIndex:insertedMany.count];
+    DVTExpectEqualObjects(insertedMany, (@[@"x", @"y", @"a", @"z"]), @"dvt_insertObjects:atIndex: appends at count");
+    [insertedMany dvt_insertObjects:@[] atIndex:0];
+    DVTExpect(insertedMany.count == 4, @"dvt_insertObjects:atIndex: an empty array inserts nothing");
+    [insertedMany dvt_insertObjects:nil atIndex:0];
+    DVTExpect(insertedMany.count == 4, @"dvt_insertObjects:atIndex: a nil array inserts nothing");
+
+    /* Equal indices return before the remove-and-reinsert pair, which is
+       observable: an equal out-of-range move is a silent no-op rather than an
+       NSRangeException. */
+    NSMutableArray *moved = [@[@"a", @"b", @"c"] mutableCopy];
+    [moved dvt_moveObjectAtIndex:0 toIndex:2];
+    DVTExpectEqualObjects(moved, (@[@"b", @"c", @"a"]), @"dvt_moveObjectAtIndex:toIndex: moves forward");
+    [moved dvt_moveObjectAtIndex:2 toIndex:0];
+    DVTExpectEqualObjects(moved, (@[@"a", @"b", @"c"]), @"dvt_moveObjectAtIndex:toIndex: moves backward");
+    [moved dvt_moveObjectAtIndex:1 toIndex:1];
+    DVTExpectEqualObjects(moved, (@[@"a", @"b", @"c"]), @"dvt_moveObjectAtIndex:toIndex: equal indices are a no-op");
+    [moved dvt_moveObjectAtIndex:9 toIndex:9];
+    DVTExpectEqualObjects(moved, (@[@"a", @"b", @"c"]),
+                          @"dvt_moveObjectAtIndex:toIndex: equal out-of-range indices do not raise");
+    @try {
+        [moved dvt_moveObjectAtIndex:0 toIndex:99];
+        DVTExpect(NO, @"dvt_moveObjectAtIndex:toIndex: a destination past the end raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSRangeException],
+                  @"dvt_moveObjectAtIndex:toIndex: a destination past the end raises NSRangeException");
+    }
+
     NSMutableSet *set = [NSMutableSet setWithCapacity:0];
     [set dvt_addObjectIfNonNil:nil];
     DVTExpect(set.count == 0, @"NSMutableSet ignores nil");
