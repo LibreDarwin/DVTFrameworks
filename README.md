@@ -1061,13 +1061,23 @@ run reports at the end.
 
 ## Scope
 
-This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
-`dvt_` Objective-C methods across its categories, 250 of them in
-`DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
-exported C entry points, so they are absent from `nm`'s export list and only
-show up when the selector itself is read. This project implements 74 of them,
-chosen for what `IDETools` and the recovered usage actually reach. Callers using
-any of the other 452 will not find it here.
+This is a partial reimplementation. Apple's `DVTFoundation` installs 714
+`dvt`-prefixed methods across the classes it extends — 589 distinct selectors
+once the ones installed on more than one class are counted a single time. These
+are local Objective-C methods, not exported C entry points, so they are absent
+from `nm`'s export list and only show up when the selector itself is read. The
+counts come from walking the runtime after loading the binary rather than from
+its symbol table, which names 608 selectors and so includes ones that no longer
+carry an implementation.
+
+This project implements 113 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 601 will not find
+it here. Three of the 113 are additions rather than reproductions:
+`-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` are named in
+Apple's binary but carry no live implementation in this build, and
+`-[NSProcessInfo dvt_removeValueForEnvironmentVariable:]` is absent from it
+entirely, so the local versions fill gaps in the recovered surface instead of
+matching one. The other 110 are reproduced against the binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
