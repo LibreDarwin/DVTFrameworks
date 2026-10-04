@@ -1081,6 +1081,61 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     }];
 }
 
+#pragma mark - Partitioning
+
+- (void)dvt_stablePartitionObjectsPassingIsSuffixTest:(BOOL (^)(id object))test
+{
+    /* Apple splits on -count: at five or fewer it sorts the receiver in place with
+       NSSortStable, comparing @(test(first)) against @(test(second)) so that the
+       members failing the test come first; above five it takes the members that
+       pass, removes them, and appends them back at the end.
+
+       Both routes are stable and both leave the suffix last, so which one runs is
+       not observable in the result -- only the work done differs. The threshold is
+       reproduced because it is what decides that. */
+    if (self.count <= 5) {
+        [self sortWithOptions:NSSortStable
+             usingComparator:^NSComparisonResult(id first, id second) {
+                 return [[NSNumber numberWithBool:test(first)]
+                     compare:[NSNumber numberWithBool:test(second)]];
+             }];
+        return;
+    }
+    /* -indexesOfObjectsPassingTest: wants the index and stop pointer too. Apple's
+       wrapper simply forwards the object and ignores the other two, which compiles
+       to a tail call into the caller's block -- so the same adapter is written here
+       rather than reaching for a different API. */
+    NSIndexSet *passing = [self indexesOfObjectsPassingTest:^BOOL(id object, NSUInteger index, BOOL *stop) {
+        return test(object);
+    }];
+    NSArray *suffix = [self objectsAtIndexes:passing];
+    [self removeObjectsAtIndexes:passing];
+    /* The index range starts at the receiver's post-removal count, which is what
+       places the suffix after everything that stayed. */
+    [self insertObjects:suffix
+             atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(self.count, suffix.count)]];
+}
+
+- (NSString *)dvt_uniqueStringToAddToArray:(NSString *)string
+{
+    /* A string the receiver does not hold is answered unchanged. Otherwise Apple
+       appends " <n>" for n = 1, 2, 3, ... and returns the first one the receiver
+       does not hold -- so a gap in the middle is filled rather than skipped past.
+       Membership goes through a set built from the receiver, which makes it
+       -isEqual: rather than -isSame:, so an equal-but-distinct string counts as
+       already present. Nothing is inserted. */
+    NSSet *existing = [NSSet setWithArray:self];
+    if (![existing containsObject:string]) {
+        return string;
+    }
+    for (long suffix = 1;; suffix++) {
+        NSString *candidate = [NSString stringWithFormat:@"%@ %ld", string, suffix];
+        if (![existing containsObject:candidate]) {
+            return candidate;
+        }
+    }
+}
+
 #pragma mark - Recursive removal
 
 - (void)dvt_recursivelyRemoveAllObjects

@@ -379,6 +379,26 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)dvt_sortByValueBlock:(id (^)(id object))valueBlock
            duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
 
+/**
+  Moves the receiver's members into a stable partition in place.
+
+  Members for which `test` returns `YES` form the suffix, arriving after every
+  member that fails it. Both groups keep their original relative order, so the
+  result does not depend on how the partition is carried out.
+ */
+- (void)dvt_stablePartitionObjectsPassingIsSuffixTest:(BOOL (^)(id object))test;
+
+/**
+  Answers a string that is not already in the receiver.
+
+  If the receiver does not hold `string` by equality, it is returned unchanged.
+  Otherwise `" <n>"` is appended for `n` counting up from 1 until a variant the
+  receiver does not hold is found, which fills a gap in the numbering rather than
+  skipping past it. Membership is by equality, so a distinct but equal string
+  counts as present. Nothing is added to the receiver.
+ */
+- (NSString *)dvt_uniqueStringToAddToArray:(NSString *)string;
+
 @end
 
 @interface NSSet (DVTNSSetAdditions)

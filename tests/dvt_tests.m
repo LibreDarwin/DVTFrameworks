@@ -2008,6 +2008,125 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects(array, (@[@"a", @"cc", @"bbb"]),
                               @"dvt_sortByValueBlock: leaves the receiver sorted");
     }
+
+    /* The partition carries a threshold: at five or fewer Apple sorts in place,
+       above five it removes the passing members and appends them. Both routes are
+       stable and both leave the suffix last, so walking the counts across the
+       boundary is what shows the two routes agree. */
+    {
+        for (NSUInteger count = 0; count <= 8; count++) {
+            NSMutableArray *array = [NSMutableArray array];
+            for (NSUInteger i = 0; i < count; i++) {
+                [array addObject:@(i)];
+            }
+            [array dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) {
+                return [object unsignedIntegerValue] % 2 == 1;
+            }];
+            NSMutableArray *evens = [NSMutableArray array];
+            NSMutableArray *odds = [NSMutableArray array];
+            for (NSNumber *number in array) {
+                [(number.unsignedIntegerValue % 2 == 0 ? evens : odds) addObject:number];
+            }
+            DVTExpectEqualObjects(array, [evens arrayByAddingObjectsFromArray:odds],
+                                  ([NSString stringWithFormat:
+                                                 @"dvt_stablePartitionObjectsPassingIsSuffixTest: puts the odd "
+                                                 @"members last in order at count %lu",
+                                                 (unsigned long)count]));
+        }
+    }
+    {
+        /* Exact results at the boundary, so a regression in either route is visible
+           rather than hidden behind the ordering property above. */
+        NSMutableArray *small = [NSMutableArray arrayWithObjects:@0, @1, @2, @3, @4, nil];
+        [small dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) {
+            return [object unsignedIntegerValue] % 2 == 1;
+        }];
+        NSMutableArray *large = [NSMutableArray arrayWithObjects:@0, @1, @2, @3, @4, @5, nil];
+        [large dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) {
+            return [object unsignedIntegerValue] % 2 == 1;
+        }];
+        DVTExpectEqualObjects(small, (@[@0, @2, @4, @1, @3]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: partitions five members");
+        DVTExpectEqualObjects(large, (@[@0, @2, @4, @1, @3, @5]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: partitions six members the same way");
+    }
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a1", @"a2", @"b1", @"a3", @"b2", @"b3", nil];
+        [array dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) { return [object hasPrefix:@"b"]; }];
+        DVTExpectEqualObjects(array, (@[@"a1", @"a2", @"a3", @"b1", @"b2", @"b3"]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: keeps both groups in order");
+    }
+    {
+        NSMutableArray *all = [NSMutableArray arrayWithObjects:@"a", @"b", @"c", nil];
+        [all dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) { return YES; }];
+        NSMutableArray *none = [NSMutableArray arrayWithObjects:@"a", @"b", @"c", nil];
+        [none dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) { return NO; }];
+        DVTExpectEqualObjects(all, (@[@"a", @"b", @"c"]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: leaves an all-passing receiver alone");
+        DVTExpectEqualObjects(none, (@[@"a", @"b", @"c"]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: leaves a non-passing receiver alone");
+    }
+    {
+        /* Stability is the whole point, so an input already in partition order must
+           come back untouched rather than merely rearranged. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a", @"b", @"c", @"d", @"e", @"f", nil];
+        [array dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) {
+            return [object characterAtIndex:0] >= 'c';
+        }];
+        DVTExpectEqualObjects(array, (@[@"a", @"b", @"c", @"d", @"e", @"f"]),
+                              @"dvt_stablePartitionObjectsPassingIsSuffixTest: leaves an already partitioned receiver alone");
+    }
+    {
+        NSMutableArray *empty = [NSMutableArray array];
+        [empty dvt_stablePartitionObjectsPassingIsSuffixTest:^BOOL(id object) { return YES; }];
+        DVTExpectEqualObjects(empty, @[], @"dvt_stablePartitionObjectsPassingIsSuffixTest: accepts an empty receiver");
+    }
+
+    /* dvt_uniqueStringToAddToArray: only ever answers a string; it never inserts. */
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a", @"b", nil];
+        NSString *candidate = [@"c" mutableCopy];
+        DVTExpect([array dvt_uniqueStringToAddToArray:candidate] == candidate,
+                  @"dvt_uniqueStringToAddToArray: returns an absent string unchanged");
+        DVTExpectEqualObjects(array, (@[@"a", @"b"]),
+                              @"dvt_uniqueStringToAddToArray: does not insert the string it answers");
+    }
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObject:@"x"];
+        DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:@"x"], @"x 1",
+                              @"dvt_uniqueStringToAddToArray: numbers from one");
+    }
+    {
+        /* A gap is filled rather than skipped past, which is what a walk from one
+           upwards does and what appending past the highest would not. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"y", @"y 1", @"y 3", nil];
+        DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:@"y"], @"y 2",
+                              @"dvt_uniqueStringToAddToArray: fills a gap in the numbering");
+    }
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"x", @"x 1", @"x 2", @"x 3", nil];
+        DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:@"x"], @"x 4",
+                              @"dvt_uniqueStringToAddToArray: steps past every taken suffix");
+    }
+    {
+        /* Membership is by equality, so a distinct but equal string counts as
+           present and gets a suffix. */
+        NSString *twin = [@"dup" mutableCopy];
+        NSMutableArray *array = [NSMutableArray arrayWithObject:twin];
+        DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:[@"dup" mutableCopy]], @"dup 1",
+                              @"dvt_uniqueStringToAddToArray: treats an equal but distinct string as present");
+    }
+    {
+        NSMutableArray *empty = [NSMutableArray array];
+        DVTExpectEqualObjects([empty dvt_uniqueStringToAddToArray:@"z"], @"z",
+                              @"dvt_uniqueStringToAddToArray: answers any string for an empty receiver");
+    }
+    {
+        /* Non-string members are tolerated, since the receiver is turned into a set. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@1, @2, nil];
+        DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:@"k"], @"k",
+                              @"dvt_uniqueStringToAddToArray: tolerates non-string members");
+    }
 }
 
 #pragma mark - Property list values
