@@ -1561,6 +1561,129 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects([legal dvt_stringByManglingToLegalRFC1034Identifier], legal,
                               ([NSString stringWithFormat:@"legal RFC 1034 identifier '%@' is unchanged", legal]));
     }
+
+    /* -dvt_recursivelyRemoveAllObjects walks and empties exactly three classes:
+       NSMutableArray, NSMutableDictionary and NSMutableSet. Every case below is
+       an observation from the Apple oracle rather than an inference from the
+       method name, so the traversal's shape is pinned by behaviour. */
+    {
+        NSMutableArray *leaf = [NSMutableArray arrayWithObjects:@"a", nil];
+        NSMutableArray *inner = [NSMutableArray arrayWithObject:leaf];
+        NSMutableArray *outer = [NSMutableArray arrayWithObject:inner];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal empties the receiver");
+        DVTExpectEqualObjects(inner, @[], @"recursive removal empties a nested array");
+        DVTExpectEqualObjects(leaf, @[], @"recursive removal empties an array three levels down");
+    }
+    {
+        /* The other two classes are emptied too, not just arrays. */
+        NSMutableArray *array = [NSMutableArray arrayWithObject:@"a"];
+        NSMutableSet *set = [NSMutableSet setWithObject:@"s"];
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary setObject:@"d" forKey:@"k"];
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:array, set, dictionary, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(array, @[], @"recursive removal empties a nested array");
+        DVTExpectEqualObjects(set, [NSSet set], @"recursive removal empties a nested set");
+        DVTExpectEqualObjects(dictionary, @{}, @"recursive removal empties a nested dictionary");
+    }
+    {
+        /* Dictionaries are followed through -allValues, so a key is never
+           visited and keeps its contents even when it is a mutable collection
+           that would otherwise be emptied. */
+        NSMutableArray *key = [NSMutableArray arrayWithObject:@"k"];
+        NSMutableArray *value = [NSMutableArray arrayWithObject:@"v"];
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary setObject:value forKey:(id)key];
+        NSMutableArray *outer = [NSMutableArray arrayWithObject:dictionary];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(dictionary, @{}, @"recursive removal empties the dictionary");
+        DVTExpectEqualObjects(value, @[], @"recursive removal empties a dictionary value");
+        DVTExpectEqualObjects(key, @[@"k"], @"recursive removal leaves a dictionary key alone");
+    }
+    {
+        /* Anything that is not one of the three classes is stepped over, so an
+           immutable collection shields whatever mutable collections it holds. */
+        NSMutableArray *behindArray = [NSMutableArray arrayWithObject:@"a"];
+        NSMutableSet *behindSet = [NSMutableSet setWithObject:@"s"];
+        NSMutableArray *behindDictionaryValue = [NSMutableArray arrayWithObject:@"d"];
+        NSArray *frozen = @[behindArray];
+        NSSet *frozenSet = [NSSet setWithObject:behindSet];
+        NSDictionary *frozenDictionary = @{@"k": behindDictionaryValue};
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:frozen, frozenSet, frozenDictionary, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal empties the receiver holding frozen collections");
+        DVTExpectEqualObjects(behindArray, @[@"a"], @"recursive removal does not descend into an immutable array");
+        DVTExpectEqualObjects(behindSet, [NSSet setWithObject:@"s"],
+                              @"recursive removal does not descend into an immutable set");
+        DVTExpectEqualObjects(behindDictionaryValue, @[@"d"],
+                              @"recursive removal does not descend into an immutable dictionary");
+    }
+    {
+        /* A visited set is what bounds the traversal. The set compares by
+           equality, so a cycle back to the receiver terminates the same way a
+           repeated leaf does. */
+        NSMutableArray *outer = [NSMutableArray array];
+        NSMutableArray *inner = [NSMutableArray arrayWithObjects:@"i", nil];
+        [outer addObject:inner];
+        [inner addObject:outer];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal terminates on a cycle back to the receiver");
+        DVTExpectEqualObjects(inner, @[], @"recursive removal empties the other end of the cycle");
+    }
+    {
+        NSMutableArray *first = [NSMutableArray arrayWithObjects:@"1", nil];
+        NSMutableArray *second = [NSMutableArray arrayWithObject:first];
+        [first addObject:second];
+        [first dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(first, @[], @"recursive removal terminates on a two-node cycle");
+        DVTExpectEqualObjects(second, @[], @"recursive removal empties both ends of a two-node cycle");
+    }
+    {
+        /* Shared, not duplicated: one child reached twice is emptied once, and
+           the visited test is what stops the second visit from recursing again. */
+        NSMutableArray *shared = [NSMutableArray arrayWithObject:@"s"];
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:shared, shared, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal empties the receiver holding a shared child");
+        DVTExpectEqualObjects(shared, @[], @"recursive removal empties a shared child once");
+    }
+    {
+        /* Leaves are never emptied and never raise, so a receiver of plain
+           objects simply loses them. */
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:@"a", @1, @"b", nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal drops non-collection members without raising");
+    }
+    {
+        NSMutableArray *empty = [NSMutableArray array];
+        [empty dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(empty, @[], @"recursive removal on an empty receiver is a no-op");
+    }
+    {
+        /* An equal-but-distinct child is emptied as well. It compares equal to
+           its twin only until that twin has been emptied, so the visited test
+           cannot mistake it for one already handled. */
+        NSMutableArray *original = [NSMutableArray arrayWithObjects:@"a", nil];
+        NSMutableArray *twin = [NSMutableArray arrayWithObjects:@"a", nil];
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:original, twin, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(original, @[], @"recursive removal empties the first of two equal children");
+        DVTExpectEqualObjects(twin, @[], @"recursive removal empties a distinct but equal child too");
+    }
+    {
+        /* A mixed graph exercises all three classes against each other. */
+        NSMutableArray *array = [NSMutableArray arrayWithObject:@"a"];
+        NSMutableSet *set = [NSMutableSet setWithObject:array];
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary setObject:set forKey:@"k"];
+        NSMutableArray *outer = [NSMutableArray arrayWithObjects:array, set, dictionary, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, @[], @"recursive removal empties the receiver of a mixed graph");
+        DVTExpectEqualObjects(array, @[], @"recursive removal empties the array in a mixed graph");
+        DVTExpectEqualObjects(set, [NSSet set], @"recursive removal empties the set in a mixed graph");
+        DVTExpectEqualObjects(dictionary, @{}, @"recursive removal empties the dictionary in a mixed graph");
+    }
 }
 
 #pragma mark - Property list values

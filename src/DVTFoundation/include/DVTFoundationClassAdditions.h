@@ -319,6 +319,20 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)dvt_uniqueSortedInsert:(id)object
                  withComparator:(NSComparisonResult (^)(id first, id second))comparator;
 
+/**
+  Empties the receiver and every mutable collection reachable from it.
+
+  Only `NSMutableArray`, `NSMutableDictionary` and `NSMutableSet` are both
+  descended into and emptied. Dictionaries are followed through their values, so
+  their keys are left alone, and anything else is stepped over rather than
+  traversed: an immutable collection reachable from the receiver keeps its
+  contents, including any mutable collections they hold.
+
+  A set of visited collections makes the traversal terminate on cycles, including
+  cycles back to the receiver itself.
+ */
+- (void)dvt_recursivelyRemoveAllObjects;
+
 @end
 
 @interface NSSet (DVTNSSetAdditions)

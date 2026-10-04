@@ -686,6 +686,64 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
 
 @end
 
+/*
+ Only the three mutable collection classes are emptied, and they are the only
+ ones traversed, so -removeAllObjects is reached through a protocol rather than
+ a cast to whichever class happened to match.
+ */
+@protocol DVTCollectionEmptying <NSObject>
+- (void)removeAllObjects;
+@end
+
+/*
+ Apple's _DVTRecursivelyRemoveAllObjects: is an -isKindOfClass: chain over
+ NSMutableArray, NSMutableDictionary and NSMutableSet. Each matching branch marks
+ the object visited, recurses into its members, and then branches to one shared
+ tail that calls -removeAllObjects; the not-taken edge of a test falls through to
+ the next test, so the chain is a sequence rather than a choice.
+
+ Two cases skip that tail, which is why the visited test has to return outright
+ instead of wrapping the chain:
+
+ - An object already in the visited set. The set is an NSMutableSet, so
+   -containsObject: compares by equality rather than identity, which is what
+   makes cycles terminate.
+ - An object matching none of the three classes. Leaves are stepped over, and so
+   are the immutable collections: an NSArray holding a mutable array leaves that
+   array untouched, because the immutable one is never descended into.
+
+ Dictionaries are descended through -allValues, so their keys are never visited
+ and never emptied.
+ */
+static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
+{
+    if ([visited containsObject:object]) {
+        return;
+    }
+    if ([object isKindOfClass:[NSMutableArray class]]) {
+        [visited addObject:object];
+        for (id child in (NSMutableArray *)object) {
+            DVTRemoveAllObjectsRecursively(child, visited);
+        }
+    } else if ([object isKindOfClass:[NSMutableDictionary class]]) {
+        [visited addObject:object];
+        for (id child in ((NSDictionary *)object).allValues) {
+            DVTRemoveAllObjectsRecursively(child, visited);
+        }
+    } else if ([object isKindOfClass:[NSMutableSet class]]) {
+        [visited addObject:object];
+        for (id child in (NSMutableSet *)object) {
+            DVTRemoveAllObjectsRecursively(child, visited);
+        }
+    } else {
+        return;
+    }
+    /* A member that is also in the receiver can only have been reached through
+       the visited test above, which returns before this point, so mutating the
+       receiver here cannot invalidate an enumeration in progress. */
+    [(id<DVTCollectionEmptying>)object removeAllObjects];
+}
+
 @implementation NSMutableArray (DVTFoundationClassAdditions)
 
 - (void)dvt_addObjectIfNonNil:(id)object
@@ -964,6 +1022,13 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     }
     [self insertObject:object atIndex:index];
     return YES;
+}
+
+- (void)dvt_recursivelyRemoveAllObjects
+{
+    /* Apple hands its helper a freshly allocated NSMutableSet and nothing else;
+       the receiver is reached by the helper's first step. */
+    DVTRemoveAllObjectsRecursively(self, [NSMutableSet set]);
 }
 
 @end
