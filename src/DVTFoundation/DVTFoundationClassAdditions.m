@@ -287,6 +287,74 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return DVTAllObjectsPassTest(self, test);
 }
 
+- (NSRange)dvt_rangeOfArray:(NSArray *)array
+{
+    return [self dvt_rangeOfArray:array inRange:NSMakeRange(0, self.count)];
+}
+
+/* A search for `array` as a contiguous run inside `range`, comparing member by
+   member with -isEqual: and answering the earliest run that fits. When two runs
+   of different lengths start at different places the earlier one wins even if it
+   is shorter, so the candidates are tried in order and the first complete match
+   is taken rather than the longest.
+
+   The window is honoured by only trying start positions whose whole run lands
+   inside it, so a run that begins inside the window but runs past its end is not
+   found. Nothing is found when the window is empty, when `array` is empty or
+   `nil`, or when no complete run fits at all -- all of which answer the same
+   NSNotFound range rather than raising.
+
+   Apple bounds the search the same way and then asserts that the run it found
+   lies inside the window. That assertion cannot fire given the loop bounds, and
+   it is left out here rather than reproduced as a check on values already
+   guaranteed by the loop. */
+- (NSRange)dvt_rangeOfArray:(NSArray *)array inRange:(NSRange)range
+{
+    if (array == nil || self.count == 0 || array.count == 0 || range.length == 0) {
+        return NSMakeRange(NSNotFound, 0);
+    }
+    /* Refuse a window that leaves the receiver, or that is too short to hold the
+       run, rather than reading past either end. */
+    if (range.location + range.length > self.count || array.count > range.length || range.location > NSMaxRange(range) - array.count) {
+        return NSMakeRange(NSNotFound, 0);
+    }
+    for (NSUInteger start = range.location; start + array.count <= NSMaxRange(range); start++) {
+        NSUInteger offset = 0;
+        while (offset < array.count &&
+               [[self objectAtIndex:start + offset] isEqual:[array objectAtIndex:offset]]) {
+            offset++;
+        }
+        if (offset == array.count) {
+            return NSMakeRange(start, array.count);
+        }
+    }
+    return NSMakeRange(NSNotFound, 0);
+}
+
+/* The last member passing `test`, found by asking for the first one that passes
+   while walking the receiver backwards. nil when none passes.
+
+   Apple hands its reversed enumerator straight to a private helper that scans it
+   in bulk; going through this port's own `dvt_firstObjectPassingTest:` answers
+   the same question over the reversed order. */
+- (id)dvt_lastObjectPassingTest:(BOOL (^)(id object))test
+{
+    return [[[self reverseObjectEnumerator] allObjects] dvt_firstObjectPassingTest:test];
+}
+
+- (id)dvt_objectBeforeFirstOccurenceOfObject:(id)object
+{
+    /* The member before the first occurrence, so nil both when the occurrence is
+       the receiver's first member and when the receiver holds no such object --
+       those are the two values -indexOfObject: can hand back that have nothing
+       in front of them. */
+    NSUInteger index = [self indexOfObject:object];
+    if (index == 0 || index == NSNotFound) {
+        return nil;
+    }
+    return [self objectAtIndex:index - 1];
+}
+
 /* Both are bare forwards in the binary, so they stay forwards here rather than
    growing their own copy of the logic. */
 

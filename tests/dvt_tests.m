@@ -1069,6 +1069,134 @@ static void DVTTestClassAdditions(void)
 
     DVTExpectEqualObjects([sample dvt_objectsOfClass:[NSString class]], sample, @"objectsOfClass");
 
+    /* dvt_rangeOfArray: finds a run contiguously, member by member, with isEqual:
+       rather than as a set of members that happens to be present. */
+    {
+        NSArray *haystack = @[@"a", @"b", @"c", @"d", @"e", @"f", @"g"];
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"a", @"b"]], NSMakeRange(0, 2)),
+                  @"rangeOfArray finds a run at the front");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"c", @"d"]], NSMakeRange(2, 2)),
+                  @"rangeOfArray finds a run in the middle");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"f", @"g"]], NSMakeRange(5, 2)),
+                  @"rangeOfArray finds a run at the tail");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:haystack], NSMakeRange(0, 7)),
+                  @"rangeOfArray finds the receiver inside itself");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"g"]], NSMakeRange(6, 1)),
+                  @"rangeOfArray finds a single member");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"a", @"c"]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray needs the members to be contiguous");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"b", @"a"]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray does not reorder the members it is given");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"a", @"a"]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray needs each member present, not just some copy of it");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"f", @"g", @"h"]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray rejects a run that runs off the end");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray finds nothing for an empty needle");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:nil], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray finds nothing for a nil needle");
+        DVTExpect(NSEqualRanges([@[] dvt_rangeOfArray:@[@"a"]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray finds nothing in an empty receiver");
+        DVTExpect(NSEqualRanges([@[] dvt_rangeOfArray:@[]], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray finds nothing when both are empty");
+        NSArray *tooLong = @[@"a", @"b", @"c", @"d", @"e", @"f", @"g", @"h"];
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:tooLong], NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray rejects a needle longer than the receiver");
+        /* Two runs of the same length: the earlier answers. A longer run later
+           does not displace an earlier short one either. */
+        DVTExpect(NSEqualRanges([@[@"x", @"y", @"m", @"x", @"y"] dvt_rangeOfArray:@[@"x", @"y"]],
+                                NSMakeRange(0, 2)),
+                  @"rangeOfArray answers the earlier of two equal runs");
+        NSArray *greedy = @[@"p", @"q", @"r", @"s", @"r", @"s", @"t"];
+        DVTExpect(NSEqualRanges([greedy dvt_rangeOfArray:@[@"r", @"s"]], NSMakeRange(2, 2)),
+                  @"rangeOfArray prefers an earlier short run over a longer one");
+        DVTExpect(NSEqualRanges([greedy dvt_rangeOfArray:@[@"r", @"s", @"t"]], NSMakeRange(4, 3)),
+                  @"rangeOfArray still finds the longer run when nothing earlier matches");
+        /* Membership is equality, and numbers compare by value. */
+        NSString *equalNeedle = [NSString stringWithFormat:@"%@", @"c"];
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[equalNeedle]], NSMakeRange(2, 1)),
+                  @"rangeOfArray matches an equal-but-distinct member");
+        DVTExpect(NSEqualRanges([@[@1, @2, @3] dvt_rangeOfArray:@[@1, @2]], NSMakeRange(0, 2)),
+                  @"rangeOfArray compares numbers by value");
+    }
+    /* The windowed form is the same question asked of part of the receiver. */
+    {
+        NSArray *haystack = @[@"a", @"b", @"c", @"d", @"e", @"f", @"g"];
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"c", @"d"] inRange:NSMakeRange(0, 7)],
+                                NSMakeRange(2, 2)),
+                  @"rangeOfArray:inRange: finds a run inside the window");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"c", @"d"] inRange:NSMakeRange(4, 3)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: ignores a run outside the window");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"c", @"d"] inRange:NSMakeRange(1, 6)],
+                                NSMakeRange(2, 2)),
+                  @"rangeOfArray:inRange: finds a run in a window that starts earlier");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"c", @"d"] inRange:NSMakeRange(0, 4)],
+                                NSMakeRange(2, 2)),
+                  @"rangeOfArray:inRange: finds a run ending exactly at the window's end");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"e", @"f", @"g"] inRange:NSMakeRange(4, 3)],
+                                NSMakeRange(4, 3)),
+                  @"rangeOfArray:inRange: finds a run filling the whole window");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"e"] inRange:NSMakeRange(2, 0)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: finds nothing in an empty window");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"b", @"c"] inRange:NSMakeRange(3, 2)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: finds nothing when the needle is longer than the window");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[@"a"] inRange:NSMakeRange(5, 9)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: finds nothing in a window past the end");
+        DVTExpect(NSEqualRanges([haystack dvt_rangeOfArray:@[] inRange:NSMakeRange(0, 7)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: finds nothing for an empty needle");
+        DVTExpect(NSEqualRanges([@[] dvt_rangeOfArray:@[@"a"] inRange:NSMakeRange(0, 0)],
+                                NSMakeRange(NSNotFound, 0)),
+                  @"rangeOfArray:inRange: finds nothing in an empty receiver");
+        DVTExpect(NSEqualRanges([@[@"x", @"y", @"m", @"x", @"y"]
+                                    dvt_rangeOfArray:@[@"x", @"y"] inRange:NSMakeRange(2, 3)],
+                                NSMakeRange(3, 2)),
+                  @"rangeOfArray:inRange: picks the run inside the window, not the earlier one");
+        /* The plain form is the windowed one over the whole receiver. */
+        NSArray *windowed = @[@"a", @"b", @"c", @"d", @"e"];
+        DVTExpect(NSEqualRanges([windowed dvt_rangeOfArray:@[@"b", @"c"]],
+                                [windowed dvt_rangeOfArray:@[@"b", @"c"] inRange:NSMakeRange(0, windowed.count)]),
+                  @"rangeOfArray searches the whole receiver");
+    }
+    /* The last member passing a test, and the member before a first occurrence. */
+    {
+        NSArray *sample = @[@"a", @"bb", @"c"];
+        DVTExpectEqualObjects([sample dvt_lastObjectPassingTest:^BOOL(id o) { return [o isEqual:@"bb"]; }], @"bb",
+                              @"lastObjectPassingTest finds a match in the middle");
+        DVTExpectEqualObjects([sample dvt_lastObjectPassingTest:^BOOL(id o) { return [o isEqual:@"a"]; }], @"a",
+                              @"lastObjectPassingTest finds a match at the front");
+        DVTExpectEqualObjects([sample dvt_lastObjectPassingTest:^BOOL(id o) { return [o isEqual:@"c"]; }], @"c",
+                              @"lastObjectPassingTest finds a match at the tail");
+        DVTExpectEqualObjects([sample dvt_lastObjectPassingTest:^BOOL(id o) { return YES; }], @"c",
+                              @"lastObjectPassingTest with a universal test answers the last member");
+        DVTExpect([sample dvt_lastObjectPassingTest:^BOOL(id o) { return NO; }] == nil,
+                  @"lastObjectPassingTest answers nil when nothing passes");
+        DVTExpect([@[] dvt_lastObjectPassingTest:^BOOL(id o) { return YES; }] == nil,
+                  @"lastObjectPassingTest answers nil for an empty receiver");
+
+        DVTExpectEqualObjects([sample dvt_objectBeforeFirstOccurenceOfObject:@"bb"], @"a",
+                              @"objectBeforeFirstOccurenceOfObject answers the member in front");
+        DVTExpectEqualObjects([sample dvt_objectBeforeFirstOccurenceOfObject:@"c"], @"bb",
+                              @"objectBeforeFirstOccurenceOfObject works at the tail");
+        DVTExpect([sample dvt_objectBeforeFirstOccurenceOfObject:@"a"] == nil,
+                  @"objectBeforeFirstOccurenceOfObject answers nil at the front");
+        DVTExpect([sample dvt_objectBeforeFirstOccurenceOfObject:@"z"] == nil,
+                  @"objectBeforeFirstOccurenceOfObject answers nil when absent");
+        DVTExpect([@[] dvt_objectBeforeFirstOccurenceOfObject:@"a"] == nil,
+                  @"objectBeforeFirstOccurenceOfObject answers nil for an empty receiver");
+        DVTExpect([sample dvt_objectBeforeFirstOccurenceOfObject:nil] == nil,
+                  @"objectBeforeFirstOccurenceOfObject answers nil for a nil argument");
+        DVTExpect([@[@"x", @"y", @"x"] dvt_objectBeforeFirstOccurenceOfObject:@"x"] == nil,
+                  @"objectBeforeFirstOccurenceOfObject looks before the first occurrence, not a later one");
+        NSString *twin = [NSString stringWithFormat:@"%@", @"bb"];
+        DVTExpectEqualObjects([sample dvt_objectBeforeFirstOccurenceOfObject:twin], @"a",
+                              @"objectBeforeFirstOccurenceOfObject matches by equality");
+    }
+
     DVTExpect([sample dvt_containsObjectIdenticalTo:[sample objectAtIndex:0]], @"identical object found");
     NSString *equalButDistinct = [NSString stringWithFormat:@"%@", @"a"];
     DVTExpect(![sample dvt_containsObjectIdenticalTo:equalButDistinct],

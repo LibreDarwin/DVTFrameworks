@@ -81,6 +81,40 @@ NS_ASSUME_NONNULL_BEGIN
  faults on a non-empty array.
  */
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
+
+/**
+ The range of the first run of `array` found contiguously inside the receiver,
+ comparing members with `isEqual:`, or `{NSNotFound, 0}` when there is none.
+
+ Candidates are tried left to right, so when runs of different lengths start in
+ different places the earlier one answers even if it is shorter. An empty or
+ `nil` `array` finds nothing.
+ */
+- (NSRange)dvt_rangeOfArray:(NSArray *)array;
+
+/**
+ The same search restricted to `range`.
+
+ Only start positions whose whole run lands inside `range` are tried, so a run
+ that begins inside the window but would run past its end is not found. When no
+ complete run fits inside the window -- because it is empty, shorter than
+ `array`, or leaves the receiver -- the answer is `{NSNotFound, 0}` rather than
+ an exception.
+ */
+- (NSRange)dvt_rangeOfArray:(NSArray *)array inRange:(NSRange)range;
+
+/** The last member satisfying `test`, or `nil` when none does. */
+- (id _Nullable)dvt_lastObjectPassingTest:(BOOL (^)(id object))test;
+
+/**
+ The member immediately before the first occurrence of `object`, or `nil` when
+ `object` is absent or is the receiver's first member.
+
+ The selector's spelling is Apple's, misspelling included, and is kept as it is
+ so callers written against the binary still match.
+ */
+- (id _Nullable)dvt_objectBeforeFirstOccurenceOfObject:(id)object;
+
 /** How many elements satisfy `test`. */
 - (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
 
