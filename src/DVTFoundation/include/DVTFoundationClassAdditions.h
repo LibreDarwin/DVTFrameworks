@@ -236,6 +236,40 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (NSInteger)dvt_sortedInsertionIndexForObject:(id)object withComparisonSelector:(SEL)selector;
 
+/**
+ The receiver sorted by a derived value, answering a new immutable array and
+ leaving the receiver untouched even when the receiver is itself mutable.
+
+ `valueBlock` is applied to each element and the resulting values are compared
+ with `compare:`, so the ordering follows the block's output rather than the
+ elements themselves. A derived value of `nil` trips an assertion rather than
+ being compared, as it does in the in-place `dvt_sortByValueBlock:`; the
+ assertion names the element whose value came back empty.
+
+ Elements whose derived values come out equal are reported as equal, leaving
+ their relative order to the sort.
+
+ With one element or fewer there is nothing to compare, so the sort is skipped
+ and `valueBlock` is never asked. That is why a block returning `nil` is
+ harmless on a short receiver and only asserts once a comparison is made.
+ */
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock;
+
+/**
+ As `dvt_objectsSortedByValueBlock:`, with `duplicateHandler` breaking ties.
+
+ The handler runs only for elements whose derived values have already compared
+ equal, and it receives the two elements rather than the two derived values, so
+ it can order a tie by whatever `valueBlock` discarded. Its result becomes the
+ comparison result. A `nil` handler behaves exactly as in
+ `dvt_objectsSortedByValueBlock:`.
+
+ A handler breaks ties rather than removing them, so elements sharing a derived
+ value are all kept.
+ */
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+                         duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
+
 @end
 
 @interface NSMutableArray (DVTFoundationClassAdditions)

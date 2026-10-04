@@ -2242,6 +2242,162 @@ static void DVTTestClassAdditions(void)
                               @"dvt_sortByValueBlock: leaves the receiver sorted");
     }
 
+    /* The derived-value sort is the same comparator applied to a private mutable
+       copy, and the answer is copied back down to an immutable array. */
+    {
+        NSArray *sorted = [@[@"bbb", @"a", @"cc"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"a", @"cc", @"bbb"]),
+                              @"dvt_objectsSortedByValueBlock: orders by the derived value");
+        NSArray *descending = [@[@"bbb", @"a", @"cc"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @(-(NSInteger)[object length]);
+        }];
+        DVTExpectEqualObjects(descending, (@[@"bbb", @"cc", @"a"]),
+                              @"dvt_objectsSortedByValueBlock: orders descending when the value block negates");
+    }
+    {
+        /* The receiver is never reordered, and a mutable one is not reordered
+           either even though a mutable copy is what gets sorted. */
+        NSMutableArray *original = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", nil];
+        NSMutableArray *alias = original;
+        NSArray *sorted = [original dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        DVTExpectEqualObjects(original, (@[@"bbb", @"a", @"cc"]),
+                              @"dvt_objectsSortedByValueBlock: leaves the receiver alone");
+        DVTExpect(alias == original, @"dvt_objectsSortedByValueBlock: does not sort the receiver in place");
+        DVTExpect(sorted != original, @"dvt_objectsSortedByValueBlock: answers a new array");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"dvt_objectsSortedByValueBlock: answers an immutable array even for a mutable receiver");
+    }
+    {
+        /* At one member or fewer the sort is skipped, so the value block is never
+           asked. That is why a block returning nil is harmless here. */
+        NSArray *single = @[@"only"];
+        __block int calls = 0;
+        NSArray *sorted = [single dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return nil;
+        }];
+        DVTExpect(calls == 0, @"dvt_objectsSortedByValueBlock: never asks the value block for one member");
+        DVTExpectEqualObjects(sorted, single, @"dvt_objectsSortedByValueBlock: answers one member unchanged");
+        DVTExpect(sorted == single, @"dvt_objectsSortedByValueBlock: hands back an immutable one member receiver");
+    }
+    {
+        /* The short path is -copy, so a mutable receiver is still copied rather
+           than handed back mutable. */
+        NSMutableArray *singleMutable = [NSMutableArray arrayWithObject:@"only"];
+        NSArray *sorted = [singleMutable dvt_objectsSortedByValueBlock:^id(id object) {
+            return nil;
+        }];
+        DVTExpect(sorted != singleMutable, @"dvt_objectsSortedByValueBlock: copies a mutable one member receiver");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"dvt_objectsSortedByValueBlock: answers an immutable array for a mutable one member receiver");
+        DVTExpect([singleMutable isKindOfClass:[NSMutableArray class]],
+                  @"dvt_objectsSortedByValueBlock: leaves a mutable receiver mutable");
+    }
+    {
+        NSArray *empty = @[];
+        __block int calls = 0;
+        NSArray *sorted = [empty dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return nil;
+        }];
+        DVTExpect(calls == 0, @"dvt_objectsSortedByValueBlock: never asks the value block for an empty receiver");
+        DVTExpect(sorted.count == 0, @"dvt_objectsSortedByValueBlock: answers an empty array for an empty receiver");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"dvt_objectsSortedByValueBlock: answers an immutable array for an empty receiver");
+    }
+    {
+        /* Two members is where the sorting path begins, so this is the smallest
+           receiver on which the value block is consulted at all. */
+        NSArray *two = [NSArray arrayWithObjects:@"bb", @"a", nil];
+        __block int calls = 0;
+        NSArray *sorted = [two dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return @([object length]);
+        }];
+        DVTExpect(calls > 0, @"dvt_objectsSortedByValueBlock: asks the value block for two members");
+        DVTExpectEqualObjects(sorted, (@[@"a", @"bb"]),
+                              @"dvt_objectsSortedByValueBlock: orders two members");
+    }
+    {
+        /* The duplicate handler breaks ties rather than removing them, so members
+           sharing a derived value are all kept. */
+        NSArray *kept = [@[@"bb", @"a", @"bb", @"a"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        DVTExpectEqualObjects(kept, (@[@"a", @"a", @"bb", @"bb"]),
+                              @"dvt_objectsSortedByValueBlock: keeps members that share a derived value");
+        NSArray *keptWithHandler = [@[@"bb", @"a", @"bb", @"a"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        } duplicateHandler:^NSComparisonResult(id first, id second) {
+            return [first compare:second];
+        }];
+        DVTExpectEqualObjects(keptWithHandler, (@[@"a", @"a", @"bb", @"bb"]),
+                              @"dvt_objectsSortedByValueBlock:duplicateHandler: orders ties but keeps them");
+    }
+    {
+        /* The handler is handed the members and runs only on ties, exactly as in
+           the in-place sort, because it is the same comparator. */
+        NSArray *sorted = [@[@"bbb", @"a", @"cc"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @"all-equal";
+        } duplicateHandler:^NSComparisonResult(id first, id second) {
+            return [first compare:second];
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"a", @"bbb", @"cc"]),
+                              @"dvt_objectsSortedByValueBlock:duplicateHandler: can break ties by member");
+        __block int calls = 0;
+        NSArray *distinct = [@[@"bb", @"a", @"cc"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        } duplicateHandler:^NSComparisonResult(id first, id second) {
+            calls++;
+            return NSOrderedSame;
+        }];
+        DVTExpectEqualObjects(distinct, (@[@"a", @"bb", @"cc"]),
+                              @"dvt_objectsSortedByValueBlock:duplicateHandler: returning NSOrderedSame sorts normally");
+        (void)calls;
+    }
+    {
+        /* With every derived value equal and no handler, the tie is left to the
+           sort, matching the in-place form. */
+        NSArray *sorted = [@[@"aa", @"bb"] dvt_objectsSortedByValueBlock:^id(id object) {
+            return @"same";
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"aa", @"bb"]),
+                              @"dvt_objectsSortedByValueBlock: leaves an all-ties receiver to the sort");
+    }
+    {
+        /* The one argument form tail-calls with a null handler, so it matches the
+           two argument form spelled with nil. */
+        NSArray *members = @[@"bbb", @"a", @"cc", @"dd", @"e"];
+        NSArray *oneArgument = [members dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        NSArray *nilHandler = [members dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        } duplicateHandler:nil];
+        DVTExpectEqualObjects(oneArgument, (@[@"a", @"e", @"cc", @"dd", @"bbb"]),
+                              @"dvt_objectsSortedByValueBlock: sorts by the derived value");
+        DVTExpectEqualObjects(oneArgument, nilHandler,
+                              @"dvt_objectsSortedByValueBlock: matches the two argument form with a nil handler");
+    }
+    {
+        /* A derived value of nil asserts once there is a comparison to make,
+           naming the member whose value came back empty. */
+        DVTTestCapturingHandler *handler = [DVTTestCapturingHandler new];
+        [DVTAssertionReportHandler setCurrentHandler:handler];
+        NSArray *two = [NSArray arrayWithObjects:@"bb", @"a", nil];
+        [two dvt_objectsSortedByValueBlock:^id(id object) { return nil; }];
+        [DVTAssertionReportHandler setCurrentHandler:nil];
+        NSString *joined = [handler.reports componentsJoinedByString:@"\n"];
+        DVTExpect([joined rangeOfString:@"projectionBlock(obj1)"].location != NSNotFound,
+                  @"dvt_objectsSortedByValueBlock: asserts on a nil derived value");
+        DVTExpect([joined rangeOfString:@"projectionBlock(obj2)"].location != NSNotFound,
+                  @"dvt_objectsSortedByValueBlock: names both sides of the comparison");
+    }
+
     /* The partition carries a threshold: at five or fewer Apple sorts in place,
        above five it removes the passing members and appends them. Both routes are
        stable and both leave the suffix last, so walking the counts across the

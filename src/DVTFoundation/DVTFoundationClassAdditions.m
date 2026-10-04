@@ -808,6 +808,42 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
                                    withComparator:DVTComparatorForSelector(selector)];
 }
 
+#pragma mark - Sorting
+
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+{
+    /* Apple loads a null into the third argument and tail-calls, so this is
+       exactly the two-argument form with no duplicate handler. */
+    return [self dvt_objectsSortedByValueBlock:valueBlock duplicateHandler:nil];
+}
+
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+                         duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler
+{
+    /* Sorting happens on a private mutable copy and the answer is copied back
+       down to an immutable array, so the receiver is never reordered -- not even
+       when the receiver is itself mutable.
+
+       At one member or fewer there is nothing to compare, and Apple skips the
+       sort entirely rather than sorting a copy it would not change. Two things
+       follow from that. The value block is never asked, so a block that returns
+       nil is harmless on a short receiver and only asserts once there is a
+       comparison to make. And the fast path is -copy, which hands back an
+       already-immutable receiver unchanged while still copying a mutable one, so
+       the answer is immutable either way.
+
+       The comparator is the one the in-place sort builds, so the ordering is
+       driven by the block's output, both derived values are asserted non-nil,
+       and the duplicate handler is consulted only on a tie and is handed the two
+       members rather than the two values. */
+    if (self.count <= 1) {
+        return [self copy];
+    }
+    NSMutableArray *mutableCopy = [self mutableCopy];
+    [mutableCopy dvt_sortByValueBlock:valueBlock duplicateHandler:duplicateHandler];
+    return [mutableCopy copy];
+}
+
 @end
 
 /*
