@@ -45,6 +45,30 @@ static id DVTFirstObject(NSArray *array)
     return array.count > 0 ? [array objectAtIndex:0] : nil;
 }
 
+/** Shared body of `dvt_anyObjectsPassTest:` on the set-like classes. Unlike the
+    array spelling, which reaches its answer through `dvt_firstObjectPassingTest:`,
+    Apple's `NSSet` and `NSHashTable` each scan directly and stop at the first
+    member that passes. */
+static BOOL DVTAnyObjectsPassTest(id<NSFastEnumeration> collection, BOOL (^test)(id object))
+{
+    if (test == nil) {
+        /* The array spelling answers a nil block by handing back the first member,
+           so it comes out `YES` exactly when there is one. Matching that keeps the
+           two spellings of the question agreeing across the three classes. */
+        for (id object in collection) {
+            (void)object;
+            return YES;
+        }
+        return NO;
+    }
+    for (id object in collection) {
+        if (test(object)) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 /** Shared body of `dvt_allObjectsPassTest:`, which carries the same selector on
     `NSArray`, `NSSet` and `NSHashTable`. Running out of elements is a `YES`;
     only an element failing the test ends it early. */
@@ -261,6 +285,19 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test
 {
     return DVTAllObjectsPassTest(self, test);
+}
+
+/* Both are bare forwards in the binary, so they stay forwards here rather than
+   growing their own copy of the logic. */
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_allObjectsPassTest:test];
+}
+
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_anyObjectsPassTest:test];
 }
 
 - (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
@@ -1177,6 +1214,11 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return DVTAllObjectsPassTest(self, test);
 }
 
+- (BOOL)dvt_anyObjectsPassTest:(BOOL (^)(id object))test
+{
+    return DVTAnyObjectsPassTest(self, test);
+}
+
 - (BOOL)dvt_hasContent
 {
     return self.count != 0;
@@ -1185,6 +1227,23 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 - (BOOL)dvt_isNonEmpty
 {
     return self.count != 0;
+}
+
+@end
+
+@implementation NSSet (DVTFoundationClassAdditions_DEPRECATED)
+
+/* Both are bare forwards in the binary, so they stay forwards here rather than
+   growing their own copy of the logic. */
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_allObjectsPassTest:test];
+}
+
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_anyObjectsPassTest:test];
 }
 
 @end
@@ -1207,11 +1266,30 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return DVTAllObjectsPassTest(self, test);
 }
 
+- (BOOL)dvt_anyObjectsPassTest:(BOOL (^)(id object))test
+{
+    return DVTAnyObjectsPassTest(self, test);
+}
+
 - (void)dvt_addObjectIfNonNil:(id)object
 {
     if (object != nil) {
         [self addObject:object];
     }
+}
+
+@end
+
+@implementation NSHashTable (DVTFoundationClassAdditions_DEPRECATED)
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_allObjectsPassTest:test];
+}
+
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test
+{
+    return [self dvt_anyObjectsPassTest:test];
 }
 
 @end

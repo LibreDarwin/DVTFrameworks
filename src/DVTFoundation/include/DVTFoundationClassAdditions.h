@@ -414,6 +414,15 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
 
+/**
+ `YES` when some member satisfies `test`, stopping at the first that does.
+
+ An empty set is `NO` without ever calling `test`. A `nil` `test` is treated as
+ the same way it is on `NSArray`, where it answers `YES` for a set that has
+ anything in it.
+ */
+- (BOOL)dvt_anyObjectsPassTest:(BOOL (^)(id object))test;
+
 /** `YES` when the receiver has at least one member. Alias of `dvt_hasContent`. */
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
@@ -436,6 +445,13 @@ NS_ASSUME_NONNULL_BEGIN
  treated the same way, which deviates from Apple as noted on `NSSet`.
  */
 - (BOOL)dvt_allObjectsPassTest:(BOOL (^)(id object))test;
+
+/**
+ `YES` when some object satisfies `test`, stopping at the first that does.
+
+ Empty and `nil`-block behaviour follow `NSSet`, as noted above.
+ */
+- (BOOL)dvt_anyObjectsPassTest:(BOOL (^)(id object))test;
 
 /** Adds `object` only when it is non-`nil`. */
 - (void)dvt_addObjectIfNonNil:(id _Nullable)object;
@@ -561,6 +577,47 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
+
+@end
+
+/* The older spelling of the two collection tests. Apple keeps them in categories
+   of their own, all three named the same thing, and in the binary each one is a
+   bare tail call onto the current spelling -- `dvt_areAllObjectsPassingTest:`
+   onto `dvt_allObjectsPassTest:` and `dvt_areAnyObjectsPassingTest:` onto
+   `dvt_anyObjectsPassTest:`. The forwarding is reproduced here rather than a
+   second copy of the logic, so the two spellings cannot drift apart.
+
+   Only `NSArray` carries `dvt_anyObjectsPassTest:` in Apple's inventory, so the
+   set-like classes get that spelling alongside the forward, which is also what
+   the binary does: their `dvt_anyObjectsPassTest:` is a direct fast-enumeration
+   scan of its own rather than a call through `dvt_firstObjectPassingTest:`.
+
+   The category name is what the binary records and is matched. A compiler
+   deprecation attribute is not: attributes leave no trace in a Mach-O method
+   list, so there is nothing here to check one against, and adding one the
+   binary may not carry would warn callers for a deprecation that may not exist. */
+
+/** `YES` when every member satisfies `test`. Forwards to `dvt_allObjectsPassTest:`. */
+@interface NSArray (DVTFoundationClassAdditions_DEPRECATED)
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test;
+
+/** `YES` when some member satisfies `test`. Forwards to `dvt_anyObjectsPassTest:`. */
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test;
+
+@end
+
+@interface NSSet (DVTFoundationClassAdditions_DEPRECATED)
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test;
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test;
+
+@end
+
+@interface NSHashTable (DVTFoundationClassAdditions_DEPRECATED)
+
+- (BOOL)dvt_areAllObjectsPassingTest:(BOOL (^)(id object))test;
+- (BOOL)dvt_areAnyObjectsPassingTest:(BOOL (^)(id object))test;
 
 @end
 

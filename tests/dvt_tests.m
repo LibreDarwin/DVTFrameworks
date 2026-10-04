@@ -962,6 +962,111 @@ static void DVTTestClassAdditions(void)
                   dvt_allObjectsPassTest:^BOOL(id o) { return NO; }],
               @"hash table allObjectsPassTest is vacuously true when empty");
     DVTExpect([table dvt_allObjectsPassTest:nilTest], @"hash table allObjectsPassTest guards a nil test");
+
+    /* The any-spelling on the two set-like classes, which Apple scans directly
+       rather than reaching through dvt_firstObjectPassingTest:. A nil test
+       answers YES for a collection with anything in it, matching the array
+       spelling, where it hands back the first member. */
+    DVTExpect([members dvt_anyObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }],
+              @"set anyObjectsPassTest accepts a matching member");
+    DVTExpect(![members dvt_anyObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"z"]; }],
+              @"set anyObjectsPassTest rejects when no member matches");
+    DVTExpect(![members dvt_anyObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"set anyObjectsPassTest is false when nothing matches");
+    DVTExpect([members dvt_anyObjectsPassTest:^BOOL(id o) { return YES; }],
+              @"set anyObjectsPassTest accepts when every member matches");
+    DVTExpect(![[NSSet set] dvt_anyObjectsPassTest:^BOOL(id o) { return YES; }],
+              @"set anyObjectsPassTest is false when empty, without calling the test");
+    DVTExpect([members dvt_anyObjectsPassTest:nilTest], @"set anyObjectsPassTest guards a nil test");
+    DVTExpect(![[NSSet set] dvt_anyObjectsPassTest:nilTest],
+              @"set anyObjectsPassTest with a nil test is still false when empty");
+    {
+        __block NSUInteger calls = 0;
+        [members dvt_anyObjectsPassTest:^BOOL(id o) { calls++; return YES; }];
+        DVTExpectEqualObjects(@(calls), @1, @"set anyObjectsPassTest stops at the first matching member");
+    }
+    DVTExpect([table dvt_anyObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"b"]; }],
+              @"hash table anyObjectsPassTest accepts a matching object");
+    DVTExpect(![table dvt_anyObjectsPassTest:^BOOL(id o) { return [o isEqualToString:@"z"]; }],
+              @"hash table anyObjectsPassTest rejects when no object matches");
+    DVTExpect(![table dvt_anyObjectsPassTest:^BOOL(id o) { return NO; }],
+              @"hash table anyObjectsPassTest is false when nothing matches");
+    DVTExpect(![[NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality]
+                   dvt_anyObjectsPassTest:^BOOL(id o) { return YES; }],
+              @"hash table anyObjectsPassTest is false when empty");
+    DVTExpect([table dvt_anyObjectsPassTest:nilTest], @"hash table anyObjectsPassTest guards a nil test");
+
+    /* The older spelling of both tests, which Apple keeps in categories named
+       _DEPRECATED on all three classes and implements as bare forwards. Each
+       forward is checked against the spelling it wraps, across the cases where
+       the two could plausibly differ: a partial match, a universal match, no
+       match at all, and the empty collection. */
+    {
+        BOOL (^some)(id) = ^BOOL(id o) { return [o isEqual:@"b"]; };
+        BOOL (^all)(id) = ^BOOL(id o) { return YES; };
+        BOOL (^none)(id) = ^BOOL(id o) { return NO; };
+        BOOL (^onlyLast)(id) = ^BOOL(id o) { return [o isEqual:@"c"]; };
+        NSArray *triple = @[@"a", @"b", @"c"];
+        NSArray *emptyArray = @[];
+        NSSet *tripleSet = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSSet *emptySet = [NSSet set];
+        NSHashTable *tripleTable = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+        [tripleTable addObject:@"a"]; [tripleTable addObject:@"b"]; [tripleTable addObject:@"c"];
+        NSHashTable *emptyTable = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+
+        NSArray *arrays = @[triple, emptyArray];
+        NSArray *sets = @[tripleSet, emptySet];
+        NSArray *tables = @[tripleTable, emptyTable];
+        NSArray *blocks = @[some, all, none, onlyLast];
+        for (id collection in arrays) {
+            for (BOOL (^test)(id) in blocks) {
+                DVTExpect([collection dvt_areAllObjectsPassingTest:test] == [collection dvt_allObjectsPassTest:test],
+                          @"array areAllObjectsPassingTest matches allObjectsPassTest");
+                DVTExpect([collection dvt_areAnyObjectsPassingTest:test] == [collection dvt_anyObjectsPassTest:test],
+                          @"array areAnyObjectsPassingTest matches anyObjectsPassTest");
+            }
+        }
+        for (id collection in sets) {
+            for (BOOL (^test)(id) in blocks) {
+                DVTExpect([collection dvt_areAllObjectsPassingTest:test] == [collection dvt_allObjectsPassTest:test],
+                          @"set areAllObjectsPassingTest matches allObjectsPassTest");
+                DVTExpect([collection dvt_areAnyObjectsPassingTest:test] == [collection dvt_anyObjectsPassTest:test],
+                          @"set areAnyObjectsPassingTest matches anyObjectsPassTest");
+            }
+        }
+        for (id collection in tables) {
+            for (BOOL (^test)(id) in blocks) {
+                DVTExpect([collection dvt_areAllObjectsPassingTest:test] == [collection dvt_allObjectsPassTest:test],
+                          @"hash table areAllObjectsPassingTest matches allObjectsPassTest");
+                DVTExpect([collection dvt_areAnyObjectsPassingTest:test] == [collection dvt_anyObjectsPassTest:test],
+                          @"hash table areAnyObjectsPassingTest matches anyObjectsPassTest");
+            }
+        }
+        /* The forwards must not short-circuit differently than what they wrap. */
+        {
+            __block NSUInteger deprecatedCalls = 0;
+            __block NSUInteger currentCalls = 0;
+            [triple dvt_areAnyObjectsPassingTest:^BOOL(id o) { deprecatedCalls++; return YES; }];
+            [triple dvt_anyObjectsPassTest:^BOOL(id o) { currentCalls++; return YES; }];
+            DVTExpectEqualObjects(@(deprecatedCalls), @(currentCalls),
+                                  @"array areAnyObjectsPassingTest stops where anyObjectsPassTest stops");
+        }
+        {
+            __block NSUInteger deprecatedCalls = 0;
+            __block NSUInteger currentCalls = 0;
+            [triple dvt_areAllObjectsPassingTest:^BOOL(id o) {
+                deprecatedCalls++;
+                return ![o isEqual:@"c"];
+            }];
+            [triple dvt_allObjectsPassTest:^BOOL(id o) {
+                currentCalls++;
+                return ![o isEqual:@"c"];
+            }];
+            DVTExpectEqualObjects(@(deprecatedCalls), @(currentCalls),
+                                  @"array areAllObjectsPassingTest stops where allObjectsPassTest stops");
+        }
+    }
+
     DVTExpectEqualObjects([sample dvt_objectsOfClass:[NSString class]], sample, @"objectsOfClass");
 
     DVTExpect([sample dvt_containsObjectIdenticalTo:[sample objectAtIndex:0]], @"identical object found");
