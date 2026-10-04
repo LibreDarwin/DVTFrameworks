@@ -611,6 +611,9 @@ static void DVTTestEnvironmentSnapshot(void)
     [[NSProcessInfo processInfo] dvt_setValue:@"delta" forEnvironmentVariable:@"DVT_TEST_VIA_CATEGORY"];
     DVTExpectEqualObjects(DVTEnvironmentSnapshotString(@"DVT_TEST_VIA_CATEGORY"), @"delta",
                           @"NSProcessInfo setter category writes the snapshot");
+    [[NSProcessInfo processInfo] dvt_removeEnvironmentVariable:@"DVT_TEST_VIA_CATEGORY"];
+    DVTExpect(DVTEnvironmentSnapshotString(@"DVT_TEST_VIA_CATEGORY") == nil,
+              @"NSProcessInfo remover category clears the snapshot entry");
 }
 
 #pragma mark - Mach-O

@@ -238,7 +238,7 @@ void DVTRemoveEnvironmentVariable(NSString *name)
     DVTSetEnvironmentVariable(variable, value);
 }
 
-- (void)dvt_removeValueForEnvironmentVariable:(NSString *)variable
+- (void)dvt_removeEnvironmentVariable:(NSString *)variable
 {
     DVTRemoveEnvironmentVariable(variable);
 }

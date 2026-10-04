@@ -127,7 +127,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSString *)dvt_cachedEnvironmentValueForVariable:(NSString *)variable;
 - (BOOL)dvt_cachedEnvironmentBoolForVariable:(NSString *)variable;
 - (void)dvt_setValue:(nullable NSString *)value forEnvironmentVariable:(NSString *)variable;
-- (void)dvt_removeValueForEnvironmentVariable:(NSString *)variable;
+- (void)dvt_removeEnvironmentVariable:(NSString *)variable;
 
 @end
 
