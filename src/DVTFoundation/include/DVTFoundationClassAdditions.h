@@ -109,6 +109,34 @@ NS_ASSUME_NONNULL_BEGIN
 /** A reversed copy. */
 - (NSArray *)dvt_arrayByReversingObjects;
 
+/** A copy keeping the first occurrence of each element; later `isEqual:`
+ matches are dropped and the original order is preserved. */
+- (NSArray *)dvt_arrayByRemovingDuplicatesFromBack;
+/** A copy keeping the first occurrence of each element. Behaviourally
+ identical to `dvt_arrayByRemovingDuplicatesFromBack`, which Apple implements
+ this selector as a tail-call to. */
+- (NSArray *)dvt_arrayByRemovingDuplicates;
+
+/** The distinct elements. Note the return type: the name reads like an array,
+ but this yields a set. */
+- (NSSet *)dvt_uniqueObjects;
+
+/** The elements from `index` onward. Unchecked, so an `index` past the end
+ raises `NSRangeException`; `index == count` is in bounds and yields an empty
+ array. */
+- (NSArray *)dvt_subarrayFromIndex:(NSUInteger)index;
+/** The elements after `index`. Unchecked, so any `index >= count` raises
+ `NSRangeException`. */
+- (NSArray *)dvt_subarrayAfterIndex:(NSUInteger)index;
+
+/** Elements at `indexes`, silently skipping indexes outside the receiver's
+ range rather than raising. */
+- (NSArray *)dvt_objectsAtIndexesWithinBounds:(NSIndexSet *)indexes;
+
+/** `YES` when `prefix` matches the receiver's leading elements, compared with
+ `isEqual:`. An empty prefix always matches. */
+- (BOOL)dvt_hasPrefix:(NSArray *)prefix;
+
 /** Elements mapped through `block`; `nil` results are dropped. */
 - (NSArray *)dvt_arrayByApplyingBlock:(id _Nullable (^)(id object))block;
 /**

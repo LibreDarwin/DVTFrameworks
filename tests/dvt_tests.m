@@ -802,6 +802,62 @@ static void DVTTestClassAdditions(void)
     DVTExpectEqualObjects([@[@"a", @"b", @"a"] dvt_arrayByMovingFirstOccurrenceOfObjectToFrontIfPresent:@"a"],
                           (@[@"a", @"b", @"a"]), @"moving to front is stable");
 
+    /* The two duplicate selectors are the same function in Apple: one is a
+       four-byte tail-call to the other, and the body keeps the first
+       occurrence, so the "FromBack" name does not mean the last one wins. */
+    NSArray *duplicates = @[@"a", @"b", @"a", @"c", @"a"];
+    DVTExpectEqualObjects([duplicates dvt_arrayByRemovingDuplicates], (@[@"a", @"b", @"c"]),
+                          @"the first occurrence of each value survives, in order");
+    DVTExpectEqualObjects([duplicates dvt_arrayByRemovingDuplicatesFromBack], (@[@"a", @"b", @"c"]),
+                          @"the FromBack variant keeps first occurrences too");
+    NSArray *nestedPair = @[@1, @2];
+    NSArray *twoNested = @[nestedPair, nestedPair];
+    DVTExpectEqualObjects([twoNested dvt_arrayByRemovingDuplicatesFromBack], (@[@[@1, @2]]),
+                          @"nested containers are compared with isEqual:");
+    DVTExpectEqualObjects([@[@"only"] dvt_arrayByRemovingDuplicates], (@[@"only"]),
+                          @"a single element is returned unchanged");
+
+    /* Despite the name, this one returns a set. */
+    DVTExpectEqualObjects(duplicates.dvt_uniqueObjects, ([NSSet setWithObjects:@"a", @"b", @"c", nil]),
+                          @"distinct elements, as a set");
+
+    DVTExpectEqualObjects([duplicates dvt_subarrayFromIndex:2], (@[@"a", @"c", @"a"]), @"from an index");
+    DVTExpectEqualObjects([duplicates dvt_subarrayFromIndex:duplicates.count], (@[]),
+                          @"index == count is in bounds and yields nothing");
+    DVTExpectEqualObjects([duplicates dvt_subarrayAfterIndex:2], (@[@"c", @"a"]), @"after an index");
+    DVTExpectEqualObjects([duplicates dvt_subarrayAfterIndex:duplicates.count - 1], (@[]),
+                          @"after the last index yields nothing");
+    /* Both subarray helpers are unchecked in Apple, so the range length
+       underflows and Foundation raises instead of returning an empty array. */
+    @try {
+        [duplicates dvt_subarrayFromIndex:duplicates.count + 1];
+        DVTExpect(NO, @"an out-of-bounds subarrayFromIndex: raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSRangeException],
+                  @"an out-of-bounds subarrayFromIndex: raises NSRangeException");
+    }
+    @try {
+        [duplicates dvt_subarrayAfterIndex:duplicates.count];
+        DVTExpect(NO, @"an out-of-bounds subarrayAfterIndex: raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSRangeException],
+                  @"an out-of-bounds subarrayAfterIndex: raises NSRangeException");
+    }
+
+    /* Out-of-bounds indexes are dropped instead of raising. */
+    DVTExpectEqualObjects([sample dvt_objectsAtIndexesWithinBounds:
+                              [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1, 2)]],
+                          (@[@"bb", @"ccc"]), @"in-bounds indexes");
+    DVTExpectEqualObjects([sample dvt_objectsAtIndexesWithinBounds:
+                              [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(1, 5)]],
+                          (@[@"bb", @"ccc"]), @"indexes past the end are skipped");
+
+    DVTExpect([sample dvt_hasPrefix:(@[@"a", @"bb"])], @"a matching prefix");
+    DVTExpect([sample dvt_hasPrefix:(@[])], @"an empty prefix always matches");
+    DVTExpect(![sample dvt_hasPrefix:(@[@"bb", @"a"])], @"a different prefix does not match");
+    DVTExpect([sample dvt_hasPrefix:sample], @"a full-length equal prefix matches");
+    DVTExpect(![sample dvt_hasPrefix:(@[@"a", @"bb", @"ccc", @"extra"])], @"a longer prefix does not match");
+
     DVTExpectEqualObjects([sample dvt_compactMap:^id(id o) { return [o isEqualToString:@"bb"] ? [o uppercaseString] : nil; }],
                           (@[@"BB"]), @"compactMap drops nils");
     DVTExpectEqualObjects([@[@1, @2] dvt_flatMap:^id(id o) { return @[o, o]; }], (@[@1, @1, @2, @2]), @"flatMap flattens");

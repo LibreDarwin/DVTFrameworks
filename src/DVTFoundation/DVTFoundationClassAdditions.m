@@ -468,6 +468,88 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     return [[self reverseObjectEnumerator] allObjects];
 }
 
+- (NSArray *)dvt_arrayByRemovingDuplicatesFromBack
+{
+    /* Disassembly of Apple's implementation: the method allocates
+       [NSMutableSet set], captures it in one block, and tail-calls
+       dvt_objectsPassingTest:. The block rejects an object the set already
+       holds and otherwise adds it, so the first occurrence of each value
+       survives and the original order is preserved. Despite the "FromBack"
+       name nothing iterates backwards here. Reproduced in that shape. */
+    NSMutableSet *seen = [NSMutableSet set];
+    return [self dvt_objectsPassingTest:^BOOL(id candidate) {
+        if ([seen containsObject:candidate]) {
+            return NO;
+        }
+        [seen addObject:candidate];
+        return YES;
+    }];
+}
+
+- (NSArray *)dvt_arrayByRemovingDuplicates
+{
+    /* Apple's entire method is a four-byte tail-call
+       (b _objc_msgSend$dvt_arrayByRemovingDuplicatesFromBack), so the two
+       selectors are literally the same function and cannot diverge. */
+    return [self dvt_arrayByRemovingDuplicatesFromBack];
+}
+
+- (NSSet *)dvt_uniqueObjects
+{
+    /* Apple's method is a single call to +[NSSet setWithArray:]. Note the
+       return type: the name reads like an array, but it yields a set. */
+    return [NSSet setWithArray:self];
+}
+
+- (NSArray *)dvt_subarrayFromIndex:(NSUInteger)index
+{
+    /* Unchecked, as in Apple: count, then subarrayWithRange: with the range
+       built directly as {index, count - index}. An index past the end
+       underflows the length and raises NSRangeException from Foundation;
+       index == count is still in bounds and yields an empty array. */
+    return [self subarrayWithRange:NSMakeRange(index, self.count - index)];
+}
+
+- (NSArray *)dvt_subarrayAfterIndex:(NSUInteger)index
+{
+    /* Likewise unchecked: {index + 1, count - index - 1}, so every
+       index >= count underflows the length and raises NSRangeException. */
+    return [self subarrayWithRange:NSMakeRange(index + 1, self.count - index - 1)];
+}
+
+- (NSArray *)dvt_objectsAtIndexesWithinBounds:(NSIndexSet *)indexes
+{
+    /* Apple intersects the argument with dvt_fullRange and then reads
+       objectsAtIndexes:, so indexes past the end are dropped silently instead
+       of raising. Its intersection helper is the private NSIndexSet category
+       method dvt_indexesInRange:, which is not part of this framework yet, so
+       the intersection is done here with public index enumeration instead. */
+    NSRange bounds = self.dvt_fullRange;
+    NSMutableIndexSet *inBounds = [NSMutableIndexSet indexSet];
+    [indexes enumerateIndexesUsingBlock:^(NSUInteger index, BOOL *stop) {
+        if (NSLocationInRange(index, bounds)) {
+            [inBounds addIndex:index];
+        }
+    }];
+    return [self objectsAtIndexes:inBounds];
+}
+
+- (BOOL)dvt_hasPrefix:(NSArray *)prefix
+{
+    /* Three count calls, two objectAtIndexedSubscript: and one isEqual: per
+       element: the lengths are compared first, then the elements are walked
+       in lockstep with isEqual:. An empty prefix therefore always matches. */
+    if (prefix.count > self.count) {
+        return NO;
+    }
+    for (NSUInteger index = 0; index < prefix.count; index++) {
+        if (![self[index] isEqual:prefix[index]]) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 #pragma mark - Extremes
 
 - (id)dvt_maximumObject
