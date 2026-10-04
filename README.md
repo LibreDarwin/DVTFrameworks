@@ -222,7 +222,7 @@ case.
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), a command-line
 renderer, and an `NSHashTable` addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 55 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 61 methods
 implemented here.
 
 The emptiness pair `dvt_hasContent` / `dvt_isNonEmpty` is the widest thing
@@ -254,6 +254,48 @@ a leading surrogate is not a letter. That is why `dvt_stringWithLetterCasing:`
 takes a bare `NSUInteger` here even though Apple names the argument
 `DVTStringCasingType`: `0` is lowercase, `1` uppercase, `2` capitalized, and
 anything else asserts, with Apple's own message text.
+
+`NSString` also carries the identifier family, which is the widest thing Apple
+puts on a single class here: five manglers that rewrite a string into something
+a compiler would accept, plus the one predicate that asks whether it already is.
+Four of the five canonical-decompose the receiver and then walk it one UTF-16
+code unit at a time, substituting `_` or `-` for anything the profile rejects;
+they differ only in which ASCII punctuation survives. Strict C keeps `_` and
+substitutes `_`. Bundle identifiers add `.` and `-` to both the leading and the
+trailing set and substitute `-`. RFC 1034 adds `-` but not `.`. The fifth,
+`dvt_stringByManglingToLegalC99ExtendedIdentifier`, skips decomposition and
+counts a surrogate pair as the single scalar it encodes, which is why it spends
+one `_` on an emoji where the other four spend two, and it is also the only one of
+the five that keeps non-ASCII text: its table is C99 Annex D, so `é` and `中文`
+survive intact while every other profile flattens them to a separator. Legality
+follows the strict C profile and nothing else, so a name that is fine as a bundle
+identifier still reports as illegal.
+
+`dvt_stringByManglingToLegalIdentifierOfType:` dispatches rather than validates:
+`0` is the bundle profile, `1` is RFC 1034, and every other value — including
+`NSIntegerMin` — falls through to strict C without asserting. All five manglers
+return the receiver untouched when it is empty, and return a zero-length result
+rather than the empty receiver's content for one input: `U+FFFF` reads back as
+end-of-string, so the four decomposing profiles stop there and silently drop the
+rest of the receiver, turning `a<U+FFFF>b` into `a`. The extended profile never
+decomposes and keeps going, mangling the same input to `a_b`.
+
+Apple's own C99 Annex D table was recovered by sweeping all 65,536 BMP code
+points through both the leading and the trailing position and recording which
+were preserved, which yields 249 permitted ranges and 15 ranges that are legal
+only after the first character. Those are ASCII digits plus the non-ASCII digit
+blocks — Arabic-Indic, Extended Arabic-Indic, Bengali, Gurmukhi, Gujarati,
+Oriya, Tamil, Telugu, Kannada, Malayalam, Thai, Lao and Tibetan. The table is
+taken from what this build of Apple's binary actually accepts rather than from
+the annex text, since the two are not the same thing.
+
+The behaviour of an input holding an unpaired UTF-16 surrogate is not modelled.
+Apple's extended profile converts the receiver to UTF-8 before rewriting it, and
+that conversion fails on a lone surrogate, after which the result is whatever the
+buffer happens to hold — sometimes the receiver unchanged, sometimes not. The
+result is deterministic but is an artifact of that buffer rather than a rule, so
+the three other profiles' well-defined per-unit rewrite is reproduced and this
+case is documented instead.
 
 ### Property list values
 
@@ -986,10 +1028,10 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 56,124 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,496 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
-  additions, the string casing and word splitting, the property list value
+  additions, the string casing, word splitting and identifier mangling, the property list value
   coercions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
@@ -1003,7 +1045,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **56,124 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,496 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1015,9 +1057,9 @@ This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
 `dvt_` Objective-C methods across its categories, 250 of them in
 `DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
 exported C entry points, so they are absent from `nm`'s export list and only
-show up when the selector itself is read. This project implements 68 of them,
+show up when the selector itself is read. This project implements 74 of them,
 chosen for what `IDETools` and the recovered usage actually reach. Callers using
-any of the other 458 will not find it here.
+any of the other 452 will not find it here.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -1034,6 +1076,12 @@ Recovered from Apple's binary, or matched against it byte for byte:
 - the `DVTPropertyListValue` coercion family: 36 identity-or-nil methods that
   compile to a bare return with no conversion, plus two dictionary lookups whose
   messages render the offending value with `-debugDescription`
+- the identifier family on `NSString`: the C99 Annex D table recovered by
+  sweeping all 65,536 BMP code points through both a leading and a trailing
+  position, `U+FFFF` ending the receiver for the four profiles that decompose
+  first, `dvt_stringByManglingToLegalIdentifierOfType:` dispatching `0` to bundle
+  and `1` to RFC 1034 and every other value to strict C without asserting, and
+  `dvt_isLegalCIdentifier` following the strict C profile and nothing else
 - the assertion report layouts, including that a failure report takes nine
   format arguments and a warning report takes ten
 - `Method: %@%@` in report details, the second component being
@@ -1120,7 +1168,7 @@ binary, where it compiles away entirely.
 
 ### Deliberate divergence
 
-One input is answered differently rather than matched. Initialising a
+Two situations are answered differently rather than matched. Initialising a
 `DVTTextDocumentLocation` with a `nil` document URL **aborts in Apple's binary**
 and survives here: the object is built, and
 `-persistableStringRepresentationAndDecodableClassName:error:` then returns `nil`
@@ -1131,6 +1179,18 @@ candidate divergences were checked and turned out **not** to be differences —
 `DVTLineRangeForCharacterRange` on a shifted table ignores `baseLine` and
 `baseOffset` in both implementations, and both abort on a line offset table with
 fewer than two entries, differing only in the text of the assertion.
+
+The second is `dvt_stringByManglingToLegalC99ExtendedIdentifier` given a string
+holding an unpaired UTF-16 surrogate. Apple converts the receiver to UTF-8 before
+rewriting it, the conversion fails on a lone surrogate, and the returned string is
+then whatever the buffer holds — for `d83d 0022 0039 0061` it hands back the
+input unchanged, even though `"` is not a legal character and so was mangled in
+every other position. Measured over 78,931 inputs, this affects 2,251 of them,
+all of them containing a lone surrogate and all of them in this one selector; the
+other five selectors agree on all 78,931, and all seven agree on the 73,659
+well-formed ones. The output is deterministic but follows no rule that survives
+the malformed input, so it is documented rather than imitated: this project maps a
+lone surrogate to `_` like any other character the profile rejects.
 
 
 ## License

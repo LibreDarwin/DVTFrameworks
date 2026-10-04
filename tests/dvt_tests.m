@@ -1033,6 +1033,94 @@ static void DVTTestClassAdditions(void)
                                   ([NSString stringWithFormat:@"range %ld..%ld", (long)start, (long)end]));
         }
     }
+
+    /* Identifier legality and mangling come in five flavours. All of them canonical-decompose the
+       receiver first and then walk it one UTF-16 code unit at a time, except the C99 extended profile,
+       which skips decomposition and counts a surrogate pair as the single scalar it encodes. The three
+       decomposing profiles differ only in which ASCII punctuation they accept and what they substitute:
+       strict C allows `_` and substitutes `_`, bundle identifiers add `.` and `-` and substitute `-`,
+       and RFC 1034 allows `-` but not `.` and substitutes `-`. A leading character that the profile
+       will not accept is replaced just like any other, so the result is never empty for a non-empty
+       receiver.
+
+       Every expectation below was taken from DVTFoundation itself rather than reasoned about, and the
+       three decomposing profiles agree on U+FFFF: it reads back as end-of-string, so they stop there
+       and silently drop the rest of the receiver. */
+    NSArray<NSArray *> *identifierCases = @[
+        // input, dvt_isLegalCIdentifier, C, C99 extended, bundle, RFC 1034
+        @[@"", @NO, @"", @"", @"", @""],
+        @[@"a", @YES, @"a", @"a", @"a", @"a"],
+        @[@"_", @YES, @"_", @"_", @"-", @"-"],
+        @[@"Z9", @YES, @"Z9", @"Z9", @"Z9", @"Z9"],
+        @[@"a1", @YES, @"a1", @"a1", @"a1", @"a1"],
+        @[@"1a", @NO, @"_a", @"_a", @"-a", @"-a"],
+        @[@"-a", @NO, @"_a", @"_a", @"-a", @"-a"],
+        @[@".a", @NO, @"_a", @"_a", @".a", @"-a"],
+        @[@"a b", @NO, @"a_b", @"a_b", @"a-b", @"a-b"],
+        @[@"a-b", @NO, @"a_b", @"a_b", @"a-b", @"a-b"],
+        @[@"a.b.c", @NO, @"a_b_c", @"a_b_c", @"a.b.c", @"a-b-c"],
+        @[@"-.-", @NO, @"___", @"___", @"-.-", @"---"],
+        @[@" dvt", @NO, @"_dvt", @"_dvt", @"-dvt", @"-dvt"],
+        @[@"a~b", @NO, @"a_b", @"a_b", @"a-b", @"a-b"],
+        @[@"a1_b.c-d", @NO, @"a1_b_c_d", @"a1_b_c_d", @"a1-b.c-d", @"a1-b-c-d"],
+        // Decomposition: a precomposed é and an already decomposed e + U+0301 agree, and the combining
+        // mark is not legal in the C99 table, so that profile is the only one that can round-trip é.
+        @[@"\u00E9", @NO, @"e_", @"\u00E9", @"e-", @"e-"],
+        @[@"e\u0301", @NO, @"e_", @"e_", @"e-", @"e-"],
+        @[@"a\u0301", @NO, @"a_", @"a_", @"a-", @"a-"],
+        // Surrogate pairs: one scalar, so C99 extended spends a single `_` on it while the decomposing
+        // profiles spend one per code unit.
+        @[@"\U0001F600", @NO, @"__", @"_", @"--", @"--"],
+        @[@"\U0001F600abc", @NO, @"__abc", @"_abc", @"--abc", @"--abc"],
+        @[@"\U0001F600\U0001F601", @NO, @"____", @"__", @"----", @"----"],
+        // The C99 table keeps the letterlike and symbol blocks, and treats these non-ASCII digits as
+        // legal in a non-leading position only.
+        @[@"\u0660", @NO, @"_", @"_", @"-", @"-"],
+        @[@"a\u0660", @NO, @"a_", @"a\u0660", @"a-", @"a-"],
+        @[@"\u3042", @NO, @"_", @"\u3042", @"-", @"-"],
+        @[@"a\u3042", @NO, @"a_", @"a\u3042", @"a-", @"a-"],
+        @[@"\u4E2D\u6587", @NO, @"__", @"\u4E2D\u6587", @"--", @"--"],
+        @[@"\u65E5\u672C\u8A9E", @NO, @"___", @"\u65E5\u672C\u8A9E", @"---", @"---"],
+        // U+FFFF ends the receiver for the three decomposing profiles; C99 extended, which never
+        // decomposes, keeps mangling the whole thing.
+        @[@"\uFFFF", @NO, @"", @"_", @"", @""],
+        @[@"a\uFFFFb", @NO, @"a", @"a_b", @"a", @"a"],
+        @[@"\uFFFE", @NO, @"_", @"_", @"-", @"-"],
+    ];
+    for (NSArray *identifierCase in identifierCases) {
+        NSString *input = identifierCase[0];
+        BOOL expectedLegal = [identifierCase[1] boolValue];
+        NSString *what = ([NSString stringWithFormat:@"identifier mangling of '%@'", input]);
+        DVTExpect(input.dvt_isLegalCIdentifier == expectedLegal,
+                  ([NSString stringWithFormat:@"%@ legality", what]));
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalCIdentifier], identifierCase[2], what);
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalC99ExtendedIdentifier], identifierCase[3], what);
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalBundleIdentifier], identifierCase[4], what);
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalRFC1034Identifier], identifierCase[5], what);
+        // The typed entry point dispatches rather than validating: 0 is bundle, 1 is RFC 1034, and
+        // every other value falls through to strict C without complaining.
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalIdentifierOfType:0], identifierCase[4], what);
+        DVTExpectEqualObjects([input dvt_stringByManglingToLegalIdentifierOfType:1], identifierCase[5], what);
+        for (NSNumber *otherType in @[ @2, @(-1), @(NSIntegerMax), @(NSIntegerMin), @(NSIntegerMin + 1) ]) {
+            DVTExpectEqualObjects([input dvt_stringByManglingToLegalIdentifierOfType:[otherType integerValue]],
+                                  identifierCase[2],
+                                  ([NSString stringWithFormat:@"%@ type %@", what, otherType]));
+        }
+    }
+
+    /* The manglers return the receiver untouched when it is already legal, so the happy path is
+       idempotent for every profile that accepts the input. A leading underscore is deliberately absent
+       from this list: strict C accepts it but bundle and RFC 1034 do not, so `@"_x"` mangles to `@"-x"`. */
+    for (NSString *legal in @[ @"a", @"Z9", @"a1" ]) {
+        DVTExpectEqualObjects([legal dvt_stringByManglingToLegalCIdentifier], legal,
+                              ([NSString stringWithFormat:@"legal C identifier '%@' is unchanged", legal]));
+        DVTExpectEqualObjects([legal dvt_stringByManglingToLegalC99ExtendedIdentifier], legal,
+                              ([NSString stringWithFormat:@"legal C99 identifier '%@' is unchanged", legal]));
+        DVTExpectEqualObjects([legal dvt_stringByManglingToLegalBundleIdentifier], legal,
+                              ([NSString stringWithFormat:@"legal bundle identifier '%@' is unchanged", legal]));
+        DVTExpectEqualObjects([legal dvt_stringByManglingToLegalRFC1034Identifier], legal,
+                              ([NSString stringWithFormat:@"legal RFC 1034 identifier '%@' is unchanged", legal]));
+    }
 }
 
 #pragma mark - Property list values

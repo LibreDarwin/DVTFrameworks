@@ -257,6 +257,52 @@ NS_ASSUME_NONNULL_BEGIN
 /** The characters in `fromIndex ..< toIndex`, asserting that the range lies inside the receiver. */
 - (NSString *)dvt_substringFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
 
+/** `YES` when the receiver is a legal C identifier: ASCII letters and underscores, with digits allowed after the first character. */
+- (BOOL)dvt_isLegalCIdentifier;
+
+/**
+ Returns the receiver with every character a C identifier cannot use replaced by `_`.
+
+ The receiver is canonical-decomposed first, so a composed `é` turns into the legal `e` followed by
+ the rejected combining accent. Anything outside ASCII is rejected one UTF-16 unit at a time, so an
+ astral character such as an emoji becomes two underscores.
+ */
+- (NSString *)dvt_stringByManglingToLegalCIdentifier;
+
+/**
+ Returns the receiver with every character C99 does not allow in an extended identifier replaced by `_`.
+
+ Unlike `dvt_stringByManglingToLegalCIdentifier` the receiver is left composed, and C99 Annex D's
+ universal character names survive, so `é` is kept. Iteration is per Unicode scalar, which collapses an
+ astral character into a single underscore. The Annex D characters that may not open an identifier --
+ ASCII digits, and the digit runs of several other scripts -- are still replaced at index 0.
+ */
+- (NSString *)dvt_stringByManglingToLegalC99ExtendedIdentifier;
+
+/**
+ Returns the receiver with every character a bundle identifier cannot use replaced by `-`.
+
+ The receiver is canonical-decomposed first. ASCII letters, digits, `.`, and `-` are kept, and `.` and
+ `-` may open the identifier too; everything else, non-ASCII included, becomes a single `-`.
+ */
+- (NSString *)dvt_stringByManglingToLegalBundleIdentifier;
+
+/**
+ Returns the receiver with every character an RFC 1034 label cannot use replaced by `-`.
+
+ The receiver is canonical-decomposed first. ASCII letters, digits, and `-` are kept, and `-` may open
+ the label too; everything else -- `.` and non-ASCII included -- becomes a single `-`.
+ */
+- (NSString *)dvt_stringByManglingToLegalRFC1034Identifier;
+
+/**
+ Mangles the receiver for `identifierType`: `0` for a bundle identifier, `1` for an RFC 1034 label, and anything else for a C identifier.
+
+ No assertion fires here. Unknown types fall through to the C identifier mangling rather than failing,
+ so `2` and `-1` both behave like `dvt_stringByManglingToLegalCIdentifier`.
+ */
+- (NSString *)dvt_stringByManglingToLegalIdentifierOfType:(NSInteger)identifierType;
+
 @end
 
 /** `YES` when the receiver has at least one entry. */
