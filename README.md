@@ -222,7 +222,7 @@ case.
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), a command-line
 renderer, and an `NSHashTable` addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 48 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 55 methods
 implemented here.
 
 The emptiness pair `dvt_hasContent` / `dvt_isNonEmpty` is the widest thing
@@ -234,10 +234,26 @@ answer it identically for both selectors, and the collections (including
 written differently — `length != 0` for `dvt_hasContent`, but
 `!isEqualToString:@""` for `dvt_isNonEmpty` — which no string can observe, so
 the split is reproduced rather than smoothed into one shared helper. Apple splits
-this family across three category names (`DVTFoundationClassAdditions`,
+this family across four category names (`DVTFoundationClassAdditions`,
 `DVTNSSetAdditions`, `DVTNSOrderedSetAdditions`, `DVTNSMapTableAdditions`) and
 so does this project, because the names are readable in the category metadata and
 a class dump of the two binaries lines up only if they match.
+
+`NSString` also carries the letter-casing family, where the interesting work is
+`dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
+always starts a word, a run of digits holds together, and anything else —
+punctuation, whitespace, and non-ASCII alike — is a separator that is dropped.
+So `camelCaseString` yields three words but `ALLCAPS` yields seven, one per
+character, and an all-CJK string yields none at all. The digit test is widened by
+one character, so `:` continues a digit run just as a digit does; the empty range
+that can leave behind is skipped rather than emitted as a blank word. The
+first-character pair tests `lowercaseLetterCharacterSet` /
+`uppercaseLetterCharacterSet` membership on a single UTF-16 code unit and
+otherwise returns the receiver, so `ß` uppercases to the two characters `SS` and
+a leading surrogate is not a letter. That is why `dvt_stringWithLetterCasing:`
+takes a bare `NSUInteger` here even though Apple names the argument
+`DVTStringCasingType`: `0` is lowercase, `1` uppercase, `2` capitalized, and
+anything else asserts, with Apple's own message text.
 
 ### Property list values
 
@@ -970,11 +986,11 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 55,981 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,124 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
-  additions, the property list value coercions, the command-line rendering
-  table, both assertion report layouts,
+  additions, the string casing and word splitting, the property list value
+  coercions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
   including their out-of-range fallbacks, the filter display strings, the line
@@ -987,7 +1003,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **55,981 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,124 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -999,9 +1015,9 @@ This is a partial reimplementation. Apple's `DVTFoundation` defines 526 distinct
 `dvt_` Objective-C methods across its categories, 250 of them in
 `DVTFoundationClassAdditions` alone. These are local Objective-C methods, not
 exported C entry points, so they are absent from `nm`'s export list and only
-show up when the selector itself is read. This project implements 61 of them,
+show up when the selector itself is read. This project implements 68 of them,
 chosen for what `IDETools` and the recovered usage actually reach. Callers using
-any of the other 465 will not find it here.
+any of the other 458 will not find it here.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing

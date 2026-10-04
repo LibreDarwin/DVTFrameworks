@@ -224,6 +224,39 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
 
+/**
+ Lowercased, uppercased, or capitalized according to `letterCasing`.
+
+ @param letterCasing `0` for lowercase, `1` for uppercase, `2` for capitalized.
+ */
+- (NSString *)dvt_stringWithLetterCasing:(NSUInteger)letterCasing;
+
+/**
+ Splits the receiver into words, casing each one like `dvt_stringWithLetterCasing:`.
+
+ A word ends at an ASCII uppercase letter, at a run of digits, and at every character that is
+ neither a digit, an uppercase letter, nor a lowercase letter; those separators are dropped. So
+ `camelCase` yields `camel` and `case`, and `a1b2` yields `a`, `1`, and `b`.
+
+ @param letterCasing `0` for lowercase, `1` for uppercase, `2` for capitalized.
+ */
+- (NSArray<NSString *> *)dvt_wordsFromStringWithLetterCasing:(NSUInteger)letterCasing;
+
+/** The lowercased words of the receiver. */
+- (NSArray<NSString *> *)dvt_wordsFromString;
+
+/** The capitalized words of the receiver. */
+- (NSArray<NSString *> *)dvt_capitalizedWordsFromString;
+
+/** The receiver with its first character uppercased, or the receiver when it is not a lowercase letter. */
+- (NSString *)dvt_stringByCapitalizingFirstCharacter;
+
+/** The receiver with its first character lowercased, or the receiver when it is not an uppercase letter. */
+- (NSString *)dvt_stringByLowercasingFirstCharacter;
+
+/** The characters in `fromIndex ..< toIndex`, asserting that the range lies inside the receiver. */
+- (NSString *)dvt_substringFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
+
 @end
 
 /** `YES` when the receiver has at least one entry. */

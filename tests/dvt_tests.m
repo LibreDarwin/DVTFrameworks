@@ -933,6 +933,106 @@ static void DVTTestClassAdditions(void)
         DVTExpect(nonEmpty.dvt_hasContent, @"non-empty string has content");
         DVTExpect(nonEmpty.dvt_isNonEmpty, @"non-empty string is non-empty");
     }
+
+    /* Casing is one selector over three values, so every case names the value it
+       pins rather than relying on a wrapper to reach it. */
+    NSArray *casingCases = @[
+        @[@"aBc dEf", @(0), @"abc def"],
+        @[@"aBc dEf", @(1), @"ABC DEF"],
+        @[@"aBc dEf", @(2), @"Abc Def"],
+        @[@"straße", @(1), @"STRASSE"],
+        @[@"", @(2), @""],
+    ];
+    for (NSArray *casingCase in casingCases) {
+        NSString *input = [casingCase objectAtIndex:0];
+        NSUInteger letterCasing = (NSUInteger)[[casingCase objectAtIndex:1] unsignedIntegerValue];
+        DVTExpectEqualObjects([input dvt_stringWithLetterCasing:letterCasing], [casingCase objectAtIndex:2],
+                              ([NSString stringWithFormat:@"casing %lu of '%@'", (unsigned long)letterCasing, input]));
+    }
+
+    /* Only a-z is a word character. An uppercase letter always starts a word, a
+       digit run holds together, and anything else -- punctuation, whitespace,
+       and non-ASCII alike -- is a separator that is dropped, which is why an
+       all-CJK string has no words at all. */
+    NSArray *wordCases = @[
+        @[@"", @[]], @[@"  ", @[]], @[@"日本語", @[]],
+        @[@"hello world", @[@"hello", @"world"]], @[@"HelloWorld", @[@"hello", @"world"]],
+        @[@"camelCaseString", @[@"camel", @"case", @"string"]],
+        @[@"ALLCAPS", @[@"a", @"l", @"l", @"c", @"a", @"p", @"s"]],
+        @[@"HTTPResponse", @[@"h", @"t", @"t", @"p", @"response"]],
+        @[@"foo123bar", @[@"foo", @"123", @"bar"]],
+        @[@"a1b2c3", @[@"a", @"1", @"b", @"2", @"c", @"3"]],
+        @[@"v1.2.3", @[@"v", @"1", @"2", @"3"]],
+        @[@"9lives", @[@"9", @"lives"]],
+        @[@"1a2", @[@"1", @"a", @"2"]],
+        @[@"path/to/file.txt", @[@"path", @"to", @"file", @"txt"]],
+        @[@"_under_score", @[@"under", @"score"]],
+        @[@"a{b", @[@"a", @"b"]],
+        @[@"{a", @[@"a"]],
+        @[@"aéb", @[@"a", @"b"]],
+    ];
+    for (NSArray *wordCase in wordCases) {
+        NSString *input = [wordCase objectAtIndex:0];
+        NSArray<NSString *> *words = [input dvt_wordsFromString];
+        DVTExpectEqualObjects(words, [wordCase objectAtIndex:1],
+                              ([NSString stringWithFormat:@"lowercased words of '%@'", input]));
+        DVTExpectEqualObjects([input dvt_wordsFromStringWithLetterCasing:0], words,
+                              ([NSString stringWithFormat:@"explicit lowercase words of '%@'", input]));
+        NSMutableArray<NSString *> *expectedUppercase = [NSMutableArray arrayWithCapacity:words.count];
+        NSMutableArray<NSString *> *expectedCapitalized = [NSMutableArray arrayWithCapacity:words.count];
+        for (NSString *word in words) {
+            [expectedUppercase addObject:word.uppercaseString];
+            [expectedCapitalized addObject:word.capitalizedString];
+        }
+        DVTExpectEqualObjects([input dvt_wordsFromStringWithLetterCasing:1], expectedUppercase,
+                              ([NSString stringWithFormat:@"uppercased words of '%@'", input]));
+        DVTExpectEqualObjects([input dvt_capitalizedWordsFromString], expectedCapitalized,
+                              ([NSString stringWithFormat:@"capitalized words of '%@'", input]));
+    }
+    DVTExpectEqualObjects(@"camelCaseString".dvt_capitalizedWordsFromString, (@[@"Camel", @"Case", @"String"]),
+                          @"capitalized words are capitalized per word, not just the first");
+    /* ':' is one past the digit run, so it also counts as continuing one. The
+       empty range that leaves is skipped rather than emitted as a blank word. */
+    DVTExpectEqualObjects(@"a:1b".dvt_wordsFromString, (@[@"a", @"1", @"b"]), @"colon does not add a blank word");
+    DVTExpectEqualObjects(@"1:2".dvt_wordsFromString, (@[@"1", @"2"]), @"colon keeps a digit run split once");
+
+    /* The first-character pair tests the character set membership, not just the
+       prefix: it returns the receiver untouched unless the first character is a
+       letter of the matching case, and it looks at one UTF-16 code unit, so a
+       leading surrogate is not a letter. */
+    NSArray *firstCharacterCases = @[
+        @[@"", @"", @""], @[@"hello", @"Hello", @"hello"], @[@"Hello", @"Hello", @"hello"],
+        @[@"a", @"A", @"a"], @[@"A", @"A", @"a"], @[@"zZ", @"ZZ", @"zZ"], @[@"123", @"123", @"123"],
+        @[@" hello", @" hello", @" hello"], @[@"_a", @"_a", @"_a"], @[@"ß", @"SS", @"ß"], @[@"é", @"É", @"é"],
+        @[@"éa", @"Éa", @"éa"], @[@"日本語", @"日本語", @"日本語"], @[@"\U0001F600x", @"\U0001F600x", @"\U0001F600x"],
+    ];
+    for (NSArray *firstCharacterCase in firstCharacterCases) {
+        NSString *input = [firstCharacterCase objectAtIndex:0];
+        DVTExpectEqualObjects([input dvt_stringByCapitalizingFirstCharacter], [firstCharacterCase objectAtIndex:1],
+                              ([NSString stringWithFormat:@"capitalize first of '%@'", input]));
+        DVTExpectEqualObjects([input dvt_stringByLowercasingFirstCharacter], [firstCharacterCase objectAtIndex:2],
+                              ([NSString stringWithFormat:@"lowercase first of '%@' is '%@'", input,
+                                                         [firstCharacterCase objectAtIndex:2]]));
+    }
+
+    /* Ranges are inclusive of the start and exclusive of the end, an empty range
+       is legal, and the bounds are checked in code units rather than graphemes. */
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:0 toIndex:3], @"abc", @"leading range");
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:1 toIndex:3], @"bc", @"interior range");
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:0 toIndex:0], @"", @"empty range at the start");
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:2 toIndex:2], @"", @"empty range in the middle");
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:0 toIndex:6], @"abcdef", @"whole range");
+    DVTExpectEqualObjects([@"abcdef" dvt_substringFromIndex:6 toIndex:6], @"", @"empty range at the end");
+    DVTExpectEqualObjects([@"日本" dvt_substringFromIndex:0 toIndex:1], @"日", @"range splits inside a surrogate pair");
+    NSString *unitRangeSource = @"abcdef";
+    for (NSInteger start = 0; start <= (NSInteger)unitRangeSource.length; start++) {
+        for (NSInteger end = start; end <= (NSInteger)unitRangeSource.length; end++) {
+            NSRange expected = NSMakeRange((NSUInteger)start, (NSUInteger)(end - start));
+            DVTExpectEqualObjects([unitRangeSource dvt_substringFromIndex:start toIndex:end],
+                                  [unitRangeSource substringWithRange:expected],
+                                  ([NSString stringWithFormat:@"range %ld..%ld", (long)start, (long)end]));
+        }
+    }
 }
 
 #pragma mark - Property list values

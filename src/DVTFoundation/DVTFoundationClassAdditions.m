@@ -25,6 +25,8 @@
 
 #import "DVTFoundationClassAdditions.h"
 
+#import "DVTAssertions.h"
+
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
 
@@ -692,6 +694,114 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
 - (BOOL)dvt_isNonEmpty
 {
     return ![self isEqualToString:@""];
+}
+
+enum {
+    DVTStringLetterCasingLowercase = 0,
+    DVTStringLetterCasingUppercase = 1,
+    DVTStringLetterCasingCapitalized = 2,
+};
+
+- (NSString *)dvt_stringWithLetterCasing:(NSUInteger)letterCasing
+{
+    switch (letterCasing) {
+        case DVTStringLetterCasingLowercase:
+            return self.lowercaseString;
+        case DVTStringLetterCasingUppercase:
+            return self.uppercaseString;
+        case DVTStringLetterCasingCapitalized:
+            return self.capitalizedString;
+        default:
+            DVTAssert(NO, @"Unknown letter casing", nil, @"Unknown enum value of type DVTStringCasingType: %@", @(letterCasing));
+            return self;
+    }
+}
+
+- (NSString *)dvt_substringFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex
+{
+    NSInteger stringLength = (NSInteger)self.length;
+    DVTAssert(fromIndex <= toIndex, @"fromIndex <= toIndex", nil,
+              @"fromIndex must be less than or equal to toIndex");
+    DVTAssert(0 <= fromIndex && fromIndex <= stringLength, @"0 <= fromIndex && fromIndex <= stringLength", nil,
+              @"fromIndex must be greater than or equal to 0 and less than or equal to the string length");
+    DVTAssert(0 <= toIndex && toIndex <= stringLength, @"0 <= toIndex && toIndex <= stringLength", nil,
+              @"toIndex must be greater than or equal to 0 and less than or equal to the string length");
+    return [self substringWithRange:NSMakeRange((NSUInteger)fromIndex, (NSUInteger)(toIndex - fromIndex))];
+}
+
+- (NSString *)dvt_stringByCapitalizingFirstCharacter
+{
+    if (self.length == 0 || ![[NSCharacterSet lowercaseLetterCharacterSet] characterIsMember:[self characterAtIndex:0]]) {
+        return self;
+    }
+    return [[self substringToIndex:1].uppercaseString stringByAppendingString:[self substringFromIndex:1]];
+}
+
+- (NSString *)dvt_stringByLowercasingFirstCharacter
+{
+    if (self.length == 0 || ![[NSCharacterSet uppercaseLetterCharacterSet] characterIsMember:[self characterAtIndex:0]]) {
+        return self;
+    }
+    return [[self substringToIndex:1].lowercaseString stringByAppendingString:[self substringFromIndex:1]];
+}
+
+/** `YES` when `character` falls in the inclusive ASCII range `low ... high`. */
+static inline BOOL DVTCharacterIsInASCIIRange(unichar character, unichar low, unichar high)
+{
+    return (NSUInteger)(character - low) <= (NSUInteger)(high - low);
+}
+
+- (NSArray<NSString *> *)dvt_wordsFromStringWithLetterCasing:(NSUInteger)letterCasing
+{
+    NSMutableArray<NSString *> *words = [NSMutableArray array];
+    NSUInteger length = self.length;
+
+    void (^appendWord)(NSUInteger, NSUInteger) = ^(NSUInteger wordStart, NSUInteger end) {
+        if (wordStart >= end) {
+            return;
+        }
+        NSString *word = [self dvt_substringFromIndex:(NSInteger)wordStart toIndex:(NSInteger)end];
+        [words addObject:[word dvt_stringWithLetterCasing:letterCasing]];
+    };
+
+    NSUInteger index = 0;
+    NSUInteger wordStart = 0;
+    // Widening the range to '0' ... ':' is what Apple does, so ':' also continues a digit run. A
+    // boundary that repeats leaves an empty range behind, which appendWord skips.
+    BOOL precededByDigit = NO;
+
+    for (; index < length; index++) {
+        unichar character = [self characterAtIndex:index];
+        if (DVTCharacterIsInASCIIRange(character, '0', '9')) {
+            if (!precededByDigit) {
+                appendWord(wordStart, index);
+                wordStart = index;
+            }
+        } else if (DVTCharacterIsInASCIIRange(character, 'A', 'Z')) {
+            appendWord(wordStart, index);
+            wordStart = index;
+        } else if (!DVTCharacterIsInASCIIRange(character, 'a', 'z')) {
+            appendWord(wordStart, index);
+            wordStart = index + 1;
+        } else if (precededByDigit) {
+            appendWord(wordStart, index);
+            wordStart = index;
+        }
+        precededByDigit = DVTCharacterIsInASCIIRange(character, '0', ':');
+    }
+
+    appendWord(wordStart, length);
+    return words;
+}
+
+- (NSArray<NSString *> *)dvt_wordsFromString
+{
+    return [self dvt_wordsFromStringWithLetterCasing:DVTStringLetterCasingLowercase];
+}
+
+- (NSArray<NSString *> *)dvt_capitalizedWordsFromString
+{
+    return [self dvt_wordsFromStringWithLetterCasing:DVTStringLetterCasingCapitalized];
 }
 
 @end
