@@ -359,7 +359,8 @@ NS_ASSUME_NONNULL_BEGIN
   `valueBlock` is applied to each element and the resulting values are compared
   with `compare:`, so the ordering follows the block's output rather than the
   elements themselves. A derived value of `nil` trips an assertion rather than
-  being compared, as it does in Apple.
+  being compared, as it does in Apple; the assertion names the element whose
+  value came back empty.
 
   Elements whose derived values come out equal are reported as equal, leaving
   their relative order to the sort.

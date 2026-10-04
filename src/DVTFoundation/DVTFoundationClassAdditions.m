@@ -1057,7 +1057,8 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 {
     /* The comparator Apple builds derives a value from each member, asserts both
        values are non-nil, and compares *those*, so the ordering is driven by the
-       block's output rather than by the members themselves.
+       block's output rather than by the members themselves. The two assertions name
+       the member whose value block came back empty, which is why they differ.
 
        The duplicate handler is consulted only once the derived values have come
        out equal, and it is handed the two members rather than the two values --
@@ -1066,9 +1067,9 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
        With no handler a tie stays NSOrderedSame and the sort is left to decide. */
     [self sortUsingComparator:^NSComparisonResult(id first, id second) {
         id firstValue = valueBlock(first);
-        DVTAssertNotNil(firstValue, @"bad cfstring ref");
+        DVTAssertNotNil(firstValue, @"projectionBlock(obj1)");
         id secondValue = valueBlock(second);
-        DVTAssertNotNil(secondValue, @"bad cfstring ref");
+        DVTAssertNotNil(secondValue, @"projectionBlock(obj2)");
         NSComparisonResult result = [firstValue compare:secondValue];
         if (result != NSOrderedSame) {
             return result;

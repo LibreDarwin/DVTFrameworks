@@ -1897,8 +1897,27 @@ static void DVTTestClassAdditions(void)
         DVTExpect(handler.reports.count > 0, @"dvt_sortByValueBlock: asserts on a nil derived value");
         DVTExpect(!handler.lastWasWarning,
                   @"dvt_sortByValueBlock: reports a nil derived value as a failure, not a warning");
-        DVTExpect([handler.reports.lastObject rangeOfString:@"bad cfstring ref"].location != NSNotFound,
-                  @"dvt_sortByValueBlock: explains a nil derived value the way Apple does");
+        /* Both members fail here, so the report has to be searched rather than read
+           off the end, and the two names have to be distinguishable. */
+        NSString *all = [handler.reports componentsJoinedByString:@"\n"];
+        DVTExpect([all rangeOfString:@"projectionBlock(obj1)"].location != NSNotFound,
+                  @"dvt_sortByValueBlock: names the first member whose value came back empty");
+        DVTExpect([all rangeOfString:@"projectionBlock(obj2)"].location != NSNotFound,
+                  @"dvt_sortByValueBlock: names the second member whose value came back empty");
+    }
+    {
+        /* The second member's assertion is a separate failure with its own name, so
+           a block that returns nil for only one side still reports which side. */
+        DVTTestCapturingHandler *handler = [DVTTestCapturingHandler new];
+        [DVTAssertionReportHandler setCurrentHandler:handler];
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a", @"bb", @"ccc", nil];
+        [array dvt_sortByValueBlock:^id(id object) {
+            return [object isEqualTo:@"bb"] ? (id)nil : (id)object;
+        }];
+        [DVTAssertionReportHandler setCurrentHandler:nil];
+        NSString *joined = [handler.reports componentsJoinedByString:@"\n"];
+        DVTExpect([joined rangeOfString:@"projectionBlock(obj2)"].location != NSNotFound,
+                  @"dvt_sortByValueBlock: names the second member separately when only it is empty");
     }
 
     /* The duplicate handler only ever sees ties, and it is handed the members
