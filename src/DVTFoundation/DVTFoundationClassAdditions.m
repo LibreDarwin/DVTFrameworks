@@ -1357,6 +1357,43 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return [[self allObjects] dvt_objectsSortedByValueBlock:valueBlock duplicateHandler:duplicateHandler];
 }
 
+/* These three are the same shape in the binary: ask -count, take -allObjects,
+   and skip the sort entirely below two members, handing back -allObjects as it
+   stands. Nothing wraps or copies that answer, so it is whatever -allObjects
+   returned. */
+
+- (NSArray *)dvt_sortedArray
+{
+    /* The argument-free form hard-codes a selector rather than taking one. It is
+       compare:, which the numbers in the probe pin down: they come back
+       numerically ordered, and equal to sortedArrayUsingSelector: with compare:.
+       Forwarding keeps one copy of the short-receiver case. */
+    return [self dvt_sortedArrayUsingSelector:@selector(compare:)];
+}
+
+- (NSArray *)dvt_sortedArrayUsingSelector:(SEL)selector
+{
+    NSArray *members = [self allObjects];
+    if (members.count < 2) {
+        return members;
+    }
+    /* The selector is handed straight over with no check of its own, so a
+       selector the members do not understand raises out of the collection sort
+       exactly as it would on an array. */
+    return [members sortedArrayUsingSelector:selector];
+}
+
+- (NSArray *)dvt_sortedArrayUsingComparator:(NSComparisonResult (^)(id first, id second))comparator
+{
+    NSArray *members = [self allObjects];
+    if (members.count < 2) {
+        return members;
+    }
+    /* Apple retains the comparator around this call, which is just ARC holding
+       the argument alive across the send; nothing else is done with it. */
+    return [members sortedArrayUsingComparator:comparator];
+}
+
 @end
 
 @implementation NSSet (DVTFoundationClassAdditions_DEPRECATED)

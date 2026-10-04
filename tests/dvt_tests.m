@@ -1083,6 +1083,122 @@ static void DVTTestClassAdditions(void)
                   @"set objectsSortedByValueBlock: asserts on a nil derived value");
     }
 
+    /* The plain sorting trio. All three take -allObjects, sort it, and skip the
+       sort entirely below two members. */
+
+    {
+        /* The argument-free form is compare:, which the numbers pin down: they
+           come back numerically ordered, and equal to the selector form handed
+           compare:. A length or identity sort would order them differently. */
+        NSSet *words = [NSSet setWithObjects:@"bbb", @"a", @"cc", nil];
+        NSArray *sorted = [words dvt_sortedArray];
+        DVTExpectEqualObjects(sorted, (@[@"a", @"bbb", @"cc"]),
+                              @"set sortedArray orders by compare:");
+        DVTExpect([[words dvt_sortedArray]
+                      isEqualToArray:[words dvt_sortedArrayUsingSelector:@selector(compare:)]],
+                  @"set sortedArray matches sortedArrayUsingSelector: handed compare:");
+        NSSet *numbers = [NSSet setWithObjects:@3, @1, @22, nil];
+        DVTExpectEqualObjects([numbers dvt_sortedArray], (@[@1, @3, @22]),
+                              @"set sortedArray compares numbers numerically, not as text");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"set sortedArray answers an immutable array");
+        DVTExpect([[NSSet setWithArray:sorted] isEqualToSet:words],
+                  @"set sortedArray keeps every member");
+        DVTExpect(words.count == 3, @"set sortedArray leaves the set unchanged");
+    }
+
+    {
+        /* Below two members the answer is -allObjects as it stands, so nothing is
+           sorted and the comparator is never asked. */
+        NSSet *single = [NSSet setWithObject:@"only"];
+        __block int calls = 0;
+        NSArray *sorted = [single dvt_sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            calls++;
+            return NSOrderedSame;
+        }];
+        DVTExpect(calls == 0, @"set sortedArrayUsingComparator: is not asked for one member");
+        DVTExpectEqualObjects(sorted, (@[@"only"]),
+                              @"set sortedArrayUsingComparator: hands one member straight back");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"set sortedArrayUsingComparator: answers an immutable array");
+        DVTExpect([[NSSet set] dvt_sortedArray].count == 0,
+                  @"set sortedArray answers an empty array for an empty set");
+        DVTExpect([[NSSet set] dvt_sortedArray] != nil,
+                  @"set sortedArray answers a non-nil array for an empty set");
+        /* A selector nothing implements would raise if it were ever sent, which
+           makes it the check that the short-receiver case skips it. */
+        @try {
+            NSArray *never = [[NSSet set] dvt_sortedArrayUsingSelector:@selector(dvt_noSuchSelectorHere)];
+            DVTExpect(never.count == 0, @"set sortedArrayUsingSelector: never sends the selector for an empty set");
+        } @catch (NSException *exception) {
+            DVTExpect(NO, @"set sortedArrayUsingSelector: never sends the selector for an empty set");
+        }
+        @try {
+            NSArray *never = [single dvt_sortedArrayUsingSelector:@selector(dvt_noSuchSelectorHere)];
+            DVTExpect(never.count == 1, @"set sortedArrayUsingSelector: never sends the selector for one member");
+        } @catch (NSException *exception) {
+            DVTExpect(NO, @"set sortedArrayUsingSelector: never sends the selector for one member");
+        }
+        /* Two or more members do reach it, and an unknown selector raises rather
+           than being quietly ignored. That is Foundation's behaviour, inherited by
+           forwarding. */
+        NSSet *two = [NSSet setWithObjects:@"bb", @"a", nil];
+        @try {
+            [two dvt_sortedArrayUsingSelector:@selector(dvt_noSuchSelectorHere)];
+            DVTExpect(NO, @"set sortedArrayUsingSelector: raises for a selector the members lack");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:@"NSInvalidArgumentException"],
+                      @"set sortedArrayUsingSelector: raises for a selector the members lack");
+        }
+    }
+
+    {
+        /* The selector is handed over as it stands, so a different selector gives a
+           different answer. These two order the same pair differently. */
+        NSSet *members = [NSSet setWithObjects:@"B", @"a", nil];
+        DVTExpectEqualObjects([members dvt_sortedArrayUsingSelector:@selector(compare:)], (@[@"B", @"a"]),
+                              @"set sortedArrayUsingSelector: orders by the selector given");
+        DVTExpectEqualObjects([members dvt_sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)],
+                              (@[@"a", @"B"]),
+                              @"set sortedArrayUsingSelector: honours a case-insensitive selector");
+    }
+
+    {
+        __block int calls = 0;
+        NSSet *words = [NSSet setWithObjects:@"bbb", @"a", @"cc", nil];
+        NSArray *ascending = [words dvt_sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            calls++;
+            return [a compare:b];
+        }];
+        DVTExpectEqualObjects(ascending, [words dvt_sortedArray],
+                              @"set sortedArrayUsingComparator: agrees with compare:");
+        DVTExpect(calls > 0, @"set sortedArrayUsingComparator: asks the comparator");
+        NSArray *descending = [words dvt_sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            return [b compare:a];
+        }];
+        DVTExpectEqualObjects(descending, (@[@"cc", @"bbb", @"a"]),
+                              @"set sortedArrayUsingComparator: honours a descending comparator");
+        /* A set cannot hold equal members, so members of the same length all
+           survive a comparator that calls them equal. */
+        NSSet *tied = [NSSet setWithObjects:@"aa", @"bb", @"cc", @"dd", nil];
+        NSArray *alwaysSame = [tied dvt_sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            return NSOrderedSame;
+        }];
+        DVTExpect(alwaysSame.count == 4,
+                  @"set sortedArrayUsingComparator: keeps members the comparator calls equal");
+        DVTExpect([[NSSet setWithArray:alwaysSame] isEqualToSet:tied],
+                  @"set sortedArrayUsingComparator: keeps every member when it never separates them");
+        NSMutableSet *mutableSet = [NSMutableSet setWithObjects:@"bbb", @"a", @"cc", nil];
+        NSUInteger before = mutableSet.count;
+        NSArray *fromMutable = [mutableSet dvt_sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            return [a compare:b];
+        }];
+        DVTExpectEqualObjects(fromMutable, (@[@"a", @"bbb", @"cc"]),
+                              @"set sortedArrayUsingComparator: sorts a mutable set's members");
+        DVTExpect(mutableSet.count == before && [mutableSet isKindOfClass:[NSMutableSet class]],
+                  @"set sortedArrayUsingComparator: leaves a mutable set unchanged");
+    }
+
     /* The any-spelling on the two set-like classes, which Apple scans directly
        rather than reaching through dvt_firstObjectPassingTest:. A nil test
        answers YES for a collection with anything in it, matching the array

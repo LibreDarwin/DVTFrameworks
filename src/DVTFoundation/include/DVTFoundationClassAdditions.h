@@ -519,6 +519,30 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
                          duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
 
+/**
+ The members sorted by `compare:`, as `NSArray`'s `sortedArrayUsingSelector:`
+ applied to `-allObjects`.
+ */
+- (NSArray *)dvt_sortedArray;
+
+/**
+ The members sorted by `selector`, as `NSArray`'s `sortedArrayUsingSelector:`
+ applied to `-allObjects`.
+
+ `selector` is handed straight through unchecked, so one the members do not
+ understand raises out of the sort. Members the selector calls equal keep
+ whatever order `-allObjects` produced, so the answer is only reproducible when
+ the selector separates them.
+ */
+- (NSArray *)dvt_sortedArrayUsingSelector:(SEL)selector;
+
+/**
+ The members ordered by `comparator`, as `NSArray`'s
+ `sortedArrayUsingComparator:` applied to `-allObjects`. The comparator decides
+ the whole order and is asked about every pair.
+ */
+- (NSArray *)dvt_sortedArrayUsingComparator:(NSComparisonResult (^)(id first, id second))comparator;
+
 @end
 
 @interface NSMutableSet (DVTFoundationClassAdditions)
