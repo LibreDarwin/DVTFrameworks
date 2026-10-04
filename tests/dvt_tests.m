@@ -94,6 +94,15 @@ static uint32_t DVTAlignTo8(uint32_t size)
     return (size + 7u) & ~7u;
 }
 
+/** Builds a string from raw UTF-16 code units, terminator omitted, length taken from `count`.
+
+    clang rejects a lone surrogate in a string literal ("invalid universal character"), so inputs that
+    contain one have to be assembled from code units instead. */
+static NSString *DVTStringFromUnits(const unichar *units, size_t count)
+{
+    return [NSString stringWithCharacters:units length:count];
+}
+
 /**
  Writes a thin 64-bit Mach-O slice into `buffer` and returns its size. When
  `bigEndian` is set every scalar is written byte swapped, which is how a file
@@ -1039,13 +1048,13 @@ static void DVTTestClassAdditions(void)
        which skips decomposition and counts a surrogate pair as the single scalar it encodes. The three
        decomposing profiles differ only in which ASCII punctuation they accept and what they substitute:
        strict C allows `_` and substitutes `_`, bundle identifiers add `.` and `-` and substitute `-`,
-       and RFC 1034 allows `-` but not `.` and substitutes `-`. A leading character that the profile
-       will not accept is replaced just like any other, so the result is never empty for a non-empty
-       receiver.
+        and RFC 1034 allows `-` but not `.` and substitutes `-`. A leading character that the profile
+        will not accept is replaced just like any other, so a rejected character never shortens the
+        result below the length of the input, with U+FFFF below the one deliberate exception.
 
-       Every expectation below was taken from DVTFoundation itself rather than reasoned about, and the
-       three decomposing profiles agree on U+FFFF: it reads back as end-of-string, so they stop there
-       and silently drop the rest of the receiver. */
+        Every expectation below was taken from DVTFoundation itself rather than reasoned about, and the
+        three decomposing profiles agree on U+FFFF: it behaves as end-of-string, so they stop there
+        and silently drop the rest of the receiver. */
     NSArray<NSArray *> *identifierCases = @[
         // input, dvt_isLegalCIdentifier, C, C99 extended, bundle, RFC 1034
         @[@"", @NO, @"", @"", @"", @""],
@@ -1105,6 +1114,49 @@ static void DVTTestClassAdditions(void)
             DVTExpectEqualObjects([input dvt_stringByManglingToLegalIdentifierOfType:[otherType integerValue]],
                                   identifierCase[2],
                                   ([NSString stringWithFormat:@"%@ type %@", what, otherType]));
+        }
+    }
+
+    /* An unpaired surrogate is the one input the extended profile declines to rewrite. It copies the
+       surrogate and the code unit after it through verbatim and then resumes, which has two visible
+       consequences: a trailing space survives a mangler that would otherwise have replaced it, and a
+       high surrogate hides whatever follows it, so two high surrogates and a low one come back
+       untouched instead of collapsing to an underscore. The decomposing profiles are unaffected and
+       simply substitute their replacement character. Expectations are DVTFoundation's own. */
+    {
+        const unichar aLoneSurrogateInTheMiddle[] = { 'a', 0xD800, 'b' };
+        const unichar aLoneSurrogateBetweenSpaces[] = { ' ', 0xD800, ' ' };
+        const unichar twoHighThenLow[] = { 0xD83D, 0xD83D, 0xDE00 };
+        const unichar aPairThenALoneSurrogate[] = { 0xD83D, 0xDE00, 0xD800 };
+        const unichar aLoneLowSurrogate[] = { 0xDE00 };
+        const unichar aLoneSurrogateLeading[] = { 0xD800, 'a' };
+        // Where the walk resumes, the space after the surrogate is never rewritten.
+        const unichar underscoreSurrogateSpace[] = { '_', 0xD800, ' ' };
+        const unichar underscoreSurrogate[] = { '_', 0xD800 };
+        // The extended column is the input itself whenever the walk never resumes before the end.
+        NSArray<NSArray *> *unpairedSurrogateCases = @[
+            // input, C, C99 extended, bundle, RFC 1034
+            @[ DVTStringFromUnits(aLoneSurrogateInTheMiddle, 3), @"a_b",
+               DVTStringFromUnits(aLoneSurrogateInTheMiddle, 3), @"a-b", @"a-b" ],
+            @[ DVTStringFromUnits(aLoneSurrogateBetweenSpaces, 3), @"___",
+               DVTStringFromUnits(underscoreSurrogateSpace, 3), @"---", @"---" ],
+            @[ DVTStringFromUnits(twoHighThenLow, 3), @"___",
+               DVTStringFromUnits(twoHighThenLow, 3), @"---", @"---" ],
+            @[ DVTStringFromUnits(aPairThenALoneSurrogate, 3), @"___",
+               DVTStringFromUnits(underscoreSurrogate, 2), @"---", @"---" ],
+            @[ DVTStringFromUnits(aLoneLowSurrogate, 1), @"_",
+               DVTStringFromUnits(aLoneLowSurrogate, 1), @"-", @"-" ],
+            @[ DVTStringFromUnits(aLoneSurrogateLeading, 2), @"_a",
+               DVTStringFromUnits(aLoneSurrogateLeading, 2), @"-a", @"-a" ],
+        ];
+        for (NSArray *surrogateCase in unpairedSurrogateCases) {
+            NSString *input = surrogateCase[0];
+            NSString *what = ([NSString stringWithFormat:@"identifier mangling of unpaired surrogate in '%@'", input]);
+            DVTExpect(input.dvt_isLegalCIdentifier == NO, ([NSString stringWithFormat:@"%@ legality", what]));
+            DVTExpectEqualObjects([input dvt_stringByManglingToLegalCIdentifier], surrogateCase[1], what);
+            DVTExpectEqualObjects([input dvt_stringByManglingToLegalC99ExtendedIdentifier], surrogateCase[2], what);
+            DVTExpectEqualObjects([input dvt_stringByManglingToLegalBundleIdentifier], surrogateCase[3], what);
+            DVTExpectEqualObjects([input dvt_stringByManglingToLegalRFC1034Identifier], surrogateCase[4], what);
         }
     }
 

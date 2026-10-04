@@ -972,11 +972,23 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
         while (index < length) {
             NSUInteger start = index;
             uint32_t scalar = (uint32_t)[decomposed characterAtIndex:index];
-            if (scalar >= 0xD800 && scalar <= 0xDBFF && index + 1 < length) {
-                uint32_t low = (uint32_t)[decomposed characterAtIndex:index + 1];
+            if (scalar >= 0xD800 && scalar <= 0xDFFF) {
+                uint32_t low = (scalar <= 0xDBFF && index + 1 < length)
+                    ? (uint32_t)[decomposed characterAtIndex:index + 1]
+                    : 0;
                 if (low >= 0xDC00 && low <= 0xDFFF) {
                     scalar = 0x10000 + ((scalar - 0xD800) << 10) + (low - 0xDC00);
                     index += 1;
+                } else {
+                    // An unpaired surrogate and the code unit after it are copied through verbatim,
+                    // then the walk resumes. So ' ' + U+D800 + ' ' comes back as '_' + U+D800 + ' ':
+                    // the trailing space is never mangled. It also means a high surrogate swallows
+                    // whatever follows it, which is why U+1F600 spelled as two high surrogates and a
+                    // low one comes back untouched instead of collapsing to an underscore.
+                    NSUInteger run = MIN((NSUInteger)2, length - start);
+                    [result appendString:[decomposed substringWithRange:NSMakeRange(start, run)]];
+                    index += run;
+                    continue;
                 }
             }
             index += 1;

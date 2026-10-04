@@ -258,25 +258,26 @@ anything else asserts, with Apple's own message text.
 `NSString` also carries the identifier family, which is the widest thing Apple
 puts on a single class here: five manglers that rewrite a string into something
 a compiler would accept, plus the one predicate that asks whether it already is.
-Four of the five canonical-decompose the receiver and then walk it one UTF-16
-code unit at a time, substituting `_` or `-` for anything the profile rejects;
-they differ only in which ASCII punctuation survives. Strict C keeps `_` and
-substitutes `_`. Bundle identifiers add `.` and `-` to both the leading and the
-trailing set and substitute `-`. RFC 1034 adds `-` but not `.`. The fifth,
-`dvt_stringByManglingToLegalC99ExtendedIdentifier`, skips decomposition and
-counts a surrogate pair as the single scalar it encodes, which is why it spends
-one `_` on an emoji where the other four spend two, and it is also the only one of
-the five that keeps non-ASCII text: its table is C99 Annex D, so `é` and `中文`
-survive intact while every other profile flattens them to a separator. Legality
-follows the strict C profile and nothing else, so a name that is fine as a bundle
-identifier still reports as illegal.
+Four of those five are direct profiles and the fifth is the dispatcher described
+below. Three of the four direct ones canonical-decompose the receiver and then
+walk it one UTF-16 code unit at a time, substituting `_` or `-` for anything the
+profile rejects; they differ only in which ASCII punctuation survives. Strict C
+keeps `_` and substitutes `_`. Bundle identifiers add `.` and `-` to both the
+leading and the trailing set and substitute `-`. RFC 1034 adds `-` but not `.`.
+The remaining direct profile, `dvt_stringByManglingToLegalC99ExtendedIdentifier`,
+skips decomposition and counts a surrogate pair as the single scalar it encodes,
+which is why it spends one `_` on an emoji where the other three spend two, and
+it is also the only one of the five that keeps non-ASCII text: its table is C99
+Annex D, so `é` and `中文` survive intact while every other profile flattens them
+to a separator. Legality follows the strict C profile and nothing else, so a name
+that is fine as a bundle identifier still reports as illegal.
 
 `dvt_stringByManglingToLegalIdentifierOfType:` dispatches rather than validates:
 `0` is the bundle profile, `1` is RFC 1034, and every other value — including
 `NSIntegerMin` — falls through to strict C without asserting. All five manglers
 return the receiver untouched when it is empty, and return a zero-length result
-rather than the empty receiver's content for one input: `U+FFFF` reads back as
-end-of-string, so the four decomposing profiles stop there and silently drop the
+rather than the receiver's content for one input: `U+FFFF` behaves as
+end-of-string, so the three decomposing profiles stop there and silently drop the
 rest of the receiver, turning `a<U+FFFF>b` into `a`. The extended profile never
 decomposes and keeps going, mangling the same input to `a_b`.
 
@@ -289,13 +290,20 @@ Oriya, Tamil, Telugu, Kannada, Malayalam, Thai, Lao and Tibetan. The table is
 taken from what this build of Apple's binary actually accepts rather than from
 the annex text, since the two are not the same thing.
 
-The behaviour of an input holding an unpaired UTF-16 surrogate is not modelled.
-Apple's extended profile converts the receiver to UTF-8 before rewriting it, and
-that conversion fails on a lone surrogate, after which the result is whatever the
-buffer happens to hold — sometimes the receiver unchanged, sometimes not. The
-result is deterministic but is an artifact of that buffer rather than a rule, so
-the three other profiles' well-defined per-unit rewrite is reproduced and this
-case is documented instead.
+An unpaired UTF-16 surrogate is the one input the extended profile declines to
+rewrite, and the rule is narrow enough to state exactly. A surrogate that does
+not open a valid pair is copied through verbatim *together with the code unit
+after it*, and the walk then resumes at the unit after that. So `a<U+D800>b`
+comes back unchanged, while `' '` + `U+D800` + `' '` comes back as `_`, `U+D800`,
+and a space that is never rewritten — the trailing space survives a mangler that
+would otherwise have replaced it. The same rule explains a case that looks like a
+bug until you see it: `U+1F600` spelled as two high surrogates and a low one is
+returned untouched rather than collapsing to a single `_`, because the first high
+surrogate swallows the second as its verbatim companion and the pair is never
+formed. The three decomposing profiles are unaffected and substitute their
+replacement character as usual. Note that this is the opposite of the `U+FFFF`
+behaviour above, which truncates in the extended profile's absence rather than in
+its presence.
 
 ### Property list values
 
@@ -1028,7 +1036,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 56,496 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,526 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1045,7 +1053,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **56,496 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,526 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1078,10 +1086,12 @@ Recovered from Apple's binary, or matched against it byte for byte:
   messages render the offending value with `-debugDescription`
 - the identifier family on `NSString`: the C99 Annex D table recovered by
   sweeping all 65,536 BMP code points through both a leading and a trailing
-  position, `U+FFFF` ending the receiver for the four profiles that decompose
-  first, `dvt_stringByManglingToLegalIdentifierOfType:` dispatching `0` to bundle
-  and `1` to RFC 1034 and every other value to strict C without asserting, and
-  `dvt_isLegalCIdentifier` following the strict C profile and nothing else
+  position, `U+FFFF` ending the receiver for the three profiles that decompose
+  first, an unpaired surrogate being copied through with the code unit after it by
+  the extended profile, `dvt_stringByManglingToLegalIdentifierOfType:` dispatching
+  `0` to bundle and `1` to RFC 1034 and every other value to strict C without
+  asserting, and `dvt_isLegalCIdentifier` following the strict C profile and
+  nothing else
 - the assertion report layouts, including that a failure report takes nine
   format arguments and a warning report takes ten
 - `Method: %@%@` in report details, the second component being
@@ -1168,7 +1178,7 @@ binary, where it compiles away entirely.
 
 ### Deliberate divergence
 
-Two situations are answered differently rather than matched. Initialising a
+Three situations are answered differently rather than matched. Initialising a
 `DVTTextDocumentLocation` with a `nil` document URL **aborts in Apple's binary**
 and survives here: the object is built, and
 `-persistableStringRepresentationAndDecodableClassName:error:` then returns `nil`
@@ -1180,17 +1190,20 @@ candidate divergences were checked and turned out **not** to be differences —
 `baseOffset` in both implementations, and both abort on a line offset table with
 fewer than two entries, differing only in the text of the assertion.
 
-The second is `dvt_stringByManglingToLegalC99ExtendedIdentifier` given a string
-holding an unpaired UTF-16 surrogate. Apple converts the receiver to UTF-8 before
-rewriting it, the conversion fails on a lone surrogate, and the returned string is
-then whatever the buffer holds — for `d83d 0022 0039 0061` it hands back the
-input unchanged, even though `"` is not a legal character and so was mangled in
-every other position. Measured over 78,931 inputs, this affects 2,251 of them,
-all of them containing a lone surrogate and all of them in this one selector; the
-other five selectors agree on all 78,931, and all seven agree on the 73,659
-well-formed ones. The output is deterministic but follows no rule that survives
-the malformed input, so it is documented rather than imitated: this project maps a
-lone surrogate to `_` like any other character the profile rejects.
+A third candidate was also not a divergence, and it was the interesting one.
+`dvt_stringByManglingToLegalC99ExtendedIdentifier` on a string holding an
+unpaired UTF-16 surrogate was initially written off as an unmodellable artifact
+of Apple's UTF-8 conversion failing mid-rewrite, and this project mapped a lone
+surrogate to `_` instead. That guess was wrong. Sweeping all 78,931 corpus inputs
+through both binaries and comparing hex unit by hex unit put the disagreement at
+exactly 2,250 inputs, every one of them containing an unpaired surrogate, which is
+too specific to be a buffer artifact — and the first hand-built examples showed
+Apple returning strings no mangler could produce, such as `_`, `U+D800`, and a
+trailing *space*. The rule behind it is the one described above: a surrogate that
+does not open a valid pair is copied through with the code unit after it, and the
+walk resumes past both. Reproducing that closes the gap, so the seven selectors
+are now byte-identical across all 78,931 inputs, malformed ones included, and
+nothing about this family is left documented in place of implemented.
 
 
 ## License
