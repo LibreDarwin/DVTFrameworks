@@ -1333,6 +1333,30 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return self.count != 0;
 }
 
+#pragma mark - Sorting
+
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+{
+    /* Apple loads a null into the third argument and tail-calls, so this is
+       exactly the two-argument form with no duplicate handler. */
+    return [self dvt_objectsSortedByValueBlock:valueBlock duplicateHandler:nil];
+}
+
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+                         duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler
+{
+    /* A set has no order to disturb, so this is the array form asked of the
+       members: -allObjects decides which order they are sorted from, and
+       everything else -- the short-receiver fast path, the nil-value assertion,
+       the member-not-value tie-breaking -- is the array method's.
+
+       The answer's order among members whose derived values tie therefore
+       depends on the set's own ordering rather than on anything the caller
+       controls. A distinct derived value per member is what makes the answer
+       reproducible. */
+    return [[self allObjects] dvt_objectsSortedByValueBlock:valueBlock duplicateHandler:duplicateHandler];
+}
+
 @end
 
 @implementation NSSet (DVTFoundationClassAdditions_DEPRECATED)

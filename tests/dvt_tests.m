@@ -963,6 +963,126 @@ static void DVTTestClassAdditions(void)
               @"hash table allObjectsPassTest is vacuously true when empty");
     DVTExpect([table dvt_allObjectsPassTest:nilTest], @"hash table allObjectsPassTest guards a nil test");
 
+    /* The derived-value sort on a set is the array form asked of -allObjects, so
+       a distinct derived value per member is what makes the answer reproducible:
+       a set has no order of its own to sort, and tied members keep whichever
+       order the set's enumeration produced. */
+    {
+        NSSet *distinct = [NSSet setWithObjects:@"bbb", @"a", @"cc", nil];
+        NSArray *sorted = [distinct dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"a", @"cc", @"bbb"]),
+                              @"set objectsSortedByValueBlock: orders by the derived value");
+        DVTExpect(![sorted isKindOfClass:[NSMutableArray class]],
+                  @"set objectsSortedByValueBlock: answers an immutable array");
+        DVTExpect(sorted.count == distinct.count,
+                  @"set objectsSortedByValueBlock: keeps every member");
+        NSArray *descending = [distinct dvt_objectsSortedByValueBlock:^id(id object) {
+            return @(-(NSInteger)[object length]);
+        }];
+        DVTExpectEqualObjects(descending, (@[@"bbb", @"cc", @"a"]),
+                              @"set objectsSortedByValueBlock: orders descending when the value block negates");
+    }
+    {
+        /* One member or fewer leaves nothing to compare, so the value block is
+           never asked and a nil return is harmless. */
+        NSSet *single = [NSSet setWithObject:@"only"];
+        __block int calls = 0;
+        NSArray *sorted = [single dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return nil;
+        }];
+        DVTExpect(calls == 0, @"set objectsSortedByValueBlock: never asks the value block for one member");
+        DVTExpectEqualObjects(sorted, (@[@"only"]),
+                              @"set objectsSortedByValueBlock: answers one member unchanged");
+        NSSet *empty = [NSSet set];
+        calls = 0;
+        NSArray *sortedEmpty = [empty dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return nil;
+        }];
+        DVTExpect(calls == 0, @"set objectsSortedByValueBlock: never asks the value block for an empty set");
+        DVTExpect(sortedEmpty.count == 0, @"set objectsSortedByValueBlock: answers an empty array for an empty set");
+        NSSet *two = [NSSet setWithObjects:@"bb", @"a", nil];
+        calls = 0;
+        NSArray *sortedTwo = [two dvt_objectsSortedByValueBlock:^id(id object) {
+            calls++;
+            return @([object length]);
+        }];
+        DVTExpect(calls > 0, @"set objectsSortedByValueBlock: asks the value block for two members");
+        DVTExpectEqualObjects(sortedTwo, (@[@"a", @"bb"]),
+                              @"set objectsSortedByValueBlock: orders two members");
+    }
+    {
+        /* The handler breaks ties by member, which is what makes a tied answer
+           reproducible even though the set's own order is not. A set cannot hold
+           equal members, so distinct members of the same length all survive. */
+        NSSet *tied = [NSSet setWithObjects:@"aa", @"bb", @"cc", @"dd", nil];
+        NSArray *sorted = [tied dvt_objectsSortedByValueBlock:^id(id object) {
+            return @"all-equal";
+        } duplicateHandler:^NSComparisonResult(id first, id second) {
+            return [first compare:second];
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"aa", @"bb", @"cc", @"dd"]),
+                              @"set objectsSortedByValueBlock:duplicateHandler: can order ties by member");
+        NSArray *shared = [[NSSet setWithObjects:@"bb", @"a", @"dd", @"cc", nil]
+                              dvt_objectsSortedByValueBlock:^id(id object) {
+                                  return @([object length]);
+                              }];
+        DVTExpect(shared.count == 4,
+                  @"set objectsSortedByValueBlock: keeps members that share a derived value");
+        DVTExpect([shared containsObject:@"a"] && [shared containsObject:@"bb"] &&
+                  [shared containsObject:@"cc"] && [shared containsObject:@"dd"],
+                  @"set objectsSortedByValueBlock: shared derived values are all present");
+        NSSet *distinct = [NSSet setWithObjects:@"bb", @"a", @"cc", nil];
+        __block int handlerCalls = 0;
+        NSArray *unequal = [distinct dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        } duplicateHandler:^NSComparisonResult(id first, id second) {
+            handlerCalls++;
+            return NSOrderedSame;
+        }];
+        DVTExpectEqualObjects(unequal, (@[@"a", @"bb", @"cc"]),
+                              @"set objectsSortedByValueBlock:duplicateHandler: returning NSOrderedSame sorts normally");
+        (void)handlerCalls;
+    }
+    {
+        /* The one argument form matches the two argument form spelled with nil. */
+        NSSet *members = [NSSet setWithObjects:@"bb", @"a", @"cc", @"dd", nil];
+        NSArray *oneArgument = [members dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        NSArray *nilHandler = [members dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        } duplicateHandler:nil];
+        DVTExpectEqualObjects(oneArgument, nilHandler,
+                              @"set objectsSortedByValueBlock: matches the two argument form with a nil handler");
+    }
+    {
+        /* A mutable set goes through allObjects like any other and is left alone. */
+        NSMutableSet *mutableSet = [NSMutableSet setWithObjects:@"bbb", @"a", @"cc", nil];
+        NSUInteger before = mutableSet.count;
+        NSArray *sorted = [mutableSet dvt_objectsSortedByValueBlock:^id(id object) {
+            return @([object length]);
+        }];
+        DVTExpectEqualObjects(sorted, (@[@"a", @"cc", @"bbb"]),
+                              @"set objectsSortedByValueBlock: sorts a mutable set's members");
+        DVTExpect(mutableSet.count == before, @"set objectsSortedByValueBlock: leaves a mutable set unchanged");
+    }
+    {
+        /* A derived value of nil asserts once there is a comparison to make,
+           naming the member whose value came back empty. */
+        DVTTestCapturingHandler *handler = [DVTTestCapturingHandler new];
+        [DVTAssertionReportHandler setCurrentHandler:handler];
+        NSSet *two = [NSSet setWithObjects:@"bb", @"a", nil];
+        [two dvt_objectsSortedByValueBlock:^id(id object) { return nil; }];
+        [DVTAssertionReportHandler setCurrentHandler:nil];
+        NSString *joined = [handler.reports componentsJoinedByString:@"\n"];
+        DVTExpect([joined rangeOfString:@"projectionBlock(obj1)"].location != NSNotFound,
+                  @"set objectsSortedByValueBlock: asserts on a nil derived value");
+    }
+
     /* The any-spelling on the two set-like classes, which Apple scans directly
        rather than reaching through dvt_firstObjectPassingTest:. A nil test
        answers YES for a collection with anything in it, matching the array

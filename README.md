@@ -221,10 +221,11 @@ case.
 
 Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), in-place
-sorting by a derived key, stable partitioning, shuffling, unique-string
-lookup, contiguous-run search, a command-line renderer, and an `NSHashTable`
+sorting by a derived key, both in place on a mutable array and as a copy on an
+array or a set, stable partitioning, shuffling, unique-string lookup,
+contiguous-run search, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 97 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 99 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -1041,7 +1042,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 56,858 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,876 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1058,7 +1059,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **56,858 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,876 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1075,13 +1076,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 161 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 555 will not find
-it here. Two of the 161 are additions rather than reproductions:
+This project implements 163 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 553 will not find
+it here. Two of the 163 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 159 are reproduced against the
+rather than a match for those variants. The other 161 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what

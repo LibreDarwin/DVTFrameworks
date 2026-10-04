@@ -495,6 +495,30 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
 
+/**
+ The members sorted by a derived value, as `NSArray`'s
+ `dvt_objectsSortedByValueBlock:` applied to `-allObjects`.
+
+ Ordering follows the block's output rather than the members themselves, and a
+ derived value of `nil` trips an assertion rather than being compared.
+
+ Members whose derived values tie keep whatever relative order the set's own
+ enumeration produced, so the answer is only reproducible when each member
+ derives a distinct value, or when `duplicateHandler` breaks the ties itself.
+ */
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock;
+
+/**
+ As `dvt_objectsSortedByValueBlock:`, with `duplicateHandler` breaking ties.
+
+ The handler runs only for members whose derived values have already compared
+ equal, and receives the two members rather than the two derived values, so it
+ can order a tie by whatever `valueBlock` discarded. It breaks ties rather than
+ removing them, so members sharing a derived value are all kept.
+ */
+- (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
+                         duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
+
 @end
 
 @interface NSMutableSet (DVTFoundationClassAdditions)
