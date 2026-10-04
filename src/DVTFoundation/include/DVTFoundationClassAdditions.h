@@ -174,6 +174,24 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (NSString *)dvt_stringByConcatenatingAsCommandLineArguments;
 
+/**
+ The index at which `object` belongs in the receiver under `comparator`.
+
+ Apple answers `0` for an empty receiver without consulting `comparator`, and
+ otherwise binary-searches the whole array with
+ `NSBinarySearchingInsertionIndex`. Note what that option reports: the index of
+ an equal element when the receiver already holds one, and the insertion point
+ only when it does not. The receiver is assumed to be sorted under `comparator`.
+ */
+- (NSInteger)dvt_sortedInsertionIndexForObject:(id)object
+                                 withComparator:(NSComparisonResult (^)(id first, id second))comparator;
+
+/**
+ The index at which `object` belongs under `selector`, used as the two-argument
+ comparison selector, i.e. the receiver of `selector` is the left element.
+ */
+- (NSInteger)dvt_sortedInsertionIndexForObject:(id)object withComparisonSelector:(SEL)selector;
+
 @end
 
 @interface NSMutableArray (DVTFoundationClassAdditions)
@@ -256,6 +274,50 @@ NS_ASSUME_NONNULL_BEGIN
  Equal indices are a no-op and never raise, even when both are out of range.
  */
 - (void)dvt_moveObjectAtIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex;
+
+/**
+ Inserts `object` at its sorted position and returns the index used.
+
+ Ordering is by `compare:`, and the receiver is assumed to be sorted already.
+ */
+- (NSInteger)dvt_sortedInsert:(id)object;
+
+/**
+ Inserts `object` at its position under `comparator` and returns the index used.
+
+ The insertion index comes from `dvt_sortedInsertionIndexForObject:withComparator:`,
+ so `comparator` is invoked with the receiver's existing elements as its left
+ argument.
+ */
+- (NSInteger)dvt_sortedInsert:(id)object
+                withComparator:(NSComparisonResult (^)(id first, id second))comparator;
+
+/** As `dvt_sortedInsert:withComparator:`, ordered by the two-argument `selector`. */
+- (NSInteger)dvt_sortedInsert:(id)object withComparisonSelector:(SEL)selector;
+
+/**
+ Inserts every element of `objects` at once, each at its own sorted position.
+
+ The argument is sorted with `sortedArrayUsingComparator:` first, so the result
+ is a stable merge rather than a series of independent insertions, and the
+ receiver is not modified until the whole set is ready.
+ */
+- (void)dvt_sortedInsertOfObjects:(NSArray *)objects
+                   withComparator:(NSComparisonResult (^)(id first, id second))comparator;
+
+/**
+ Inserts `object` unless `compare:` reports it as equal to an element already
+ present, and returns whether it was inserted.
+
+ Note that "already present" means the comparator returns `NSOrderedSame`, not
+ `isEqual:`: two objects can compare equal yet compare differently under
+ `isEqual:`, and only the former counts as a duplicate here.
+ */
+- (BOOL)dvt_uniqueSortedInsert:(id)object;
+
+/** As `dvt_uniqueSortedInsert:`, with the duplicate test done by `comparator`. */
+- (BOOL)dvt_uniqueSortedInsert:(id)object
+                 withComparator:(NSComparisonResult (^)(id first, id second))comparator;
 
 @end
 

@@ -29,6 +29,7 @@
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
+#import <objc/message.h>
 
 /*
  PureDarwin's Foundation is a subset of Apple's: -firstObject, -indexOfObject:,
@@ -89,6 +90,24 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
         characterSet = [NSCharacterSet characterSetWithCharactersInString:@"' \"\t"];
     });
     return characterSet;
+}
+
+/*
+ Apple's DVTComparatorForSelector hands back a stack block that captures the
+ selector together with objc_msgSend itself. Its invoke function loads both,
+ moves the first argument into the receiver slot, leaves the second in the
+ argument slot and branches through the captured pointer -- that is, it is
+ exactly [first selector second].
+
+ Kept file-static rather than exported: nothing else here needs it, and the
+ project's public surface is the method inventory.
+ */
+static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
+{
+    return ^NSComparisonResult(id first, id second) {
+        NSComparisonResult (*send)(id, SEL, id) = (NSComparisonResult (*)(id, SEL, id))objc_msgSend;
+        return send(first, selector, second);
+    };
 }
 
 @implementation NSArray (DVTFoundationClassAdditions)
@@ -641,6 +660,30 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     return result;
 }
 
+- (NSInteger)dvt_sortedInsertionIndexForObject:(id)object
+                                withComparator:(NSComparisonResult (^)(id first, id second))comparator
+{
+    /* Apple reads -count and branches to a hard-coded 0 when the receiver is
+       empty, so comparator is never called for an empty array. Otherwise it is a
+       single binary search over the whole array with the insertion-index option,
+       which reports a valid insertion point rather than a match. */
+    NSUInteger count = self.count;
+    if (count == 0) {
+        return 0;
+    }
+    return [self indexOfObject:object
+                inSortedRange:NSMakeRange(0, count)
+                       options:NSBinarySearchingInsertionIndex
+              usingComparator:comparator];
+}
+
+- (NSInteger)dvt_sortedInsertionIndexForObject:(id)object withComparisonSelector:(SEL)selector
+{
+    /* A straight tail-call through DVTComparatorForSelector. */
+    return [self dvt_sortedInsertionIndexForObject:object
+                                   withComparator:DVTComparatorForSelector(selector)];
+}
+
 @end
 
 @implementation NSMutableArray (DVTFoundationClassAdditions)
@@ -835,6 +878,92 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     id object = [self objectAtIndex:(NSUInteger)fromIndex];
     [self removeObjectAtIndex:(NSUInteger)fromIndex];
     [self insertObject:object atIndex:(NSUInteger)toIndex];
+}
+
+- (NSInteger)dvt_sortedInsert:(id)object
+{
+    /* A tail-call to -dvt_sortedInsert:withComparator: carrying a block whose
+       invoke function moves its first argument into the receiver slot and calls
+       -compare: with the second, i.e. the default order is plain -compare:. */
+    return [self dvt_sortedInsert:object
+                    withComparator:^NSComparisonResult(id first, id second) {
+                        return [first compare:second];
+                    }];
+}
+
+- (NSInteger)dvt_sortedInsert:(id)object
+                withComparator:(NSComparisonResult (^)(id first, id second))comparator
+{
+    /* The insertion index is kept in a callee-saved register across the insert
+       and is what this method returns, so the return value is the index used
+       rather than the index afterwards. */
+    NSInteger index = [self dvt_sortedInsertionIndexForObject:object withComparator:comparator];
+    [self insertObject:object atIndex:(NSUInteger)index];
+    return index;
+}
+
+- (NSInteger)dvt_sortedInsert:(id)object withComparisonSelector:(SEL)selector
+{
+    /* A straight tail-call through DVTComparatorForSelector. */
+    return [self dvt_sortedInsert:object withComparator:DVTComparatorForSelector(selector)];
+}
+
+- (void)dvt_sortedInsertOfObjects:(NSArray *)objects
+                   withComparator:(NSComparisonResult (^)(id first, id second))comparator
+{
+    /* The argument is sorted first, then every element's insertion index is
+       collected into an NSMutableIndexSet, offset by its position in the sorted
+       argument, and the whole set is applied with -insertObjects:atIndexes:.
+
+       The offset is what makes this a merge rather than a repeated insert: each
+       index is computed against the receiver as it stands *before* the batch, so
+       the + index term accounts for the elements already placed ahead of it.
+       Collecting into an index set and inserting once also leaves the receiver
+       untouched if any single index turns out to be invalid. */
+    NSArray *sorted = [objects sortedArrayUsingComparator:comparator];
+    NSMutableIndexSet *indexes = [NSMutableIndexSet indexSet];
+    [sorted enumerateObjectsUsingBlock:^(id object, NSUInteger index, BOOL *stop) {
+        [indexes addIndex:(NSUInteger)[self dvt_sortedInsertionIndexForObject:object
+                                                               withComparator:comparator] + index];
+    }];
+    [self insertObjects:sorted atIndexes:indexes];
+}
+
+- (BOOL)dvt_uniqueSortedInsert:(id)object
+{
+    /* A tail-call to -dvt_uniqueSortedInsert:withComparator: with the same
+       -compare: block the sorted-insert default uses. */
+    return [self dvt_uniqueSortedInsert:object
+                         withComparator:^NSComparisonResult(id first, id second) {
+                             return [first compare:second];
+                         }];
+}
+
+- (BOOL)dvt_uniqueSortedInsert:(id)object
+                 withComparator:(NSComparisonResult (^)(id first, id second))comparator
+{
+    /* An empty receiver short-circuits to -addObject:; the binary search is not
+       run over a zero-length range.
+
+       Otherwise the search returns an insertion point, and only when that index
+       is still inside the receiver is the element there compared against. The
+       duplicate test is the comparator result being NSOrderedSame (cbz on the
+       call's return), *not* -isEqual:, so objects that compare equal but are
+       distinct under -isEqual: are treated as duplicates. */
+    NSUInteger count = self.count;
+    if (count == 0) {
+        [self addObject:object];
+        return YES;
+    }
+    NSUInteger index = [self indexOfObject:object
+                           inSortedRange:NSMakeRange(0, count)
+                                  options:NSBinarySearchingInsertionIndex
+                         usingComparator:comparator];
+    if (index < count && comparator(object, [self objectAtIndex:index]) == NSOrderedSame) {
+        return NO;
+    }
+    [self insertObject:object atIndex:index];
+    return YES;
 }
 
 @end

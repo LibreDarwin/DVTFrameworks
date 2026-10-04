@@ -29,6 +29,27 @@
 - (NSUInteger)hash { return 0; }
 @end
 
+/**
+ Reports every pair as equal under `compare:` while leaving `isEqual:` as the
+ inherited identity test, so "already present" and "is equal" disagree. Used to
+ tell the two apart.
+ */
+@interface DVTAlwaysSame : NSObject
+@property (nonatomic, copy) NSString *tag;
+@end
+
+@implementation DVTAlwaysSame
+- (NSComparisonResult)compare:(id)other { (void)other; return NSOrderedSame; }
+- (NSString *)description { return [NSString stringWithFormat:@"<same %@>", self.tag]; }
+@end
+
+static DVTAlwaysSame *DVTTestSame(NSString *tag)
+{
+    DVTAlwaysSame *object = [[DVTAlwaysSame alloc] init];
+    object.tag = tag;
+    return object;
+}
+
 static int DVTTestFailures = 0;
 static int DVTTestCount = 0;
 
@@ -1135,6 +1156,130 @@ static void DVTTestClassAdditions(void)
         DVTExpect([exception.name isEqualToString:NSRangeException],
                   @"dvt_moveObjectAtIndex:toIndex: a destination past the end raises NSRangeException");
     }
+
+    /* Sorted insertion. The comparator is a block rather than -compare: wherever
+       a descending or otherwise different order is wanted, so the two paths stay
+       distinguishable. */
+    NSComparisonResult (^ascending)(id, id) = ^NSComparisonResult(id first, id second) {
+        return [first compare:second];
+    };
+    NSComparisonResult (^descending)(id, id) = ^NSComparisonResult(id first, id second) {
+        return [second compare:first];
+    };
+
+    /* An empty receiver answers 0 without ever calling the comparator, so a nil
+       comparator is survivable here even though a non-empty one is not. */
+    NSArray *emptyArray = @[];
+    DVTExpect([emptyArray dvt_sortedInsertionIndexForObject:@"b" withComparator:ascending] == 0,
+              @"dvt_sortedInsertionIndexForObject:withComparator: an empty array yields 0");
+    DVTExpect([emptyArray dvt_sortedInsertionIndexForObject:@"b" withComparator:nil] == 0,
+              @"dvt_sortedInsertionIndexForObject:withComparator: an empty array never calls the comparator");
+
+    NSArray *aCe = @[@"a", @"c", @"e"];
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"b" withComparator:ascending] == 1,
+              @"dvt_sortedInsertionIndexForObject:withComparator: a gap yields the middle index");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"A" withComparator:ascending] == 0,
+              @"dvt_sortedInsertionIndexForObject:withComparator: a smaller element yields 0");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"z" withComparator:ascending] == 3,
+              @"dvt_sortedInsertionIndexForObject:withComparator: a larger element yields the count");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"b" withComparator:descending] == 3,
+              @"dvt_sortedInsertionIndexForObject:withComparator: the comparator decides the order");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"b" withComparisonSelector:@selector(compare:)] == 1,
+              @"dvt_sortedInsertionIndexForObject:withComparisonSelector: matches the compare: block");
+
+    /* NSBinarySearchingInsertionIndex reports the index of an equal element when
+       one exists and the insertion point otherwise, so this is a match position
+       rather than always "past the run". */
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"c" withComparator:ascending] == 1,
+              @"dvt_sortedInsertionIndexForObject:withComparator: an equal element yields its own index");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"a" withComparator:ascending] == 0,
+              @"dvt_sortedInsertionIndexForObject:withComparator: a leading equal element yields 0");
+    DVTExpect([aCe dvt_sortedInsertionIndexForObject:@"e" withComparator:ascending] == 2,
+              @"dvt_sortedInsertionIndexForObject:withComparator: a trailing equal element yields its own index");
+
+    NSMutableArray *sorted = [@[@"a", @"c", @"e"] mutableCopy];
+    DVTExpect([sorted dvt_sortedInsert:@"b"] == 1, @"dvt_sortedInsert: returns the index it used");
+    DVTExpectEqualObjects(sorted, (@[@"a", @"b", @"c", @"e"]), @"dvt_sortedInsert: inserts in the middle");
+    DVTExpect([sorted dvt_sortedInsert:@"z"] == 4, @"dvt_sortedInsert: appends and returns the count");
+    DVTExpect([sorted dvt_sortedInsert:@"c"] == 2, @"dvt_sortedInsert: an equal element inserts at its own index");
+    DVTExpectEqualObjects(sorted, (@[@"a", @"b", @"c", @"c", @"e", @"z"]),
+                          @"dvt_sortedInsert: does not deduplicate");
+
+    NSMutableArray *descendingArray = [@[@"e", @"c", @"a"] mutableCopy];
+    DVTExpect([descendingArray dvt_sortedInsert:@"b" withComparator:descending] == 2,
+              @"dvt_sortedInsert:withComparator: returns the index it used");
+    DVTExpectEqualObjects(descendingArray, (@[@"e", @"c", @"b", @"a"]),
+                          @"dvt_sortedInsert:withComparator: follows the comparator");
+    NSMutableArray *selectorArray = [@[@"A", @"C", @"E"] mutableCopy];
+    [selectorArray dvt_sortedInsert:@"b" withComparisonSelector:@selector(caseInsensitiveCompare:)];
+    DVTExpectEqualObjects(selectorArray, (@[@"A", @"b", @"C", @"E"]),
+                          @"dvt_sortedInsert:withComparisonSelector: drives the order");
+
+    /* Batch insertion merges rather than inserting one at a time: the argument
+       is sorted first, and each element's index is offset by its position in the
+       sorted argument so the elements already placed ahead of it are accounted
+       for. Duplicates in the argument are what expose a missing offset. */
+    NSMutableArray *merged = [@[@"a", @"c", @"e"] mutableCopy];
+    [merged dvt_sortedInsertOfObjects:@[@"d", @"b"] withComparator:ascending];
+    DVTExpectEqualObjects(merged, (@[@"a", @"b", @"c", @"d", @"e"]),
+                          @"dvt_sortedInsertOfObjects:withComparator: merges an unsorted argument");
+
+    NSMutableArray *mergedDupes = [@[@"a", @"e"] mutableCopy];
+    [mergedDupes dvt_sortedInsertOfObjects:@[@"c", @"c"] withComparator:ascending];
+    DVTExpectEqualObjects(mergedDupes, (@[@"a", @"c", @"c", @"e"]),
+                          @"dvt_sortedInsertOfObjects:withComparator: duplicate elements both land");
+
+    NSMutableArray *mergedLeading = [@[@"a", @"e"] mutableCopy];
+    [mergedLeading dvt_sortedInsertOfObjects:@[@"a", @"a", @"z"] withComparator:ascending];
+    DVTExpectEqualObjects(mergedLeading, (@[@"a", @"a", @"a", @"e", @"z"]),
+                          @"dvt_sortedInsertOfObjects:withComparator: a leading run stays ahead of the receiver");
+
+    NSMutableArray *mergedEmpty = [@[@"a", @"c", @"e"] mutableCopy];
+    [mergedEmpty dvt_sortedInsertOfObjects:@[] withComparator:ascending];
+    DVTExpectEqualObjects(mergedEmpty, (@[@"a", @"c", @"e"]),
+                          @"dvt_sortedInsertOfObjects:withComparator: an empty argument changes nothing");
+    [mergedEmpty dvt_sortedInsertOfObjects:nil withComparator:ascending];
+    DVTExpectEqualObjects(mergedEmpty, (@[@"a", @"c", @"e"]),
+                          @"dvt_sortedInsertOfObjects:withComparator: a nil argument changes nothing");
+
+    /* Uniqueness is decided by the comparator reporting NSOrderedSame, not by
+       -isEqual:. The helper objects below are distinct under -isEqual: yet
+       compare equal, and the second insert is refused -- which an -isEqual: based
+       implementation would get wrong. */
+    NSMutableArray *unique = [@[@"a", @"c", @"e"] mutableCopy];
+    DVTExpect([unique dvt_uniqueSortedInsert:@"b"], @"dvt_uniqueSortedInsert: inserts a missing element");
+    DVTExpectEqualObjects(unique, (@[@"a", @"b", @"c", @"e"]), @"dvt_uniqueSortedInsert: inserts in order");
+    DVTExpect(![unique dvt_uniqueSortedInsert:@"c"], @"dvt_uniqueSortedInsert: refuses an equal element");
+    DVTExpectEqualObjects(unique, (@[@"a", @"b", @"c", @"e"]),
+                          @"dvt_uniqueSortedInsert: a refused element leaves the array alone");
+    DVTExpect([unique dvt_uniqueSortedInsert:@"C"], @"dvt_uniqueSortedInsert: a different case is not a duplicate");
+    DVTExpectEqualObjects(unique, (@[@"C", @"a", @"b", @"c", @"e"]),
+                          @"dvt_uniqueSortedInsert: a case variant sorts ahead");
+
+    NSMutableArray *uniqueSame = [NSMutableArray array];
+    DVTExpect([uniqueSame dvt_uniqueSortedInsert:DVTTestSame(@"1")],
+              @"dvt_uniqueSortedInsert: an empty receiver inserts");
+    DVTExpect(![uniqueSame dvt_uniqueSortedInsert:DVTTestSame(@"2")],
+              @"dvt_uniqueSortedInsert: compare:-equal objects are duplicates despite differing under isEqual:");
+    DVTExpect(uniqueSame.count == 1, @"dvt_uniqueSortedInsert: the refused equal object was not appended");
+
+    NSMutableArray *uniqueCmp = [NSMutableArray array];
+    DVTExpect([uniqueCmp dvt_uniqueSortedInsert:@"a" withComparator:descending],
+              @"dvt_uniqueSortedInsert:withComparator: inserts into an empty receiver");
+    DVTExpect(![uniqueCmp dvt_uniqueSortedInsert:@"a" withComparator:descending],
+              @"dvt_uniqueSortedInsert:withComparator: refuses a comparator-equal element");
+
+    /* -compare: on nil yields NSOrderedSame, but the binary search rejects the nil
+       argument before that, so this raises rather than reporting a duplicate. */
+    @try {
+        [unique dvt_uniqueSortedInsert:nil];
+        DVTExpect(NO, @"dvt_uniqueSortedInsert: a nil element raises");
+    } @catch (NSException *exception) {
+        DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                  @"dvt_uniqueSortedInsert: a nil element raises NSInvalidArgumentException");
+    }
+    DVTExpectEqualObjects(unique, (@[@"C", @"a", @"b", @"c", @"e"]),
+                          @"dvt_uniqueSortedInsert: the failed nil insert left the array alone");
 
     NSMutableSet *set = [NSMutableSet setWithCapacity:0];
     [set dvt_addObjectIfNonNil:nil];
