@@ -353,6 +353,31 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)dvt_shuffle;
 
+/**
+  Sorts the receiver in place by a value derived from each element.
+
+  `valueBlock` is applied to each element and the resulting values are compared
+  with `compare:`, so the ordering follows the block's output rather than the
+  elements themselves. A derived value of `nil` trips an assertion rather than
+  being compared, as it does in Apple.
+
+  Elements whose derived values come out equal are reported as equal, leaving
+  their relative order to the sort.
+ */
+- (void)dvt_sortByValueBlock:(id (^)(id object))valueBlock;
+
+/**
+  As `dvt_sortByValueBlock:`, with `duplicateHandler` breaking ties.
+
+  The handler runs only for elements whose derived values have already compared
+  equal, and it receives the two elements rather than the two derived values, so
+  it can order a tie by whatever `valueBlock` discarded. Its result becomes the
+  comparison result. A `nil` handler behaves exactly as in
+  `dvt_sortByValueBlock:`.
+ */
+- (void)dvt_sortByValueBlock:(id (^)(id object))valueBlock
+           duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
+
 @end
 
 @interface NSSet (DVTNSSetAdditions)

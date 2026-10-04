@@ -1043,6 +1043,45 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return YES;
 }
 
+#pragma mark - Sorting
+
+- (void)dvt_sortByValueBlock:(id (^)(id object))valueBlock
+{
+    /* Apple loads a null into the second argument and tail-calls, so this is
+       exactly the two-argument form with no duplicate handler. */
+    [self dvt_sortByValueBlock:valueBlock duplicateHandler:nil];
+}
+
+- (void)dvt_sortByValueBlock:(id (^)(id object))valueBlock
+           duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler
+{
+    /* The comparator Apple builds derives a value from each member, asserts both
+       values are non-nil, and compares *those*, so the ordering is driven by the
+       block's output rather than by the members themselves.
+
+       The duplicate handler is consulted only once the derived values have come
+       out equal, and it is handed the two members rather than the two values --
+       the disassembly passes the comparator's own arguments straight through --
+       so a handler can still order a tie by whatever the value block discarded.
+       With no handler a tie stays NSOrderedSame and the sort is left to decide. */
+    [self sortUsingComparator:^NSComparisonResult(id first, id second) {
+        id firstValue = valueBlock(first);
+        DVTAssertNotNil(firstValue, @"bad cfstring ref");
+        id secondValue = valueBlock(second);
+        DVTAssertNotNil(secondValue, @"bad cfstring ref");
+        NSComparisonResult result = [firstValue compare:secondValue];
+        if (result != NSOrderedSame) {
+            return result;
+        }
+        if (duplicateHandler == nil) {
+            return NSOrderedSame;
+        }
+        return duplicateHandler(first, second);
+    }];
+}
+
+#pragma mark - Recursive removal
+
 - (void)dvt_recursivelyRemoveAllObjects
 {
     /* Apple hands its helper a freshly allocated NSMutableSet and nothing else;

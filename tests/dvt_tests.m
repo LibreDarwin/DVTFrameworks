@@ -775,6 +775,39 @@ static void DVTTestMachO(void)
     [[NSFileManager defaultManager] removeItemAtPath:fat error:NULL];
 }
 
+@interface DVTTestCapturingHandler : DVTAssertionReportHandler
+@property (nonatomic, strong) NSMutableArray<NSString *> *reports;
+@property (nonatomic, assign) BOOL lastWasWarning;
+@end
+
+@implementation DVTTestCapturingHandler
+
+@synthesize reports = _reports;
+@synthesize lastWasWarning = _lastWasWarning;
+
+- (instancetype)init
+{
+    self = [super init];
+    if (self != nil) {
+        _reports = [NSMutableArray arrayWithCapacity:0];
+    }
+    return self;
+}
+
+- (void)didFailAssertion:(NSString *)report
+{
+    _lastWasWarning = NO;
+    [self.reports addObject:report];
+}
+
+- (void)didWarnAssertion:(NSString *)report
+{
+    _lastWasWarning = YES;
+    [self.reports addObject:report];
+}
+
+@end
+
 #pragma mark - Class additions
 
 static void DVTTestClassAdditions(void)
@@ -1804,6 +1837,158 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects(members, (@[@"a", @"b", @"c"]),
                               @"dvt_shuffledArray permutes rather than duplicating or dropping members");
     }
+
+    /* -dvt_sortByValueBlock: compares values the block derives, so the ordering
+       belongs to the derived values and not to the members themselves. */
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", @"dd", @"e", nil];
+        [array dvt_sortByValueBlock:^id(id object) { return @([object length]); }];
+        DVTExpectEqualObjects(array, (@[@"a", @"e", @"cc", @"dd", @"bbb"]),
+                              @"dvt_sortByValueBlock: orders by the derived value");
+    }
+    {
+        /* Negating the derived value is enough to reverse the result, which
+           shows the direction comes from the block and not from a flag. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", nil];
+        [array dvt_sortByValueBlock:^id(id object) { return @(-(NSInteger)[object length]); }];
+        DVTExpectEqualObjects(array, (@[@"bbb", @"cc", @"a"]),
+                              @"dvt_sortByValueBlock: orders descending when the value block negates");
+    }
+    {
+        /* The value block is asked for both members of each comparison, so its
+           call count tracks the comparisons rather than the receiver's count. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", @"dd", nil];
+        __block int valueCalls = 0;
+        [array dvt_sortByValueBlock:^id(id object) {
+            valueCalls++;
+            return @([object length]);
+        }];
+        DVTExpect(valueCalls > array.count,
+                  @"dvt_sortByValueBlock: asks the value block once per member per comparison");
+    }
+    {
+        /* Neither block runs for a receiver with nothing to compare, so an empty
+           or single element array cannot observe either. */
+        __block int valueCalls = 0;
+        __block int handlerCalls = 0;
+        NSMutableArray *empty = [NSMutableArray array];
+        NSMutableArray *single = [NSMutableArray arrayWithObject:@"only"];
+        for (NSMutableArray *receiver in @[ empty, single ]) {
+            [receiver dvt_sortByValueBlock:^id(id object) {
+                                valueCalls++;
+                                return object;
+                            }
+                      duplicateHandler:^NSComparisonResult(id first, id second) {
+                          handlerCalls++;
+                          return NSOrderedSame;
+                      }];
+        }
+        DVTExpect(valueCalls == 0, @"dvt_sortByValueBlock: does not run the value block without comparisons");
+        DVTExpect(handlerCalls == 0, @"dvt_sortByValueBlock: does not run the duplicate handler without comparisons");
+    }
+    {
+        /* A nil derived value trips the assertion, which is why the value block
+           is documented as having to answer a real object. */
+        DVTTestCapturingHandler *handler = [DVTTestCapturingHandler new];
+        [DVTAssertionReportHandler setCurrentHandler:handler];
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a", @"bb", nil];
+        [array dvt_sortByValueBlock:^id(id object) { return nil; }];
+        [DVTAssertionReportHandler setCurrentHandler:nil];
+        DVTExpect(handler.reports.count > 0, @"dvt_sortByValueBlock: asserts on a nil derived value");
+        DVTExpect(!handler.lastWasWarning,
+                  @"dvt_sortByValueBlock: reports a nil derived value as a failure, not a warning");
+        DVTExpect([handler.reports.lastObject rangeOfString:@"bad cfstring ref"].location != NSNotFound,
+                  @"dvt_sortByValueBlock: explains a nil derived value the way Apple does");
+    }
+
+    /* The duplicate handler only ever sees ties, and it is handed the members
+       rather than the values the value block produced. */
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", @"dd", @"e", nil];
+        NSMutableArray *seen = [NSMutableArray array];
+        [array dvt_sortByValueBlock:^id(id object) { return @([object length]); }
+                  duplicateHandler:^NSComparisonResult(id first, id second) {
+                      [seen addObject:[NSString stringWithFormat:@"%@/%@", first, second]];
+                      return [first compare:second];
+                  }];
+        DVTExpectEqualObjects(array, (@[@"a", @"e", @"cc", @"dd", @"bbb"]),
+                              @"dvt_sortByValueBlock:duplicateHandler: can break ties by member");
+        BOOL sawMembers = YES;
+        for (NSString *entry in seen) {
+            if ([entry rangeOfString:@"b"].location == NSNotFound &&
+                [entry rangeOfString:@"a"].location == NSNotFound &&
+                [entry rangeOfString:@"c"].location == NSNotFound &&
+                [entry rangeOfString:@"d"].location == NSNotFound &&
+                [entry rangeOfString:@"e"].location == NSNotFound) {
+                sawMembers = NO;
+            }
+        }
+        DVTExpect(sawMembers, @"dvt_sortByValueBlock:duplicateHandler: receives the members, not the derived values");
+    }
+    {
+        /* A handler that claims every comparison is descending inverts the whole
+           order, so its result really is what the sort obeys. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", @"dd", @"e", nil];
+        [array dvt_sortByValueBlock:^id(id object) { return @([object length]); }
+                  duplicateHandler:^NSComparisonResult(id first, id second) { return NSOrderedDescending; }];
+        DVTExpectEqualObjects(array, (@[@"e", @"a", @"dd", @"cc", @"bbb"]),
+                              @"dvt_sortByValueBlock:duplicateHandler: obeys a handler that always says descending");
+    }
+    {
+        /* The handler is not consulted while the derived values differ, so a
+           non-tied receiver never reaches it. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", @"dd", @"e", nil];
+        __block int calls = 0;
+        [array dvt_sortByValueBlock:^id(id object) { return @([object length]); }
+                  duplicateHandler:^NSComparisonResult(id first, id second) {
+                      calls++;
+                      return NSOrderedSame;
+                  }];
+        DVTExpect(calls > 0, @"dvt_sortByValueBlock:duplicateHandler: is consulted for ties");
+    }
+    {
+        /* Distinct members that collapse to one derived value all become ties, so
+           the handler runs for every pairing among them. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"aa", @"bb", @"cc", @"dd", nil];
+        __block int calls = 0;
+        [array dvt_sortByValueBlock:^id(id object) { return @"all-equal"; }
+                  duplicateHandler:^NSComparisonResult(id first, id second) {
+                      calls++;
+                      return [first compare:second];
+                  }];
+        DVTExpectEqualObjects(array, (@[@"aa", @"bb", @"cc", @"dd"]),
+                              @"dvt_sortByValueBlock:duplicateHandler: orders members that collapse to one value");
+    }
+    {
+        /* The one argument form tail-calls with a null handler, so it matches the
+           two argument form spelled with nil, ties included. */
+        NSArray *members = @[@"bbb", @"a", @"cc", @"dd", @"e"];
+        NSMutableArray *oneArgument = [NSMutableArray arrayWithArray:members];
+        NSMutableArray *nilHandler = [NSMutableArray arrayWithArray:members];
+        [oneArgument dvt_sortByValueBlock:^id(id object) { return @([object length]); }];
+        [nilHandler dvt_sortByValueBlock:^id(id object) { return @([object length]); } duplicateHandler:nil];
+        DVTExpectEqualObjects(oneArgument, (@[@"a", @"e", @"cc", @"dd", @"bbb"]),
+                              @"dvt_sortByValueBlock: sorts by the derived value");
+        DVTExpectEqualObjects(oneArgument, nilHandler,
+                              @"dvt_sortByValueBlock: matches the two argument form with a nil handler");
+    }
+    {
+        /* With every derived value equal and no handler, a tie stays
+           NSOrderedSame and the sort decides rather than the method. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"aa", @"bb", nil];
+        [array dvt_sortByValueBlock:^id(id object) { return @"same"; }];
+        DVTExpectEqualObjects(array, (@[@"aa", @"bb"]),
+                              @"dvt_sortByValueBlock: leaves an all-ties receiver to the sort");
+    }
+    {
+        /* The sort happens in place on the receiver, not on a copy. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"bbb", @"a", @"cc", nil];
+        NSMutableArray *alias = array;
+        [array dvt_sortByValueBlock:^id(id object) { return @([object length]); }];
+        DVTExpect(alias == array, @"dvt_sortByValueBlock: sorts the receiver in place");
+        DVTExpectEqualObjects(array, (@[@"a", @"cc", @"bbb"]),
+                              @"dvt_sortByValueBlock: leaves the receiver sorted");
+    }
 }
 
 #pragma mark - Property list values
@@ -1978,38 +2163,6 @@ static void DVTTestPropertyListValue(void)
 #pragma mark - Assertions
 
 /** Captures reports instead of aborting. */
-@interface DVTTestCapturingHandler : DVTAssertionReportHandler
-@property (nonatomic, strong) NSMutableArray<NSString *> *reports;
-@property (nonatomic, assign) BOOL lastWasWarning;
-@end
-
-@implementation DVTTestCapturingHandler
-
-@synthesize reports = _reports;
-@synthesize lastWasWarning = _lastWasWarning;
-
-- (instancetype)init
-{
-    self = [super init];
-    if (self != nil) {
-        _reports = [NSMutableArray arrayWithCapacity:0];
-    }
-    return self;
-}
-
-- (void)didFailAssertion:(NSString *)report
-{
-    _lastWasWarning = NO;
-    [self.reports addObject:report];
-}
-
-- (void)didWarnAssertion:(NSString *)report
-{
-    _lastWasWarning = YES;
-    [self.reports addObject:report];
-}
-
-@end
 
 static void DVTTestAssertions(void)
 {

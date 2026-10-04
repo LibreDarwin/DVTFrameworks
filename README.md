@@ -1036,7 +1036,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 56,680 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,698 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1053,7 +1053,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **56,680 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,698 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1070,13 +1070,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 143 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 573 will not find
-it here. Two of the 143 are additions rather than reproductions:
+This project implements 145 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 571 will not find
+it here. Two of the 145 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 141 are reproduced against the
+rather than a match for those variants. The other 143 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what
