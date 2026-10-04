@@ -30,6 +30,7 @@
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
 #import <objc/message.h>
+#import <stdlib.h>
 
 /*
  PureDarwin's Foundation is a subset of Apple's: -firstObject, -indexOfObject:,
@@ -597,6 +598,24 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return best;
 }
 
+#pragma mark - Shuffling
+
+- (id)dvt_shuffledArray
+{
+    /* Apple's branch is on -count: above one it takes a mutable copy and shuffles
+       that, and at one or below it returns -copy with no shuffle at all. The
+       low-count branch is observable rather than a shortcut -- -copy hands back
+       an immutable receiver as the same object, and a mutable one as an
+       immutable array, so the result's mutability depends on the receiver's
+       count. */
+    if (self.count > 1) {
+        NSMutableArray *copy = [self mutableCopy];
+        [copy dvt_shuffle];
+        return copy;
+    }
+    return [self copy];
+}
+
 #pragma mark - Command line rendering
 
 - (NSString *)dvt_stringByConcatenatingAsCommandLineArguments
@@ -1029,6 +1048,29 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     /* Apple hands its helper a freshly allocated NSMutableSet and nothing else;
        the receiver is reached by the helper's first step. */
     DVTRemoveAllObjectsRecursively(self, [NSMutableSet set]);
+}
+
+- (void)dvt_shuffle
+{
+    /* The whole body is 24 instructions: -count is read once into the
+       remainder, a count below two skips the loop outright, and each pass draws
+       arc4random_uniform(remaining) to pick a partner for the loop index.
+
+       The remainder shrinks by one per pass and the loop runs while it is not
+       1, which makes this a Fisher-Yates walk over the whole array rather than a
+       partial one: the last member is reached by elimination instead of by a
+       draw of its own. */
+    NSUInteger remaining = self.count;
+    if (remaining < 2) {
+        return;
+    }
+    NSUInteger index = 0;
+    do {
+        NSUInteger other = index + arc4random_uniform(remaining);
+        [self exchangeObjectAtIndex:index withObjectAtIndex:other];
+        index++;
+        remaining--;
+    } while (remaining != 1);
 }
 
 @end

@@ -1684,6 +1684,126 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects(set, [NSSet set], @"recursive removal empties the set in a mixed graph");
         DVTExpectEqualObjects(dictionary, @{}, @"recursive removal empties the dictionary in a mixed graph");
     }
+
+    /* -dvt_shuffle is random, so it is asserted through the properties any
+       in-place shuffle must hold rather than through a fixed order. */
+    {
+        NSMutableArray *array = [NSMutableArray array];
+        for (int i = 0; i < 8; i++) {
+            [array addObject:[NSNumber numberWithInt:i]];
+        }
+        BOOL permutation = YES;
+        BOOL everChanged = NO;
+        for (int run = 0; run < 500; run++) {
+            [array dvt_shuffle];
+            if (array.count != 8) {
+                permutation = NO;
+                break;
+            }
+            NSMutableSet *seen = [NSMutableSet set];
+            for (NSNumber *number in array) {
+                [seen addObject:number];
+            }
+            if (seen.count != 8) {
+                permutation = NO;
+                break;
+            }
+            if (![array isEqual:(@[@0, @1, @2, @3, @4, @5, @6, @7])]) {
+                everChanged = YES;
+            }
+        }
+        DVTExpect(permutation, @"dvt_shuffle permutes in place without losing members");
+        DVTExpect(everChanged, @"dvt_shuffle reorders rather than leaving the receiver alone");
+    }
+    {
+        /* Every one of the six orders of three elements has to be reachable,
+           which is what rules out a walk that under-draws. */
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"a", @"b", @"c", nil];
+        NSMutableSet *orders = [NSMutableSet set];
+        for (int run = 0; run < 500; run++) {
+            [array dvt_shuffle];
+            [orders addObject:[array componentsJoinedByString:@""]];
+        }
+        DVTExpect(orders.count == 6, @"dvt_shuffle reaches all six orders of three elements");
+    }
+    {
+        NSMutableArray *empty = [NSMutableArray array];
+        [empty dvt_shuffle];
+        NSMutableArray *single = [NSMutableArray arrayWithObject:@"only"];
+        for (int run = 0; run < 50; run++) {
+            [single dvt_shuffle];
+        }
+        DVTExpect(empty.count == 0, @"dvt_shuffle on an empty receiver is a no-op");
+        DVTExpectEqualObjects(single, @[@"only"], @"dvt_shuffle on a one element receiver is a no-op");
+    }
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObjects:@"x", @"x", @"y", nil];
+        BOOL multisetKept = YES;
+        for (int run = 0; run < 500; run++) {
+            [array dvt_shuffle];
+            NSUInteger xs = 0;
+            for (id object in array) {
+                if ([object isEqual:@"x"]) {
+                    xs++;
+                }
+            }
+            if (xs != 2) {
+                multisetKept = NO;
+                break;
+            }
+        }
+        DVTExpect(multisetKept, @"dvt_shuffle keeps duplicate multiplicities");
+    }
+
+    /* -dvt_shuffledArray only shuffles above one element, and the branch it
+       takes below that is visible in what -copy returns. */
+    {
+        NSArray *frozenOne = @[@"a"];
+        NSArray *frozenEmpty = @[];
+        NSMutableArray *mutableOne = [NSMutableArray arrayWithObject:@"a"];
+        NSMutableArray *mutableEmpty = [NSMutableArray array];
+        DVTExpect([frozenOne dvt_shuffledArray] == frozenOne,
+                  @"dvt_shuffledArray returns an immutable one element receiver as itself");
+        DVTExpect([frozenEmpty dvt_shuffledArray] == frozenEmpty,
+                  @"dvt_shuffledArray returns an immutable empty receiver as itself");
+        DVTExpect([mutableOne dvt_shuffledArray] != mutableOne,
+                  @"dvt_shuffledArray copies a mutable one element receiver");
+        DVTExpect([mutableEmpty dvt_shuffledArray] != mutableEmpty,
+                  @"dvt_shuffledArray copies a mutable empty receiver");
+        DVTExpect([[mutableOne dvt_shuffledArray] isKindOfClass:[NSMutableArray class]] == NO,
+                  @"dvt_shuffledArray answers an immutable array for a mutable one element receiver");
+        DVTExpect([[mutableEmpty dvt_shuffledArray] isKindOfClass:[NSMutableArray class]] == NO,
+                  @"dvt_shuffledArray answers an immutable array for a mutable empty receiver");
+    }
+    {
+        /* Above one element the result is a shuffled mutable copy, so the
+           receiver keeps its order and mutating the result cannot reach back. */
+        NSMutableArray *source = [NSMutableArray arrayWithObjects:@"a", @"b", @"c", nil];
+        id shuffled = [source dvt_shuffledArray];
+        DVTExpect(shuffled != source, @"dvt_shuffledArray returns a copy rather than the receiver");
+        DVTExpect([shuffled isKindOfClass:[NSMutableArray class]],
+                  @"dvt_shuffledArray answers a mutable array above one element");
+        DVTExpectEqualObjects(source, (@[@"a", @"b", @"c"]),
+                              @"dvt_shuffledArray leaves the receiver in order");
+        [shuffled removeAllObjects];
+        DVTExpect(source.count == 3, @"dvt_shuffledArray's result does not alias the receiver");
+        NSMutableArray *sorted = [shuffled mutableCopy];
+        DVTExpect(sorted.count == 0, @"dvt_shuffledArray's result really was emptied in place");
+    }
+    {
+        /* An immutable receiver is copied before shuffling, so it survives too. */
+        NSArray *frozenThree = @[@"a", @"b", @"c"];
+        id shuffledFrozen = [frozenThree dvt_shuffledArray];
+        DVTExpect(shuffledFrozen != frozenThree, @"dvt_shuffledArray copies an immutable receiver");
+        DVTExpect([shuffledFrozen isKindOfClass:[NSMutableArray class]],
+                  @"dvt_shuffledArray answers a mutable array for an immutable receiver above one element");
+        DVTExpectEqualObjects(frozenThree, (@[@"a", @"b", @"c"]),
+                              @"dvt_shuffledArray leaves an immutable receiver in order");
+        NSMutableArray *members = [shuffledFrozen mutableCopy];
+        [members sortUsingSelector:@selector(compare:)];
+        DVTExpectEqualObjects(members, (@[@"a", @"b", @"c"]),
+                              @"dvt_shuffledArray permutes rather than duplicating or dropping members");
+    }
 }
 
 #pragma mark - Property list values

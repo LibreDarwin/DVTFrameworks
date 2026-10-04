@@ -161,6 +161,16 @@ NS_ASSUME_NONNULL_BEGIN
 - (id _Nullable)dvt_minimumObject;
 
 /**
+  A shuffled copy of the receiver, leaving the receiver in its original order.
+
+  Only a receiver with more than one element is actually shuffled. At one element
+  or below the receiver is merely copied, which means an immutable receiver is
+  returned as the very same object while a mutable one is returned as an
+  immutable array; above one element the result is always a mutable array.
+ */
+- (id)dvt_shuffledArray;
+
+/**
  Renders the receiver the way a command line would accept it: elements are
  separated by a single space, non-`NSString` elements are described, the empty
  string is emitted as `""`, and an empty receiver yields the empty string.
@@ -332,6 +342,16 @@ NS_ASSUME_NONNULL_BEGIN
   cycles back to the receiver itself.
  */
 - (void)dvt_recursivelyRemoveAllObjects;
+
+/**
+  Shuffles the receiver in place, leaving the same members in a random order.
+
+  A receiver with fewer than two elements is left alone rather than shuffled. The
+  walk picks a partner for each position in turn from the part of the receiver
+  that is still unordered, so every permutation is equally likely and the last
+  member is settled by elimination rather than by a draw of its own.
+ */
+- (void)dvt_shuffle;
 
 @end
 
