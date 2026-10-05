@@ -225,7 +225,7 @@ sorting by a derived key, both in place on a mutable array and as a copy on an
 array or a set, stable partitioning, shuffling, unique-string lookup,
 contiguous-run search, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 123 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 125 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -356,6 +356,43 @@ the subscript setter with a `nil` in either slot. Collisions are not a special c
 — because the members stay distinct as keys, a constant answer still yields one
 entry per member, `a->k, b->k, c->k` — while in the mirror image the answers are
 the keys and so collide, leaving `k->c`, the last member enumerated.
+
+`NSArray` carries the same three families, and the answers match the set twins
+element for element: the fold takes `(accumulator, next)` with the same `nil`
+re-seed, and the two dictionary builders send the block's answer to the same slot
+each time. What the array forms add is where the receiver's **order** survives.
+`dvt_firstMap:` is a compact map that stops early — `a` answering `nil` and `b`
+answering `"B"` costs two block calls and never asks about `c`, where
+`dvt_compactMap:` asks three times for the same object. A `nil` answer is not an
+exit, only an unusable one, so an all-`nil` block walks the whole receiver and
+answers `nil`, and an empty receiver never reaches the block at all.
+
+`dvt_arrayByApplyingSelector:` is `dvt_setByApplyingSelector:`'s twin with repeats
+**kept**: `b, a, b` asked for `uppercaseString` answers `B, A, B`, where the set
+form collapses to `B`. Apple buffers the answers in 256 stack slots and switches to
+`calloc` past that, then builds with `-initWithObjects:count:`; that last part is
+observable, because it is what makes a one-answer result `__NSSingleObjectArrayI`
+rather than the plain `__NSArrayI` a `-copy` of the build would give, so the port
+hands its answers to `+arrayWithObjects:count:` to land on the same classes. A
+`nil` answer is dropped, which has to happen before the array is built since
+`+arrayWithObjects:count:` raises on one; an array cannot hold a `nil` member to
+produce that, so it takes helper objects whose selector answers `nil`.
+
+**Two deliberate deviations**, both where Apple aborts with exit `134`, and both
+the same pair the set form documents: a `nil` selector answers an empty array here,
+and a member that does not carry the selector is skipped rather than taken to the
+assertion. The scalar hazard is *not* one of them — `@selector(length)` faults on
+both sides with exit `139`, since the answer is retained as an object either way.
+
+One Apple branch is unreachable rather than reproduced. Both `dvt_firstMap:` and
+`dvt_arrayByApplyingSelector:` test each member for `nil` and assert on it, but no
+`nil` member can reach them: a `NULL` slot is refused at construction time by both
+`+arrayWithObjects:count:` and `CFArrayCreate`, each raising
+`NSInvalidArgumentException` — `attempt to insert nil object` — so the guarded
+branch is dead code on this OS. The probe builds the array through CoreFoundation
+specifically to get past `NSMutableArray`, and is refused the same way as the
+others, exit `134` with the same reason string on both binaries. The guard is documented in the
+implementation and left out of the tests rather than faked with a lying subclass.
 
 `NSString` also carries the letter-casing family, where the interesting work is
 `dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
@@ -1154,7 +1191,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 57,047 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 57,090 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1171,7 +1208,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **57,047 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **57,090 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1188,13 +1225,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 187 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 529 will not find
-it here. Two of the 187 are additions rather than reproductions:
+This project implements 192 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 524 will not find
+it here. Two of the 192 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 185 are reproduced against the
+rather than a match for those variants. The other 190 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what

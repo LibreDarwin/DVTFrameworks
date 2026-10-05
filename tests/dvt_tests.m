@@ -50,6 +50,27 @@ static DVTAlwaysSame *DVTTestSame(NSString *tag)
     return object;
 }
 
+/**
+  Answers whatever it was built with, so an array member can hand a selector a
+  genuine `nil` -- something no array can hold directly.
+ */
+@interface DVTTestAnswerer : NSObject
+@property (nonatomic, strong, nullable) id answer;
+- (id)dvt_testAnswer;
+@end
+
+@implementation DVTTestAnswerer
+- (id)dvt_testAnswer { return self.answer; }
+- (NSString *)description { return [NSString stringWithFormat:@"<answerer %@>", self.answer]; }
+@end
+
+static DVTTestAnswerer *DVTTestAnswererWith(id answer)
+{
+    DVTTestAnswerer *answerer = [[DVTTestAnswerer alloc] init];
+    answerer.answer = answer;
+    return answerer;
+}
+
 static int DVTTestFailures = 0;
 static int DVTTestCount = 0;
 
@@ -1363,6 +1384,205 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects(filtered, @[@"a"], @"array objectsPassingTest: keeps the members that pass");
         DVTExpect(![filtered respondsToSelector:@selector(addObject:)],
                   @"array objectsPassingTest: answers an immutable array");
+    }
+
+    {
+        /* dvt_firstMap: is the compact map that stops early. The answer alone
+           cannot show the difference -- dvt_compactMap: finds the same object with
+           the same block -- so the call log is what pins it down: the members after
+           the first usable answer are never offered to the block. */
+        NSArray *abc = @[@"a", @"b", @"c"];
+        NSMutableArray *calls = [NSMutableArray array];
+
+        DVTExpect([@[] dvt_firstMap:^id(id o) { return o; }] == nil,
+                  @"array firstMap: is nil for an empty receiver");
+        DVTExpect(calls.count == 0, @"array firstMap: never called the block for an empty receiver");
+        DVTExpectEqualObjects([abc dvt_firstMap:^id(id o) {
+            [calls addObject:o];
+            return [o isEqualToString:@"b"] ? [o uppercaseString] : nil;
+        }], @"B",
+                          @"array firstMap: answers the first non-nil block answer");
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"a b",
+                              @"array firstMap: stops asking once it has an answer");
+        /* A nil answer is not an exit, so the walk continues and an all-nil block
+           runs to the end before answering nil. */
+        [calls removeAllObjects];
+        DVTExpect([abc dvt_firstMap:^id(id o) {
+            [calls addObject:o];
+            return nil;
+        }] == nil,
+                  @"array firstMap: is nil when every answer is nil");
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"a b c",
+                              @"array firstMap: an all-nil block is asked about every member");
+        /* The first member can answer nil like any other, which is what the call
+           log above already covers; the answer here is simply the second member. */
+        DVTExpectEqualObjects([abc dvt_firstMap:^id(id o) {
+            return [o isEqualToString:@"a"] ? nil : o;
+        }], @"b",
+                          @"array firstMap: a nil first answer is skipped");
+        DVTExpectEqualObjects([abc dvt_firstMap:^id(id o) { return o; }], @"a",
+                              @"array firstMap: an identity block answers the first member");
+    }
+
+    {
+        /* The untyped mapping twin of dvt_arrayByApplyingBlock:. The two drop nil
+           answers alike, so what distinguishes this one is the selector dispatch
+           and the class the answer is built with. */
+        NSArray *three = @[@"a", @"b", @"c"];
+        NSArray *mapped = [three dvt_arrayByApplyingSelector:@selector(uppercaseString)];
+        DVTExpectEqualObjects(mapped, (@[@"A", @"B", @"C"]),
+                              @"array arrayByApplyingSelector: sends the selector to every member");
+        DVTExpect(![mapped respondsToSelector:@selector(addObject:)],
+                  @"array arrayByApplyingSelector: answers an immutable array");
+        /* Repeats are kept, which is the one place this parts company with the
+           NSSet method of the same name, where two equal answers collapse. */
+        DVTExpectEqualObjects([@[@"b", @"a", @"b"] dvt_arrayByApplyingSelector:@selector(uppercaseString)],
+                              (@[@"B", @"A", @"B"]),
+                              @"array arrayByApplyingSelector: keeps repeated answers");
+        /* Every member answers the same Class, and a Class object is not equal to
+           itself, so identity is the only comparison available here. The point
+           against the NSSet twin is that the answers stay separate rather than
+           collapsing, so what is checked is that they agree and that there are
+           three of them. */
+        NSArray *classes = [three dvt_arrayByApplyingSelector:@selector(class)];
+        DVTExpect(classes.count == 3,
+                  @"array arrayByApplyingSelector: keeps one answer per member");
+        DVTExpect([classes firstObject] == [classes objectAtIndex:1] &&
+                      [classes firstObject] == [classes lastObject],
+                  @"array arrayByApplyingSelector: every member answers the same Class");
+        /* A member that cannot answer is skipped, and the ones that can survive.
+           Apple takes either of these to an assertion instead. */
+        DVTExpectEqualObjects([@[@"ab", @3] dvt_arrayByApplyingSelector:@selector(uppercaseString)],
+                              (@[@"AB"]),
+                              @"array arrayByApplyingSelector: skips a member that cannot answer");
+        DVTExpectEqualObjects([three dvt_arrayByApplyingSelector:(SEL)0], @[],
+                              @"array arrayByApplyingSelector: a nil selector answers empty rather than aborting");
+        DVTExpectEqualObjects([@[] dvt_arrayByApplyingSelector:@selector(uppercaseString)], @[],
+                              @"array arrayByApplyingSelector: is empty for an empty receiver");
+        /* A nil answer is dropped, so the answers have to be filtered before the
+           array is built. An array cannot hold a nil member itself, hence the
+           helper objects rather than a literal with one. */
+        DVTExpectEqualObjects([@[DVTTestAnswererWith(nil), DVTTestAnswererWith(@"X"), DVTTestAnswererWith(nil)]
+                                  dvt_arrayByApplyingSelector:@selector(dvt_testAnswer)], (@[@"X"]),
+                              @"array arrayByApplyingSelector: drops nil answers");
+        DVTExpectEqualObjects([@[DVTTestAnswererWith(nil), DVTTestAnswererWith(nil)]
+                                  dvt_arrayByApplyingSelector:@selector(dvt_testAnswer)], @[],
+                              @"array arrayByApplyingSelector: is empty when every answer is nil");
+        /* Past 256 answers Apple switches from a stack buffer to a malloc'd one,
+           so a large receiver is where a fixed-size buffer would show. */
+        NSMutableArray *big = [NSMutableArray arrayWithCapacity:300];
+        for (int i = 0; i < 300; i++) {
+            [big addObject:[NSString stringWithFormat:@"m%03d", i]];
+        }
+        DVTExpect([[big dvt_arrayByApplyingSelector:@selector(uppercaseString)] count] == 300,
+                  @"array arrayByApplyingSelector: answers a 300-member receiver in full");
+    }
+
+    {
+        /* The array fold, which is -[NSSet dvt_objectByFoldingWithBlock:]'s twin:
+           (accumulator, next), a first member that seeds without asking, and a nil
+           answer that re-seeds on the member after it rather than ending the fold. */
+        NSArray *abc = @[@"a", @"b", @"c"];
+        NSMutableArray *calls = [NSMutableArray array];
+
+        DVTExpect([@[] dvt_objectByFoldingWithBlock:^id(id a, id b) { return @"never"; }] == nil,
+                  @"array objectByFoldingWithBlock: is nil for an empty receiver");
+        __block int blockCalls = 0;
+        DVTExpectEqualObjects([@[@"solo"] dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            blockCalls++;
+            return @"never";
+        }], @"solo",
+                              @"array objectByFoldingWithBlock: seeds on the first member without calling the block");
+        DVTExpect(blockCalls == 0,
+                  @"array objectByFoldingWithBlock: does not call the block for a lone member");
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            [calls addObject:[NSString stringWithFormat:@"(%@,%@)", a, b]];
+            return [NSString stringWithFormat:@"%@%@", a, b];
+        }], @"abc",
+                              @"array objectByFoldingWithBlock: folds the members together");
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"(a,b) (ab,c)",
+                              @"array objectByFoldingWithBlock: asks (accumulator, next)");
+        /* A nil answer empties the accumulator, so the next member re-seeds it and
+           an all-nil fold hands back the last member rather than nil. */
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) { return nil; }], @"c",
+                              @"array objectByFoldingWithBlock: a nil answer re-seeds on the next member");
+        blockCalls = 0;
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            blockCalls++;
+            return nil;
+        }], @"c",
+                              @"array objectByFoldingWithBlock: an all-nil fold answers the last member");
+        DVTExpect(blockCalls == 1,
+                  @"array objectByFoldingWithBlock: skips the call that would re-seed");
+        __block int fiveCalls = 0;
+        NSMutableArray *five = [NSMutableArray arrayWithCapacity:5];
+        for (int i = 0; i < 5; i++) {
+            [five addObject:@(i)];
+        }
+        DVTExpectEqualObjects([five dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            fiveCalls++;
+            return nil;
+        }], @4,
+                              @"array objectByFoldingWithBlock: an all-nil fold answers the last member");
+        DVTExpect(fiveCalls == 2, @"array objectByFoldingWithBlock: one call per re-seed");
+    }
+
+    {
+        /* The set-to-dictionary pair on an array receiver. The names still run
+           opposite to the answers: the block's answer is the value in the first and
+           the key in the second, so the same uppercasing block gives a->A and A->a. */
+        NSArray *abc = @[@"a", @"b", @"c"];
+        NSMutableArray *blockArguments = [NSMutableArray array];
+        id (^upper)(id) = ^id(id o) {
+            [blockArguments addObject:o];
+            return [o uppercaseString];
+        };
+
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper],
+                              (@{@"a": @"A", @"b": @"B", @"c": @"C"}),
+                              @"array EntriesAsKeysAndValues: member keyed, block answer valued");
+        DVTExpectEqualObjects([blockArguments componentsJoinedByString:@" "], @"a b c",
+                              @"array EntriesAsKeysAndValues: asks about every member in order");
+        [blockArguments removeAllObjects];
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper],
+                              (@{@"A": @"a", @"B": @"b", @"C": @"c"}),
+                              @"array EntriesAsValuesAndKeys: block answer keyed, member valued");
+        DVTExpectEqualObjects([blockArguments componentsJoinedByString:@" "], @"a b c",
+                              @"array EntriesAsValuesAndKeys: asks about every member in order");
+        DVTExpectEqualObjects([@[] dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper], @{},
+                              @"array EntriesAsKeysAndValues: is empty for an empty receiver");
+        DVTExpectEqualObjects([@[] dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper], @{},
+                              @"array EntriesAsValuesAndKeys: is empty for an empty receiver");
+        /* A nil answer is skipped rather than stored in either slot. */
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:^id(id o) {
+            return [o isEqualToString:@"b"] ? nil : o;
+        }], (@{@"a": @"a", @"c": @"c"}),
+                              @"array EntriesAsKeysAndValues: skips a nil answer");
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:^id(id o) {
+            return [o isEqualToString:@"b"] ? nil : o;
+        }], (@{@"a": @"a", @"c": @"c"}),
+                              @"array EntriesAsValuesAndKeys: skips a nil answer");
+        /* A constant answer leaves the members distinct as keys in the first, and
+           colliding as keys in the second, where the last member enumerated wins. */
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:^id(id o) { return @"k"; }],
+                              (@{@"a": @"k", @"b": @"k", @"c": @"k"}),
+                              @"array EntriesAsKeysAndValues: a constant answer keeps every member");
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:^id(id o) { return @"k"; }],
+                              (@{@"k": @"c"}),
+                              @"array EntriesAsValuesAndKeys: colliding answers leave the last member");
+        DVTExpect(![([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper]) isKindOfClass:[NSMutableDictionary class]],
+                  @"array EntriesAsKeysAndValues: answers an immutable dictionary");
+        DVTExpect(![([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper]) isKindOfClass:[NSMutableDictionary class]],
+                  @"array EntriesAsValuesAndKeys: answers an immutable dictionary");
+        /* A mutable receiver is enumerated the same way and still answers an
+           immutable dictionary, so the mutability of the receiver is not carried
+           through. */
+        NSMutableArray *mutableAbc = [@[@"a", @"b"] mutableCopy];
+        DVTExpectEqualObjects([mutableAbc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper],
+                              (@{@"a": @"A", @"b": @"B"}),
+                              @"array EntriesAsKeysAndValues: a mutable receiver answers the same dictionary");
+        DVTExpect(![([mutableAbc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper]) isKindOfClass:[NSMutableDictionary class]],
+                  @"array EntriesAsKeysAndValues: a mutable receiver still answers immutable");
     }
 
     {

@@ -77,6 +77,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 /** The first element satisfying `test`, or `nil`. */
 - (id _Nullable)dvt_firstObjectPassingTest:(BOOL (^)(id object))test;
+/**
+  The first non-`nil` answer `block` gives for an element, or `nil` if there is none.
+
+  Unlike `dvt_compactMap:`, which asks about every element and drops the `nil`
+  answers, this stops at the first answer it can use: the elements after it are
+  never offered to the block, so the call log is as short as the answer allows. An
+  empty receiver answers `nil` without calling the block, and a block that answers
+  `nil` throughout leaves the walk to run to the end.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (id _Nullable)dvt_firstMap:(id _Nullable (^_Nullable)(id object))block;
 /** The only element satisfying `test`, or `nil` when there is not exactly one. */
 - (id _Nullable)dvt_onlyObjectPassingTest:(BOOL (^)(id object))test;
 
@@ -203,6 +216,21 @@ NS_ASSUME_NONNULL_BEGIN
  `NSNull` placeholder, so the result does not keep the receiver's length.
  */
 - (NSArray *_Nullable)dvt_arrayByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
+/**
+  Like `dvt_arrayByApplyingBlock:`, but the mapping is a selector sent to each
+  element rather than a block.
+
+  As with the block form, `nil` answers are dropped and the answer is immutable, so
+  this is a `compactMap` spelled with `objc_msgSend`; the elements are visited in
+  order and repeated answers are kept, which is the one place it parts company with
+  the `NSSet` method of the same name, where repeats collapse.
+
+  `selector` has to answer an object; one that returns a scalar faults, as the
+  answer is treated as an object either way. A member that does not carry the
+  selector is skipped, and a `nil` `selector` answers an empty array. Both of those
+  abort Apple, as noted on the implementation.
+ */
+- (NSArray *)dvt_arrayByApplyingSelector:(SEL _Nullable)selector;
 /** Like `dvt_arrayByApplyingBlock:`, with the element index as a second argument. */
 - (NSArray *)dvt_arrayByApplyingBlockWithIndex:(id _Nullable (^)(id object, NSUInteger index))block;
 /** Elements satisfying `block`, re-wrapped into an array. */
@@ -231,6 +259,23 @@ NS_ASSUME_NONNULL_BEGIN
 - (id _Nullable)dvt_minimumObject;
 
 /**
+  The elements folded into one object, or `nil` for an empty receiver.
+
+  The block is asked `(accumulator, next)` — the opposite order from a comparator
+  fold — starting from the first element, which is returned untouched without the
+  block being called. The answer is not checked for `nil`: a `nil` answer leaves the
+  accumulator empty, and the following element then becomes the accumulator
+  directly, so a block that always answers `nil` yields the *last* element rather
+  than `nil`.
+
+  `NSSet`'s form of this selector folds its members with the same rule.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (id _Nullable)dvt_objectByFoldingWithBlock:(id _Nullable (^_Nullable)(id _Nullable, id _Nullable))block;
+
+/**
   A shuffled copy of the receiver, leaving the receiver in its original order.
 
   Only a receiver with more than one element is actually shuffled. At one element
@@ -241,7 +286,36 @@ NS_ASSUME_NONNULL_BEGIN
 - (id)dvt_shuffledArray;
 
 /**
- Renders the receiver the way a command line would accept it: elements are
+  A dictionary keyed by each element, valued by the block's answer for it.
+
+  Despite the name, the block's answer is the *value* and the element is the key, so
+  an element `"a"` with an uppercasing block answers `a->A`. A `nil` answer is
+  skipped rather than stored. The elements stay distinct as keys, so a constant
+  answer produces one entry per element. The answer is immutable.
+
+  `NSSet`'s form of this selector builds the same dictionary from its members.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (NSDictionary *)dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:(id _Nullable (^_Nullable)(id))block;
+
+/**
+  A dictionary keyed by the block's answer for each element, valued by the element.
+
+  The mirror image of the method above: the block's answer is the *key* and the
+  element is the value, so the same uppercasing block answers `A->a`. Because the
+  answers are the keys here, a block answering one constant leaves a single entry
+  whose value is the last element enumerated. A `nil` answer is skipped rather than
+  stored, and the answer is immutable.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (NSDictionary *)dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:(id _Nullable (^_Nullable)(id))block;
+
+/**
+  Renders the receiver the way a command line would accept it: elements are
  separated by a single space, non-`NSString` elements are described, the empty
  string is emitted as `""`, and an empty receiver yields the empty string.
 

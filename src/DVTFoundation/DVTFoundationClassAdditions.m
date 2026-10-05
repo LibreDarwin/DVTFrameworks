@@ -281,6 +281,30 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return nil;
 }
 
+- (id)dvt_firstMap:(id (^)(id object))block
+{
+    /* The compact map that stops as soon as it has something: -dvt_compactMap: asks
+       about every member and drops the nil answers at the end, whereas this asks
+       one member at a time and hands the first usable answer straight back. The
+       probe's call log is what shows it -- "a" mapping to nil and "b" to "B" costs
+       two calls, and no third is asked about "c".
+
+       There is no early exit for a nil answer, only for an element whose answer is
+       good, so a block that always answers nil walks the whole receiver and comes
+       back with nil. An empty receiver never reaches the block at all.
+
+       A nil block faults, as Apple loads the invoke pointer unchecked. */
+    NSEnumerator *enumerator = [self objectEnumerator];
+    id object = nil;
+    while ((object = [enumerator nextObject]) != nil) {
+        id mapped = block(object);
+        if (mapped != nil) {
+            return mapped;
+        }
+    }
+    return nil;
+}
+
 - (id)dvt_onlyObjectPassingTest:(BOOL (^)(id object))test
 {
     if (test == nil) {
@@ -475,6 +499,52 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
         [result addObject:mapped];
     }
     return [result copy];
+}
+
+- (NSArray *)dvt_arrayByApplyingSelector:(SEL)selector
+{
+    /* The untyped twin of dvt_arrayByApplyingBlock:, with the same dropped nils and
+       the same immutable answer.
+
+       Repeats are kept here, which is what separates it from -dvt_setByApplyingSelector:
+       an array that maps two elements to the same object has two of it, where the set
+       has one.
+
+       Apple gathers the answers into a 256-slot stack buffer and only calls out to
+       malloc once the receiver passes 256 members, then builds the array with
+       -initWithObjects:count: -- which is why a one-element answer is a
+       __NSSingleObjectArrayI here rather than the plain __NSArrayI a -copy of the
+       build would give. The buffer is not observable, but the class is, so the
+       answers are handed to +arrayWithObjects:count: at the end.
+
+       Two inputs abort Apple's method and are answered differently here, both
+       documented as deviations: a member that does not carry the selector takes it
+       to an assertion, where this walk skips the member, and a nil selector does
+       the same, where this answers an empty array. A selector that returns
+       something other than an object faults in both -- Apple retains the answer as
+       an object, and so does the send below. */
+    if (selector == NULL) {
+        return [NSArray array];
+    }
+    NSMutableArray *answers = [NSMutableArray arrayWithCapacity:self.count];
+    for (id object in self) {
+        if (![object respondsToSelector:selector]) {
+            continue;
+        }
+        id mapped = ((id (*)(id, SEL))objc_msgSend)(object, selector);
+        if (mapped != nil) {
+            [answers addObject:mapped];
+        }
+    }
+    NSUInteger count = answers.count;
+    if (count == 0) {
+        return [NSArray array];
+    }
+    void *buffer = calloc(count, sizeof(id));
+    CFArrayGetValues((__bridge CFArrayRef)answers, CFRangeMake(0, (CFIndex)count), buffer);
+    NSArray *result = [NSArray arrayWithObjects:(const __unsafe_unretained id *)buffer count:count];
+    free(buffer);
+    return result;
 }
 
 - (NSArray *)dvt_arrayByApplyingBlockWithIndex:(id (^)(id object, NSUInteger index))block
@@ -745,6 +815,30 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return best;
 }
 
+- (id)dvt_objectByFoldingWithBlock:(id (^)(id, id))block
+{
+    /* The same fold as -[NSSet dvt_objectByFoldingWithBlock:], and with the same
+       re-seed: a nil answer empties the accumulator, so the member after it becomes
+       the accumulator without the block being consulted. A fold that answers nil
+       for every member therefore hands back the last member, not nil, and the
+       block is asked once less than the member count -- two calls for five members.
+
+       The block's arguments are (accumulator, next), so a concatenating block reads
+       the other way round from a comparator fold, which asks (candidate,
+       incumbent).
+
+       A nil block faults, as Apple loads the invoke pointer unchecked. */
+    id accumulator = nil;
+    for (id member in self) {
+        if (accumulator == nil) {
+            accumulator = member;
+            continue;
+        }
+        accumulator = block(accumulator, member);
+    }
+    return accumulator;
+}
+
 #pragma mark - Shuffling
 
 - (id)dvt_shuffledArray
@@ -761,6 +855,53 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
         return copy;
     }
     return [self copy];
+}
+
+- (NSDictionary *)dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:(id (^)(id))block
+{
+    /* The names of these two are the other way round from where the answer lands.
+       Here the element becomes the *key* and the block's answer becomes the value:
+       an element "a" with the block uppercasing answers a->A. Apple sends
+       -setObject:forKeyedSubscript: with the block's answer in the value slot and
+       the element in the key slot, which is what the disassembly shows and the
+       probe confirms.
+
+       A nil answer is skipped rather than stored, so nothing reaches the subscript
+       setter with a nil in either slot. Collisions are not a special case: the
+       elements stay distinct as keys, so a constant answer produces one entry per
+       element. An empty receiver answers the shared empty dictionary, since the
+       capacity hint is the receiver's count and the build is copied either way.
+
+       -[NSSet dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:] builds the same
+       dictionary from its members.
+
+       A nil block faults, as Apple loads the invoke pointer unchecked. */
+    NSMutableDictionary *result = [[NSMutableDictionary alloc] initWithCapacity:self.count];
+    for (id member in self) {
+        id answer = block(member);
+        if (answer != nil) {
+            result[member] = answer;
+        }
+    }
+    return [result copy];
+}
+
+- (NSDictionary *)dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:(id (^)(id))block
+{
+    /* The mirror image of the method above: the block's answer becomes the key and
+       the member becomes the value, so the same uppercasing block answers A->a.
+       Collisions now do collapse -- a constant answer leaves one entry whose value
+       is the last member enumerated, since each write replaces the previous one.
+
+       A nil block faults, as Apple loads the invoke pointer unchecked. */
+    NSMutableDictionary *result = [[NSMutableDictionary alloc] initWithCapacity:self.count];
+    for (id member in self) {
+        id answer = block(member);
+        if (answer != nil) {
+            result[answer] = member;
+        }
+    }
+    return [result copy];
 }
 
 #pragma mark - Command line rendering
