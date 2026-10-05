@@ -2314,6 +2314,219 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return self.count != 0;
 }
 
+- (id)dvt_onlyObject
+{
+    /* Disassembly: ask -count, branch to a nil answer unless it is exactly one, and
+       otherwise hand back -objectAtIndex:0. Two elements are not "the only" one, so
+       the answer is nil rather than the first of them. */
+    return self.count == 1 ? [self objectAtIndex:0] : nil;
+}
+
+- (id)dvt_anyObjectPassingTest:(BOOL (^)(id object))test
+{
+    /* Despite the name this answers the object that passed rather than a flag: the
+       binary falls into the shared tail that retains the current member and returns
+       it with an autorelease on the way out, and never writes a boolean to the
+       return register. The set family's dvt_anyObjectsPassTest: does answer a flag,
+       so the two spellings are not interchangeable.
+
+       The test itself is `tbnz w0, #0` on the block's raw answer, which is the low
+       bit rather than the whole word: an int-returning block cast over the signature
+       answers nil for 2 and the member for 1, 3 and -1. See DVTRawTestValue. */
+    if (test == nil) {
+        return self.count > 0 ? [self objectAtIndex:0] : nil;
+    }
+    for (id object in self) {
+        if (DVTRawTestValue(test, object) & 1) {
+            return object;
+        }
+    }
+    return nil;
+}
+
+- (NSOrderedSet *)dvt_objectsPassingTest:(BOOL (^)(id object))test
+{
+    /* Apple keeps the answers in a 256-slot stack buffer, switches to calloc past 256
+       members, and finishes with +orderedSetWithObjects:count:. That last call is why
+       the answer is __NSOrderedSetI at every size and never the receiver, which is
+       what separates this from NSSet's form of the selector -- that one hands back the
+       collection it was sent when nothing is filtered out. The buffer itself is not
+       observable, so the answers are gathered in a mutable set and re-offered to the
+       same factory call to land on the same class. */
+    if (test == nil) {
+        return [self copy];
+    }
+    NSMutableOrderedSet *passing = [[NSMutableOrderedSet alloc] initWithCapacity:self.count];
+    for (id object in self) {
+        /* The whole raw word is tested here, not its low bit: `cbz w0` over the
+           block's answer rather than the `tbnz w0, #0` dvt_anyObjectPassingTest:
+           uses, so an int-returning block answers with 2 or 256 keeps everything,
+           where the "any" spelling with the same block finds nothing. NSSet's
+           dvt_setByFilteringUsingBlock: agrees -- a filter wants a member back, so a
+           nonzero answer counts however it got there. */
+        if (DVTRawTestValue(test, object) != 0) {
+            [passing addObject:object];
+        }
+    }
+    NSArray *members = [passing array];
+    NSUInteger count = members.count;
+    void *buffer = calloc(count == 0 ? 1 : count, sizeof(id));
+    CFArrayGetValues((__bridge CFArrayRef)members, CFRangeMake(0, (CFIndex)count), buffer);
+    NSOrderedSet *result = [NSOrderedSet orderedSetWithObjects:(const __unsafe_unretained id *)buffer count:count];
+    free(buffer);
+    return result;
+}
+
+#pragma mark - Mapping
+
+/* The mapping bodies on an ordered set are the NSArray bodies with the members in
+   order, so each one is reached by handing the members over as the array the same
+   body was written for. -dvt_compactMap: is the exception: Apple answers
+   dvt_arrayByApplyingBlock: straight from it -- a single tail call -- so the forward
+   goes the other way, and the compact-map name lands on the immutable answer rather
+   than on the mutable build NSArray's own compact map hands back. */
+
+- (NSArray *)dvt_arrayByApplyingBlock:(id (^)(id object))block
+{
+    return [[self array] dvt_arrayByApplyingBlock:block];
+}
+
+- (NSArray *)dvt_compactMap:(id (^)(id object))block
+{
+    return [self dvt_arrayByApplyingBlock:block];
+}
+
+- (id)dvt_firstMap:(id (^)(id object))block
+{
+    /* No early exit for a nil answer, only for an element whose answer is usable: the
+       probe's call log is what shows it, two members mapping to nil and X costing two
+       calls, and a third member never asked about. A block that always answers nil
+       therefore walks the whole receiver.
+
+       No nil guard here, as on NSArray: a nil block faults in both, because Apple
+       loads the block's invoke pointer without checking it. */
+    for (id object in self) {
+        id mapped = block(object);
+        if (mapped != nil) {
+            return mapped;
+        }
+    }
+    return nil;
+}
+
+- (NSOrderedSet *)dvt_orderedSetByApplyingBlock:(id (^)(id object))block
+{
+    /* Disassembly: the same 256-slot staged buffer the array bodies use, then
+       +orderedSetWithObjects:count:. Repeated answers collapse in the factory call,
+       which is what makes this differ from dvt_arrayByApplyingBlock:, and the answer
+       is built straight from the answers rather than copied out of a mutable set. */
+    if (block == nil) {
+        return [self copy];
+    }
+    NSMutableOrderedSet *answers = [[NSMutableOrderedSet alloc] initWithCapacity:self.count];
+    for (id object in self) {
+        id mapped = block(object);
+        if (mapped != nil) {
+            [answers addObject:mapped];
+        }
+    }
+    NSArray *members = [answers array];
+    NSUInteger count = members.count;
+    void *buffer = calloc(count == 0 ? 1 : count, sizeof(id));
+    CFArrayGetValues((__bridge CFArrayRef)members, CFRangeMake(0, (CFIndex)count), buffer);
+    NSOrderedSet *result = [NSOrderedSet orderedSetWithObjects:(const __unsafe_unretained id *)buffer count:count];
+    free(buffer);
+    return result;
+}
+
+#pragma mark - Ordered set algebra
+
+- (NSOrderedSet *)dvt_orderedSetByAddingObject:(id)object
+{
+    /* Disassembly: retain the argument, branch to the retained receiver when it is nil
+       or when -containsObject: already says yes, and otherwise append to a mutable
+       copy and hand back its immutable form. Both shortcuts answer the receiver itself
+       rather than a copy of it, which a mutable receiver can observe. */
+    if (object == nil || [self containsObject:object]) {
+        return self;
+    }
+    NSMutableOrderedSet *result = [self mutableCopy];
+    [result addObject:object];
+    return [result copy];
+}
+
+- (NSOrderedSet *)dvt_orderedSetByAddingObjectsFromArray:(NSArray *)objects
+{
+    /* The branch is on the argument's count, so a nil argument answers zero and lands
+       on the receiver shortcut rather than raising. */
+    if (objects.count == 0) {
+        return self;
+    }
+    NSMutableOrderedSet *result = [self mutableCopy];
+    [result addObjectsFromArray:objects];
+    return [result copy];
+}
+
+- (NSOrderedSet *)dvt_orderedSetByRemovingObject:(id)object
+{
+    /* The nil check comes before -containsObject:, and either one short-circuits to the
+       receiver. Past both it is a mutable copy with the member taken out, handed back
+       as its immutable form -- a snapshot, so a receiver changed afterwards does not
+       change the answer. */
+    if (object == nil || ![self containsObject:object]) {
+        return self;
+    }
+    NSMutableOrderedSet *result = [self mutableCopy];
+    [result removeObject:object];
+    return [result copy];
+}
+
+- (NSOrderedSet *)dvt_orderedSetBySubtractingOrderedSet:(NSOrderedSet *)orderedSet
+{
+    if (orderedSet.count == 0) {
+        return self;
+    }
+    NSMutableOrderedSet *result = [self mutableCopy];
+    [result minusOrderedSet:orderedSet];
+    return [result copy];
+}
+
+@end
+
+/* The three mutators are declared by Apple on NSMutableOrderedSet, in a category of
+   the same name -- so a dump of either binary shows them the same way -- and an
+   immutable ordered set answers none of them, raising on the first instead. */
+@implementation NSMutableOrderedSet (DVTNSOrderedSetAdditions)
+
+- (void)dvt_addObjectIfNotNil:(id)object
+{
+    if (object != nil) {
+        [self addObject:object];
+    }
+}
+
+- (BOOL)dvt_addReturningDidMutate:(id)object
+{
+    /* Disassembly: the count before, the nil-guarded add, the count after, and a
+       single unsigned comparison of the two. So the answer is whether the count grew,
+       not whether anything was added -- an element the ordered set already holds
+       leaves it the same length, and answers NO. */
+    NSUInteger before = self.count;
+    [self dvt_addObjectIfNotNil:object];
+    return before < self.count;
+}
+
+- (id)dvt_popLastObject
+{
+    /* Disassembly: -lastObject, retain, and -removeObject: only when there was one.
+       The element is out of the receiver before it is handed back. */
+    id last = [self lastObject];
+    if (last != nil) {
+        [self removeObject:last];
+    }
+    return last;
+}
+
 @end
 
 /* NSString is the one host where the two are *not* the same expression, and the

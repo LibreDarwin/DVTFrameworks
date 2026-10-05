@@ -1968,6 +1968,367 @@ static void DVTTestClassAdditions(void)
                   @"set setByApplyingSelector: answers a 300-member receiver in full");
     }
 
+    {
+        /* NSOrderedSet and NSMutableOrderedSet. The two classes answer different
+           parts of the family: the immutable one the queries and the algebra, the
+           mutable one three mutators on top. Order is the reason the class exists,
+           so every answer is compared as its ordered array and not as a set --
+           a set comparison would pass for an implementation that sorted. */
+        NSOrderedSet *three = [NSOrderedSet orderedSetWithObjects:@"a", @"b", @"c", nil];
+        NSOrderedSet *empty = [NSOrderedSet orderedSet];
+
+        /* The count has to be exactly one, so two members is already too many and
+           the answer is nil rather than the first of them. */
+        DVTExpect([empty dvt_onlyObject] == nil,
+                  @"ordered set onlyObject: is nil for an empty receiver");
+        DVTExpect([[NSOrderedSet orderedSetWithObject:@"solo"] dvt_onlyObject] == @"solo",
+                  @"ordered set onlyObject: hands back the lone member itself");
+        DVTExpect([three dvt_onlyObject] == nil,
+                  @"ordered set onlyObject: is nil for two members rather than the first");
+        DVTExpect([(NSOrderedSet *)nil dvt_onlyObject] == nil,
+                  @"ordered set onlyObject: is nil for a nil receiver");
+
+        /* dvt_anyObjectPassingTest: answers the member that passed, where the set's
+           spelling of the same question answers a flag, and it stops there. */
+        DVTExpect([three dvt_anyObjectPassingTest:^BOOL(id o) { return YES; }] == @"a",
+                  @"ordered set anyObjectPassingTest: answers the first member when all pass");
+        DVTExpect([three dvt_anyObjectPassingTest:^BOOL(id o) { return [o isEqual:@"b"]; }] == @"b",
+                  @"ordered set anyObjectPassingTest: answers the member that passed, not the index");
+        DVTExpect([three dvt_anyObjectPassingTest:^BOOL(id o) { return NO; }] == nil,
+                  @"ordered set anyObjectPassingTest: is nil when none pass");
+        DVTExpect([empty dvt_anyObjectPassingTest:^BOOL(id o) { return YES; }] == nil,
+                  @"ordered set anyObjectPassingTest: is nil for an empty receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_anyObjectPassingTest:^BOOL(id o) { return YES; }] == nil,
+                  @"ordered set anyObjectPassingTest: is nil for a nil receiver");
+        __block int anyCalls = 0;
+        (void)[three dvt_anyObjectPassingTest:^BOOL(id o) {
+            anyCalls++;
+            return [o isEqual:@"b"];
+        }];
+        DVTExpect(anyCalls == 2,
+                  @"ordered set anyObjectPassingTest: stops at the member that passed");
+        __block int anyMissCalls = 0;
+        (void)[three dvt_anyObjectPassingTest:^BOOL(id o) { anyMissCalls++; return NO; }];
+        DVTExpect(anyMissCalls == 3,
+                  @"ordered set anyObjectPassingTest: asks about every member when none passes");
+        DVTExpect([[three mutableCopy] dvt_anyObjectPassingTest:^BOOL(id o) { return YES; }] == @"a",
+                  @"ordered set anyObjectPassingTest: answers the first member of a mutable receiver");
+        /* A nil test faults on Apple; the port answers the first member, as the
+           array spelling does. */
+        DVTExpect([three dvt_anyObjectPassingTest:nil] == @"a",
+                  @"ordered set anyObjectPassingTest: guards a nil test with the first member");
+        DVTExpect([empty dvt_anyObjectPassingTest:nil] == nil,
+                  @"ordered set anyObjectPassingTest: a nil test is nil for an empty receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_anyObjectPassingTest:nil] == nil,
+                  @"ordered set anyObjectPassingTest: a nil test is nil for a nil receiver");
+
+        /* The low bit of the raw answer decides, not the truth of the word: an
+           int-returning block reached through a BOOL pointer shows which. */
+        NSInteger (^oneRaw)(id) = ^NSInteger(id o) { return 1; };
+        NSInteger (^twoRaw)(id) = ^NSInteger(id o) { return 2; };
+        NSInteger (^threeRaw)(id) = ^NSInteger(id o) { return 3; };
+        NSInteger (^minusOneRaw)(id) = ^NSInteger(id o) { return -1; };
+        NSInteger (^highRaw)(id) = ^NSInteger(id o) { return 256; };
+        DVTExpect([three dvt_anyObjectPassingTest:(BOOL (^)(id))oneRaw] == @"a",
+                  @"ordered set anyObjectPassingTest: a raw 1 passes");
+        DVTExpect([three dvt_anyObjectPassingTest:(BOOL (^)(id))twoRaw] == nil,
+                  @"ordered set anyObjectPassingTest: an even raw answer fails, so a raw 2 does not pass");
+        DVTExpect([three dvt_anyObjectPassingTest:(BOOL (^)(id))threeRaw] == @"a",
+                  @"ordered set anyObjectPassingTest: an odd raw answer passes, so a raw 3 does");
+        DVTExpect([three dvt_anyObjectPassingTest:(BOOL (^)(id))minusOneRaw] == @"a",
+                  @"ordered set anyObjectPassingTest: a raw -1 has its low bit set");
+        DVTExpect([three dvt_anyObjectPassingTest:(BOOL (^)(id))highRaw] == nil,
+                  @"ordered set anyObjectPassingTest: a raw 256 is not odd, so it does not pass");
+
+        /* The filter keeps receiver order and always builds, even when nothing is
+           dropped -- which is where it parts company with the set's spelling. */
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:^BOOL(id o) { return YES; }] array], @[@"a", @"b", @"c"],
+                              @"ordered set objectsPassingTest: keeps every member in order");
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:^BOOL(id o) { return [o isEqual:@"b"]; }] array], @[@"b"],
+                              @"ordered set objectsPassingTest: keeps only the members that pass");
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:^BOOL(id o) { return NO; }] array], @[],
+                              @"ordered set objectsPassingTest: is empty when none pass");
+        DVTExpectEqualObjects([[empty dvt_objectsPassingTest:^BOOL(id o) { return YES; }] array], @[],
+                              @"ordered set objectsPassingTest: is empty for an empty receiver");
+        DVTExpect([three dvt_objectsPassingTest:^BOOL(id o) { return YES; }] != three,
+                  @"ordered set objectsPassingTest: builds a fresh answer even when all pass");
+        DVTExpect([[three mutableCopy] dvt_objectsPassingTest:^BOOL(id o) { return YES; }] != nil &&
+                  ![[[three mutableCopy] dvt_objectsPassingTest:^BOOL(id o) { return YES; }]
+                      isKindOfClass:[NSMutableOrderedSet class]],
+                  @"ordered set objectsPassingTest: answers an immutable set for a mutable receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_objectsPassingTest:^BOOL(id o) { return YES; }] == nil,
+                  @"ordered set objectsPassingTest: is nil for a nil receiver");
+        /* The filter tests the whole raw word, where the "any" spelling tested its
+           low bit -- the same block therefore passes here and not there. */
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:(BOOL (^)(id))twoRaw] array], @[@"a", @"b", @"c"],
+                              @"ordered set objectsPassingTest: a nonzero raw answer passes whatever its low bit is");
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:(BOOL (^)(id))highRaw] array], @[@"a", @"b", @"c"],
+                              @"ordered set objectsPassingTest: a raw 256 passes");
+        DVTExpectEqualObjects([[three dvt_objectsPassingTest:^BOOL(id o) { return NO; }] array], @[],
+                              @"ordered set objectsPassingTest: a raw zero is the only answer that drops");
+        /* A nil test faults on Apple; the port copies, as the set spelling does. */
+        DVTExpectEqualObjects([three dvt_objectsPassingTest:nil], three,
+                              @"ordered set objectsPassingTest: guards a nil test with a copy of the receiver");
+        DVTExpectEqualObjects([empty dvt_objectsPassingTest:nil], empty,
+                              @"ordered set objectsPassingTest: a nil test on an empty receiver stays empty");
+        /* Past 256 members Apple switches from a stack buffer to a malloc'd one, so
+           a long receiver is where a fixed-size buffer would show. */
+        NSMutableOrderedSet *big = [NSMutableOrderedSet orderedSet];
+        for (int i = 0; i < 300; i++) {
+            [big addObject:[NSString stringWithFormat:@"m%03d", i]];
+        }
+        DVTExpect([big dvt_objectsPassingTest:^BOOL(id o) { return YES; }].count == 300,
+                  @"ordered set objectsPassingTest: answers a 300-member receiver in full");
+        DVTExpectEqualObjects([[[big dvt_objectsPassingTest:^BOOL(id o) { return [o hasSuffix:@"9"]; }] array] firstObject],
+                              @"m009",
+                              @"ordered set objectsPassingTest: keeps a 300-member receiver in order");
+    }
+
+    {
+        /* The three mapping shapes over an ordered receiver. They differ in two
+           visible ways: the array forms keep repeated answers where the set form
+           collapses them, and the first form stops at the first usable answer. */
+        NSOrderedSet *three = [NSOrderedSet orderedSetWithObjects:@"a", @"b", @"c", nil];
+
+        NSArray *mapped = [three dvt_arrayByApplyingBlock:^id(id o) { return [o uppercaseString]; }];
+        DVTExpectEqualObjects(mapped, @[@"A", @"B", @"C"],
+                              @"ordered set arrayByApplyingBlock: maps every member in order");
+        DVTExpect(![mapped respondsToSelector:@selector(addObject:)],
+                  @"ordered set arrayByApplyingBlock: answers an immutable array");
+        /* The untyped form keeps repeats, which is what separates it from the set
+           spelling below. */
+        DVTExpectEqualObjects([three dvt_arrayByApplyingBlock:^id(id o) { return @"same"; }],
+                              @[@"same", @"same", @"same"],
+                              @"ordered set arrayByApplyingBlock: keeps repeated answers");
+        DVTExpectEqualObjects([three dvt_arrayByApplyingBlock:^id(id o) { return [o isEqual:@"a"] ? @"first" : nil; }],
+                              @[@"first"],
+                              @"ordered set arrayByApplyingBlock: drops the nil answers");
+        DVTExpectEqualObjects([three dvt_arrayByApplyingBlock:^id(id o) { return nil; }], @[],
+                              @"ordered set arrayByApplyingBlock: is empty when every answer is nil");
+        DVTExpectEqualObjects([[NSOrderedSet orderedSet] dvt_arrayByApplyingBlock:^id(id o) { return o; }], @[],
+                              @"ordered set arrayByApplyingBlock: is empty for an empty receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_arrayByApplyingBlock:^id(id o) { return o; }] == nil,
+                  @"ordered set arrayByApplyingBlock: is nil for a nil receiver");
+        __block int arrayCalls = 0;
+        (void)[three dvt_arrayByApplyingBlock:^id(id o) { arrayCalls++; return o; }];
+        DVTExpect(arrayCalls == 3,
+                  @"ordered set arrayByApplyingBlock: asks about every member even so");
+        /* A nil block faults on Apple; the port copies, as the array spelling does. */
+        DVTExpectEqualObjects([three dvt_arrayByApplyingBlock:nil], @[@"a", @"b", @"c"],
+                              @"ordered set arrayByApplyingBlock: guards a nil block with a copy of the members");
+
+        /* On Apple dvt_compactMap: is a tail call to the method above, so the two
+           spellings cannot differ -- and neither answers the mutable array that
+           NSArray's own compact map hands back. */
+        DVTExpectEqualObjects([three dvt_compactMap:^id(id o) { return [o uppercaseString]; }], @[@"A", @"B", @"C"],
+                              @"ordered set compactMap: maps every member in order");
+        DVTExpect(![[three dvt_compactMap:^id(id o) { return o; }] respondsToSelector:@selector(addObject:)],
+                  @"ordered set compactMap: answers an immutable array");
+        DVTExpectEqualObjects([three dvt_compactMap:^id(id o) { return @"same"; }], @[@"same", @"same", @"same"],
+                              @"ordered set compactMap: keeps repeated answers");
+        DVTExpectEqualObjects([three dvt_compactMap:^id(id o) { return nil; }], @[],
+                              @"ordered set compactMap: is empty when every answer is nil");
+        DVTExpect([(NSOrderedSet *)nil dvt_compactMap:^id(id o) { return o; }] == nil,
+                  @"ordered set compactMap: is nil for a nil receiver");
+        DVTExpectEqualObjects([three dvt_compactMap:nil], @[@"a", @"b", @"c"],
+                              @"ordered set compactMap: guards a nil block with a copy of the members");
+
+        DVTExpectEqualObjects([three dvt_firstMap:^id(id o) { return [o uppercaseString]; }], @"A",
+                              @"ordered set firstMap: answers the first member's answer");
+        DVTExpect([three dvt_firstMap:^id(id o) { return o; }] == @"a",
+                  @"ordered set firstMap: hands the answer back as it came");
+        /* A nil answer is skipped rather than returned, which is the whole difference
+           from a fold that stops at the first member. */
+        __block int firstCalls = 0;
+        DVTExpectEqualObjects([three dvt_firstMap:^id(id o) {
+            firstCalls++;
+            return [o isEqual:@"b"] ? @"second" : nil;
+        }], @"second",
+                              @"ordered set firstMap: skips the members whose answer is nil");
+        DVTExpect(firstCalls == 2,
+                  @"ordered set firstMap: stops at the first usable answer");
+        __block int firstMissCalls = 0;
+        DVTExpect([three dvt_firstMap:^id(id o) { firstMissCalls++; return nil; }] == nil,
+                  @"ordered set firstMap: is nil when every answer is nil");
+        DVTExpect(firstMissCalls == 3,
+                  @"ordered set firstMap: asks about every member when no answer is usable");
+        DVTExpect([[NSOrderedSet orderedSet] dvt_firstMap:^id(id o) { return o; }] == nil,
+                  @"ordered set firstMap: is nil for an empty receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_firstMap:^id(id o) { return o; }] == nil,
+                  @"ordered set firstMap: is nil for a nil receiver");
+        /* A nil block faults here as it does on Apple, but only for a receiver with
+           a member: an empty receiver never reaches the block, so it answers nil
+           rather than faulting. */
+        DVTExpect([[NSOrderedSet orderedSet] dvt_firstMap:nil] == nil,
+                  @"ordered set firstMap: an empty receiver never reaches a nil block");
+
+        /* The set form collapses repeats and keeps the position of the first one. */
+        NSOrderedSet *applied = [three dvt_orderedSetByApplyingBlock:^id(id o) { return @"same"; }];
+        DVTExpectEqualObjects([applied array], @[@"same"],
+                              @"ordered set orderedSetByApplyingBlock: collapses repeated answers");
+        DVTExpectEqualObjects([[three dvt_orderedSetByApplyingBlock:^id(id o) { return [o uppercaseString]; }] array],
+                              @[@"A", @"B", @"C"],
+                              @"ordered set orderedSetByApplyingBlock: keeps first-occurrence order");
+        DVTExpectEqualObjects([[three dvt_orderedSetByApplyingBlock:^id(id o) { return @"a"; }] array], @[@"a"],
+                              @"ordered set orderedSetByApplyingBlock: keeps the position of the first answer that got there");
+        DVTExpectEqualObjects([three dvt_orderedSetByApplyingBlock:^id(id o) { return nil; }],
+                              [NSOrderedSet orderedSet],
+                              @"ordered set orderedSetByApplyingBlock: is empty when every answer is nil");
+        DVTExpect(![[three dvt_orderedSetByApplyingBlock:^id(id o) { return o; }] respondsToSelector:@selector(addObject:)],
+                  @"ordered set orderedSetByApplyingBlock: answers an immutable set");
+        DVTExpect(![[three dvt_orderedSetByApplyingBlock:^id(id o) { return o; }] isKindOfClass:[NSMutableOrderedSet class]],
+                  @"ordered set orderedSetByApplyingBlock: answers an immutable set even for a mutable receiver");
+        DVTExpect([(NSOrderedSet *)nil dvt_orderedSetByApplyingBlock:^id(id o) { return o; }] == nil,
+                  @"ordered set orderedSetByApplyingBlock: is nil for a nil receiver");
+        __block int applyCalls = 0;
+        (void)[three dvt_orderedSetByApplyingBlock:^id(id o) { applyCalls++; return o; }];
+        DVTExpect(applyCalls == 3,
+                  @"ordered set orderedSetByApplyingBlock: asks about every member even so");
+        NSMutableOrderedSet *big = [NSMutableOrderedSet orderedSet];
+        for (int i = 0; i < 300; i++) {
+            [big addObject:[NSString stringWithFormat:@"m%03d", i]];
+        }
+        DVTExpect([big dvt_orderedSetByApplyingBlock:^id(id o) { return o; }].count == 300,
+                  @"ordered set orderedSetByApplyingBlock: answers a 300-member receiver in full");
+        DVTExpectEqualObjects([three dvt_orderedSetByApplyingBlock:nil], three,
+                              @"ordered set orderedSetByApplyingBlock: guards a nil block with a copy of the receiver");
+    }
+
+    {
+        /* Ordered set algebra. Each of the four answers the receiver itself when the
+           argument cannot change it, and a fresh immutable set otherwise -- so a
+           mutable receiver can see both halves of that. */
+        NSOrderedSet *three = [NSOrderedSet orderedSetWithObjects:@"a", @"b", @"c", nil];
+        NSOrderedSet *empty = [NSOrderedSet orderedSet];
+        NSMutableOrderedSet *mutable = [[NSOrderedSet orderedSetWithObjects:@"a", @"b", @"c", nil] mutableCopy];
+
+        DVTExpectEqualObjects([[three dvt_orderedSetByAddingObject:@"d"] array], @[@"a", @"b", @"c", @"d"],
+                              @"ordered set orderedSetByAddingObject: appends a new object");
+        DVTExpect([three dvt_orderedSetByAddingObject:@"a"] == three,
+                  @"ordered set orderedSetByAddingObject: answers the receiver for a member it holds");
+        DVTExpect([three dvt_orderedSetByAddingObject:nil] == three,
+                  @"ordered set orderedSetByAddingObject: answers the receiver for a nil object");
+        DVTExpect([mutable dvt_orderedSetByAddingObject:@"a"] == mutable,
+                  @"ordered set orderedSetByAddingObject: a no-op answers a mutable receiver too");
+        DVTExpect(![[mutable dvt_orderedSetByAddingObject:@"d"] isKindOfClass:[NSMutableOrderedSet class]],
+                  @"ordered set orderedSetByAddingObject: answers an immutable set");
+        /* Contained is isEqual:, so an equal-but-distinct object is the no-op. */
+        NSString *distinct = [@"a" mutableCopy];
+        DVTExpect([three dvt_orderedSetByAddingObject:distinct] == three,
+                  @"ordered set orderedSetByAddingObject: compares by isEqual:, not identity");
+        DVTExpectEqualObjects([[empty dvt_orderedSetByAddingObject:@"a"] array], @[@"a"],
+                              @"ordered set orderedSetByAddingObject: fills an empty receiver");
+
+        DVTExpectEqualObjects([[three dvt_orderedSetByAddingObjectsFromArray:@[@"c", @"d"]] array], @[@"a", @"b", @"c", @"d"],
+                              @"ordered set orderedSetByAddingObjectsFromArray: appends the new objects");
+        DVTExpectEqualObjects([[three dvt_orderedSetByAddingObjectsFromArray:@[@"x"]] array], @[@"a", @"b", @"c", @"x"],
+                              @"ordered set orderedSetByAddingObjectsFromArray: keeps what it holds");
+        DVTExpect([three dvt_orderedSetByAddingObjectsFromArray:@[]] == three,
+                  @"ordered set orderedSetByAddingObjectsFromArray: an empty argument answers the receiver");
+        DVTExpect([three dvt_orderedSetByAddingObjectsFromArray:nil] == three,
+                  @"ordered set orderedSetByAddingObjectsFromArray: a nil argument reads as empty");
+        DVTExpect([(NSOrderedSet *)nil dvt_orderedSetByAddingObjectsFromArray:@[@"a"]] == nil,
+                  @"ordered set orderedSetByAddingObjectsFromArray: is nil for a nil receiver");
+
+        DVTExpectEqualObjects([[three dvt_orderedSetByRemovingObject:@"b"] array], @[@"a", @"c"],
+                              @"ordered set orderedSetByRemovingObject: drops the member it is given");
+        DVTExpect([three dvt_orderedSetByRemovingObject:@"z"] == three,
+                  @"ordered set orderedSetByRemovingObject: an absent object answers the receiver");
+        DVTExpect([three dvt_orderedSetByRemovingObject:nil] == three,
+                  @"ordered set orderedSetByRemovingObject: a nil object answers the receiver");
+        DVTExpect([mutable dvt_orderedSetByRemovingObject:@"z"] == mutable,
+                  @"ordered set orderedSetByRemovingObject: a no-op answers a mutable receiver too");
+        DVTExpect(![[mutable dvt_orderedSetByRemovingObject:@"b"] isKindOfClass:[NSMutableOrderedSet class]],
+                  @"ordered set orderedSetByRemovingObject: answers an immutable set");
+        NSString *distinctRemove = [@"b" mutableCopy];
+        DVTExpectEqualObjects([[three dvt_orderedSetByRemovingObject:distinctRemove] array], @[@"a", @"c"],
+                              @"ordered set orderedSetByRemovingObject: compares by isEqual:, not identity");
+        DVTExpectEqualObjects([empty dvt_orderedSetByRemovingObject:@"a"], empty,
+                              @"ordered set orderedSetByRemovingObject: removing from an empty receiver stays empty");
+        /* The answer is a snapshot, so changing the receiver afterwards does not
+           reach it. */
+        id snapshot = [mutable dvt_orderedSetByRemovingObject:@"a"];
+        [mutable removeObject:@"b"];
+        DVTExpectEqualObjects([snapshot array], @[@"b", @"c"],
+                              @"ordered set orderedSetByRemovingObject: the answer does not follow the receiver");
+
+        DVTExpectEqualObjects([[three dvt_orderedSetBySubtractingOrderedSet:[NSOrderedSet orderedSetWithObjects:@"a", @"c", nil]] array],
+                              @[@"b"],
+                              @"ordered set orderedSetBySubtractingOrderedSet: drops the shared members");
+        DVTExpect([three dvt_orderedSetBySubtractingOrderedSet:[NSOrderedSet orderedSet]] == three,
+                  @"ordered set orderedSetBySubtractingOrderedSet: an empty argument answers the receiver");
+        DVTExpect([three dvt_orderedSetBySubtractingOrderedSet:nil] == three,
+                  @"ordered set orderedSetBySubtractingOrderedSet: a nil argument answers the receiver");
+        DVTExpect([mutable dvt_orderedSetBySubtractingOrderedSet:[NSOrderedSet orderedSet]] == mutable,
+                  @"ordered set orderedSetBySubtractingOrderedSet: a no-op answers a mutable receiver too");
+        DVTExpect(![[mutable dvt_orderedSetBySubtractingOrderedSet:[NSOrderedSet orderedSetWithObject:@"b"]]
+                     isKindOfClass:[NSMutableOrderedSet class]],
+                  @"ordered set orderedSetBySubtractingOrderedSet: answers an immutable set");
+        DVTExpectEqualObjects([three dvt_orderedSetBySubtractingOrderedSet:three], empty,
+                              @"ordered set orderedSetBySubtractingOrderedSet: subtracting everything empties the receiver");
+        DVTExpectEqualObjects([[three dvt_orderedSetBySubtractingOrderedSet:
+                                    [NSOrderedSet orderedSetWithObject:distinctRemove]] array],
+                              @[@"a", @"c"],
+                              @"ordered set orderedSetBySubtractingOrderedSet: compares by isEqual:, not identity");
+    }
+
+    {
+        /* The three mutators, which the immutable class does not answer at all.
+           The interesting one is dvt_addReturningDidMutate:, whose answer is the
+           count's growth rather than whether the add happened: a member the receiver
+           already holds leaves the length alone. */
+        NSMutableOrderedSet *t = [NSMutableOrderedSet orderedSetWithObjects:@"a", @"b", nil];
+
+        [t dvt_addObjectIfNotNil:@"c"];
+        DVTExpectEqualObjects([t array], @[@"a", @"b", @"c"],
+                              @"mutable ordered set addObjectIfNotNil: appends the object");
+        [t dvt_addObjectIfNotNil:nil];
+        DVTExpectEqualObjects([t array], @[@"a", @"b", @"c"],
+                              @"mutable ordered set addObjectIfNotNil: ignores a nil object");
+        [t dvt_addObjectIfNotNil:@"a"];
+        DVTExpectEqualObjects([t array], @[@"a", @"b", @"c"],
+                              @"mutable ordered set addObjectIfNotNil: a member it holds is not added twice");
+
+        NSMutableOrderedSet *g = [NSMutableOrderedSet orderedSetWithObjects:@"a", nil];
+        DVTExpect([g dvt_addReturningDidMutate:@"b"],
+                  @"mutable ordered set addReturningDidMutate: YES for an object it did not hold");
+        DVTExpect(![g dvt_addReturningDidMutate:@"a"],
+                  @"mutable ordered set addReturningDidMutate: NO for a member it already held");
+        DVTExpect(![g dvt_addReturningDidMutate:nil],
+                  @"mutable ordered set addReturningDidMutate: NO for a nil object");
+        DVTExpectEqualObjects([g array], @[@"a", @"b"],
+                              @"mutable ordered set addReturningDidMutate: adds only the new object");
+
+        NSMutableOrderedSet *p = [NSMutableOrderedSet orderedSetWithObjects:@"a", @"b", nil];
+        DVTExpectEqualObjects([p dvt_popLastObject], @"b",
+                              @"mutable ordered set popLastObject: answers the last member");
+        DVTExpectEqualObjects([p array], @[@"a"],
+                              @"mutable ordered set popLastObject: removes the member it answers");
+        DVTExpectEqualObjects([p dvt_popLastObject], @"a",
+                              @"mutable ordered set popLastObject: empties the receiver from the end");
+        DVTExpect([p dvt_popLastObject] == nil,
+                  @"mutable ordered set popLastObject: is nil once the receiver is empty");
+        DVTExpectEqualObjects([p array], @[],
+                              @"mutable ordered set popLastObject: leaves the empty receiver empty");
+        DVTExpect([[NSMutableOrderedSet orderedSet] dvt_popLastObject] == nil,
+                  @"mutable ordered set popLastObject: is nil for an empty receiver");
+        DVTExpect([(NSMutableOrderedSet *)nil dvt_popLastObject] == nil,
+                  @"mutable ordered set popLastObject: is nil for a nil receiver");
+        DVTExpect(![(NSMutableOrderedSet *)nil dvt_addReturningDidMutate:@"a"],
+                  @"mutable ordered set addReturningDidMutate: is NO for a nil receiver");
+
+        /* An immutable ordered set raises on the mutators, which is how the split
+           between the two classes shows from the outside. */
+        NSOrderedSet *immutable = [NSOrderedSet orderedSetWithObjects:@"a", nil];
+        @try {
+            [(id)immutable dvt_popLastObject];
+            DVTExpect(NO, @"ordered set: the immutable class does not answer popLastObject");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:@"NSInvalidArgumentException"],
+                      @"ordered set: the immutable class raises on popLastObject");
+        }
+    }
+
     /* The two ranking folds and the plain fold. The comparator folds differ from
        the block fold in the order their two arguments arrive in, which is the
        part that is easy to get backwards and impossible to see in the answer

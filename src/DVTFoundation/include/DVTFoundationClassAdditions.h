@@ -1184,6 +1184,151 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
 
+/**
+  The receiver's only element, or `nil`.
+
+  Exactly one element, not the first of several: an empty receiver and a two-element
+  one both answer `nil`, and a one-element receiver answers that same element rather
+  than a copy of it.
+ */
+- (id _Nullable)dvt_onlyObject;
+
+/**
+  The first element `test` accepts, or `nil` when none is accepted.
+
+  Unlike `NSSet`'s `dvt_anyObjectsPassTest:`, which answers a flag, this answers the
+  object itself -- the binary returns the element with an autorelease on the way out.
+  Scanning stops at the first element that passes, so a block that accepts the second
+  member costs two calls.
+
+  The raw 32 bits of the block's answer decide, so a block returning something other
+  than a boolean passes on an odd value and fails on an even one.
+
+  A `nil` `test` answers the first element, as `NSArray`'s
+  `dvt_firstObjectPassingTest:` does.
+ */
+- (id _Nullable)dvt_anyObjectPassingTest:(BOOL (^)(id object))test;
+
+/**
+  The elements `test` accepts, in receiver order, as a fresh immutable set.
+
+  Always allocated: unlike `NSSet`'s form of this selector, an ordered set does not
+  answer the receiver when nothing is filtered out.
+
+  The raw 32 bits of the block's answer decide, and here the whole word counts: any
+  nonzero answer passes, so a block returning `2` keeps everything, where the same
+  block under `dvt_anyObjectPassingTest:` finds nothing. That is what `NSSet`'s
+  `dvt_setByFilteringUsingBlock:` does too.
+
+  A `nil` `test` answers a copy of the receiver.
+ */
+- (NSOrderedSet *)dvt_objectsPassingTest:(BOOL (^)(id object))test;
+
+/**
+  `block` applied to every element, with the `nil` answers dropped, as an immutable array.
+
+  The untyped twin of `dvt_orderedSetByApplyingBlock:`, with the same dropped nils and
+  the same repeated answers kept -- two elements mapping to the same object give two
+  of it, where the ordered-set form collapses them.
+ */
+- (NSArray *)dvt_arrayByApplyingBlock:(id _Nullable (^)(id object))block;
+
+/**
+  `dvt_arrayByApplyingBlock:` under its other name.
+
+  Apple answers `dvt_arrayByApplyingBlock:` straight from here -- one instruction, a
+  tail call -- so the two spellings cannot differ. On `NSArray` the same selector name
+  instead answers the mutable array it built; here the array form's answer is the one
+  that comes back.
+ */
+- (NSArray *)dvt_compactMap:(id _Nullable (^)(id object))block;
+
+/**
+  The first non-`nil` answer `block` gives, or `nil`.
+
+  Stops at the first element with a usable answer; a block that answers `nil`
+  throughout walks the whole receiver and comes back with `nil`, and an empty
+  receiver never reaches the block.
+ */
+- (id _Nullable)dvt_firstMap:(id _Nullable (^)(id object))block;
+
+/**
+  The receiver with `object` appended, or the receiver itself.
+
+  `nil`, and anything the receiver already holds, answer the receiver -- the same
+  object, not a copy. Only a genuinely new object builds an answer, by appending to
+  a mutable copy and handing back its immutable form.
+ */
+- (NSOrderedSet *)dvt_orderedSetByAddingObject:(id _Nullable)object;
+
+/**
+  The receiver with `objects` appended, or the receiver itself.
+
+  An empty or `nil` array answers the receiver: asking `nil` for a count is zero, so
+  the `nil` argument lands on the same branch rather than raising.
+ */
+- (NSOrderedSet *)dvt_orderedSetByAddingObjectsFromArray:(NSArray *_Nullable)objects;
+
+/**
+  The receiver without `object`, or the receiver itself.
+
+  `nil`, and anything the receiver does not hold, answer the receiver. A held object
+  is removed by equality, so an equal-but-distinct argument removes the element just
+  the same.
+ */
+- (NSOrderedSet *)dvt_orderedSetByRemovingObject:(id _Nullable)object;
+
+/**
+  The receiver without the members of `orderedSet`, or the receiver itself.
+
+  An empty or `nil` argument answers the receiver itself rather than a copy of it,
+  which `NSSet`'s form of this idea does not do: `dvt_setBySubtractingSet:` takes
+  the same shortcut but answers `[self copy]`, and a mutable receiver can tell those
+  apart, since a copy of a mutable set is immutable.
+ */
+- (NSOrderedSet *)dvt_orderedSetBySubtractingOrderedSet:(NSOrderedSet *_Nullable)orderedSet;
+
+/**
+  `block` applied to every element, with the `nil` answers dropped, as an immutable set.
+
+  Repeated answers collapse, so the result can be smaller than the receiver even when
+  no answer was `nil`: two elements mapping to the same object leave one behind, at
+  the position the first of them had. The set is built from the answers directly
+  rather than by copying a mutable set, which is why an empty answer is an ordinary
+  empty set rather than the receiver.
+ */
+- (NSOrderedSet *)dvt_orderedSetByApplyingBlock:(id _Nullable (^)(id object))block;
+
+@end
+
+/** The mutable ordered set carries three more, which an immutable one does not answer at all. */
+@interface NSMutableOrderedSet (DVTNSOrderedSetAdditions)
+
+/**
+  Adds `object` when it is non-`nil`.
+
+  Spelled `IfNotNil` rather than `NSMutableSet`'s `dvt_addObjectIfNonNil:`, which is
+  how the binary has it.
+ */
+- (void)dvt_addObjectIfNotNil:(id _Nullable)object;
+
+/**
+  Adds `object` if it is non-`nil`, answering whether that grew the receiver.
+
+  The test is the count, so an object the receiver already holds answers `NO`: adding
+  one changes nothing about an ordered set's contents. A `nil` argument is `NO` for the
+  same reason.
+ */
+- (BOOL)dvt_addReturningDidMutate:(id _Nullable)object;
+
+/**
+  Removes and answers the last element, or `nil` when empty.
+
+  The element is taken out of the receiver before it is handed back, and an empty
+  receiver answers `nil` without asking anything of itself.
+ */
+- (id _Nullable)dvt_popLastObject;
+
 @end
 
 /* The older spelling of the two collection tests. Apple keeps them in categories

@@ -404,6 +404,96 @@ specifically to get past `NSMutableArray`, and is refused the same way as the
 others, exit `134` with the same reason string on both binaries. The guard is documented in the
 implementation and left out of the tests rather than faked with a lying subclass.
 
+`NSOrderedSet` and `NSMutableOrderedSet` carry the fourth slice of this family, and
+it splits the family along the class line in a way the other collections do not:
+the immutable set answers the queries and the algebra, the mutable set adds three
+mutators, and each class answers only its own half. An immutable ordered set raised
+`NSInvalidArgumentException` on `dvt_popLastObject` in the probe, so the three
+mutators are genuinely absent rather than inherited. Apple declares all seventeen
+under the same category name `DVTNSOrderedSetAdditions`, one on each class.
+
+The two predicates use **different** raw-word tests, which is the sharpest detail in
+the family and the easiest to get wrong in either direction.
+`dvt_anyObjectPassingTest:` tests bit 0 (`tbnz w0, #0`), so an int-returning block
+reached through a `BOOL` pointer passes on `1`, `3` and `-1` and fails on `0`, `2`,
+`4`, `256` and `65536`. `dvt_objectsPassingTest:` tests the whole word (`cbz w0`),
+so the same block with `2` or `256` keeps *every* member. `NSSet`'s
+`dvt_anyObjectsPassTest:` and `dvt_setByFilteringUsingBlock:` match those two
+respectively, so the set pair and the ordered pair agree once the receivers are
+swapped over — a filter wants a member back and counts any nonzero answer, while an
+"any" question wants a flag and reads the low bit.
+
+`dvt_anyObjectPassingTest:` answers the **member that passed**, not a flag: the
+binary falls into a shared tail that retains the current member and returns it,
+and never writes a boolean to the return register. Its encoding is
+`@24@0:8@?16` rather than a `B` return, which is the second way to tell. It stops
+at the first member that passes, so a block accepting the second costs two calls.
+
+Three of the four answers are the same shape as their array twins and one is not.
+`dvt_arrayByApplyingBlock:` is `-[NSArray dvt_arrayByApplyingBlock:]` over
+`-array`, so it keeps repeated answers: three members mapping to one object answer
+it three times, where the set form leaves one. `dvt_compactMap:` is a single tail
+call *into* the method above, so on an ordered set the two spellings cannot differ —
+and neither answers the mutable array that `-[NSArray dvt_compactMap:]` hands back.
+`dvt_firstMap:` keeps the early exit the array form documents. The set form,
+`dvt_orderedSetByApplyingBlock:`, collapses repeats and keeps the position of the
+first answer that got there, and is built by
+`+[NSOrderedSet orderedSetWithObjects:count:]` — observable, since that is what
+makes even an empty answer `__NSOrderedSetI` rather than the receiver.
+
+`dvt_objectsPassingTest:` uses the same factory and, given a real test, answers a
+*fresh* set every time, even when every member passes. That is the one place the
+ordered filter parts company with `NSSet`'s, which answers the receiver itself when
+its filter rejects nobody; the ordered form has to be an ordered set regardless.
+Its `nil`-test copy is the one path that can return the receiver — and only when
+the receiver is immutable, since `-[NSMutableOrderedSet copy]` is still a copy.
+
+The algebra is four methods with a branch on the argument and then one of
+`-mutableCopy`, one mutation and `-copy`, so each answer is a snapshot that a
+receiver mutated afterwards does not change. The shortcuts are the observable half:
+`dvt_orderedSetByAddingObject:` answers the receiver for `nil` and for anything it
+already holds — `isEqual:`, so an equal-but-distinct argument is the no-op — and
+`dvt_orderedSetByRemovingObject:` answers it for an absent member the same way;
+`dvt_orderedSetByAddingObjectsFromArray:` and `dvt_orderedSetBySubtractingOrderedSet:`
+ask the argument for a count instead, so a `nil` argument lands on the empty
+branch rather than raising. A mutable receiver can see all of this: the no-op hands
+back the mutable receiver itself, and every other answer is an immutable set. So
+does the difference from the set family, which is why the subtraction shortcut is
+worth spelling out — `dvt_setBySubtractingSet:` takes the same empty branch but
+answers `[self copy]`, so probing both with a mutable receiver gives identity `1`
+for `dvt_orderedSetBySubtractingOrderedSet:` and `0` for the set form on *both*
+binaries, the difference being that the set form's answer is immutable and the
+ordered form's is the mutable receiver. Changed answers come back as `__NSFrozenOrderedSetM`
+while the filter and map answers are `__NSOrderedSetI`; the probes report the
+collection kind separately from the class name, so the difference stays visible
+without the tests asserting a Foundation-internal name.
+
+`dvt_addReturningDidMutate:` answers whether the **count grew**, not whether an add
+happened: an object the receiver already holds leaves an ordered set the same
+length and answers `NO`, as does `nil`. `dvt_addObjectIfNotNil:` is spelled without
+the middle `n` of `NSMutableSet`'s `dvt_addObjectIfNonNil:`, which is how the
+binary has it. `dvt_popLastObject` is `-lastObject` retained and then
+`-removeObject:`, so the member is out of the receiver before it is handed back, and
+an empty receiver answers `nil` without asking anything of itself.
+
+**Five deliberate deviations**, all `nil` block. Apple faults in all six block-taking
+methods here — `dvt_anyObjectPassingTest:`, `dvt_arrayByApplyingBlock:`,
+`dvt_compactMap:`, `dvt_firstMap:`, `dvt_objectsPassingTest:` and
+`dvt_orderedSetByApplyingBlock:` each exit `139` when run in their own process, as
+`dvt_firstMap:` does on `NSArray` — and this framework guards five of them,
+matching the guard each sibling family already carries. `dvt_anyObjectPassingTest:`
+answers the first member, so a `nil` test through an empty receiver is still `nil`;
+`dvt_arrayByApplyingBlock:` and `dvt_compactMap:` answer an immutable array copy of
+the receiver, through `-array`, so the answer is `__NSArrayI` where the mutable
+`-[NSArray dvt_compactMap:]` would hand back `__NSArrayM`; and the filter and map
+forms answer an immutable copy of the receiver. `dvt_firstMap:` is the sixth and the
+one that keeps Apple's behaviour: its guard is absent, exactly as on `NSArray`, so a
+non-empty receiver still faults — confirmed by running it against both binaries,
+where each exits `139`. A `nil` block through an *empty* receiver is not the
+hazard on any of the six, since no member means the block is never reached, and both
+answer `nil` there. As with the guards above, each deviation can only differ where
+the original crashes.
+
 `NSString` also carries the letter-casing family, where the interesting work is
 `dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
 always starts a word, a run of digits holds together, and anything else —
@@ -1201,7 +1291,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 57,090 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 57,311 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1218,7 +1308,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **57,090 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **57,311 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1235,15 +1325,15 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 203 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 513 will not find
+This project implements 217 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 499 will not find
 it here. Two of the 203 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, while Apple's same-named selectors take a
 comparison block. Those block forms, `dvt_minimumObject:` and
 `dvt_maximumObject:`, are reproduced here too, so the local no-argument pair is a
 convenience this port adds alongside the versions it matches rather than a
-substitute for them. The other 201 are reproduced against the binary.
+substitute for them. The other 215 are reproduced against the binary.
 
 One reproduced method falls outside the count because it is not `dvt`-prefixed:
 `-[NSArray rangeAtIndex:]`, from Apple's own `NSArray(DVTRangeArrayAdditions)`
