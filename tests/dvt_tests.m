@@ -1586,6 +1586,182 @@ static void DVTTestClassAdditions(void)
     }
 
     {
+        /* Adjacent run grouping. The block is a comparator over the previous and the
+           current member rather than a per-member test, so it is asked n-1 times and a
+           member joins the run before it only while the pair compares equal. */
+        BOOL (^eq)(id, id) = ^BOOL(id a, id b) { return [a isEqual:b]; };
+        NSArray *runs = [@[@"a", @"b", @"a", @"b", @"c"] dvt_arrayByGroupingAdjacentObjectsUsingBlock:eq];
+
+        DVTExpect([@[] dvt_arrayByGroupingAdjacentObjectsUsingBlock:eq] == nil,
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: is nil for an empty receiver");
+        /* The runs come back in receiver order, and each is a subarray of the receiver,
+           so grouping on a value that never repeats is one run per member. */
+        DVTExpectEqualObjects(runs, (@[@[@"a"], @[@"b"], @[@"a"], @[@"b"], @[@"c"]]),
+                              @"array arrayByGroupingAdjacentObjectsUsingBlock: keeps runs in receiver order");
+        /* Repeats that are not adjacent stay apart, which is what separates this from
+           grouping by a key: a b a is three runs, not two. */
+        DVTExpect(runs.count == 5,
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: separates non-adjacent repeats");
+        DVTExpectEqualObjects([@[@"a", @"a", @"b"] dvt_arrayByGroupingAdjacentObjectsUsingBlock:eq],
+                              (@[@[@"a", @"a"], @[@"b"]]),
+                              @"array arrayByGroupingAdjacentObjectsUsingBlock: joins an adjacent repeat");
+        DVTExpectEqualObjects([@[@"a", @"b", @"c"] dvt_arrayByGroupingAdjacentObjectsUsingBlock:^BOOL(id a, id b) {
+            return NO;
+        }], (@[@[@"a"], @[@"b"], @[@"c"]]),
+                              @"array arrayByGroupingAdjacentObjectsUsingBlock: an all-false comparator makes every member a run");
+        /* One call per adjacent pair, and the pair is (previous, current). */
+        NSMutableArray *pairs = [NSMutableArray array];
+        __block NSUInteger comparatorCalls = 0;
+        (void)[@[@"a", @"b", @"c"] dvt_arrayByGroupingAdjacentObjectsUsingBlock:^BOOL(id a, id b) {
+            comparatorCalls++;
+            [pairs addObject:[NSString stringWithFormat:@"(%@,%@)", a, b]];
+            return [a isEqual:b];
+        }];
+        DVTExpect(comparatorCalls == 2,
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: asks once per adjacent pair");
+        DVTExpectEqualObjects([pairs componentsJoinedByString:@" "], @"(a,b) (b,c)",
+                              @"array arrayByGroupingAdjacentObjectsUsingBlock: asks (previous, current)");
+        /* A lone member is answered with a copy of the receiver, while a longer receiver
+           is answered with a subarray of it. A copy of an immutable receiver is the
+           receiver itself, so the two are told apart by identity rather than by content:
+           both runs are equal to the members they cover. */
+        NSArray *immutableOne = @[@"a"];
+        NSArray *oneGroup = [immutableOne dvt_arrayByGroupingAdjacentObjectsUsingBlock:eq];
+        DVTExpect(oneGroup.firstObject == immutableOne,
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: a lone member is answered with a copy of the receiver");
+        NSMutableArray *mutableOne = [NSMutableArray arrayWithObject:@"a"];
+        NSArray *mutableOneGroup = [mutableOne dvt_arrayByGroupingAdjacentObjectsUsingBlock:eq];
+        DVTExpect(mutableOneGroup.firstObject != mutableOne && [mutableOneGroup.firstObject isEqual:mutableOne],
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: copying a mutable receiver answers a fresh array");
+        NSArray *immutableMany = @[@"a", @"b"];
+        NSArray *manyGroup = [immutableMany dvt_arrayByGroupingAdjacentObjectsUsingBlock:^BOOL(id a, id b) {
+            return YES;
+        }];
+        DVTExpect(manyGroup.count == 1 && manyGroup.firstObject != immutableMany &&
+                      [manyGroup.firstObject isEqual:immutableMany],
+                  @"array arrayByGroupingAdjacentObjectsUsingBlock: a longer receiver is answered with a subarray");
+    }
+
+    {
+        /* Key grouping. The block is asked once per member and answers that member's
+           key, so the answer is unordered -- it is the values of the dictionary Apple
+           accumulates into -- while each group keeps receiver order. */
+        NSArray *numbers = @[@1, @2, @3, @4];
+        NSArray *parity = [numbers dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id o) {
+            return ([o integerValue] % 2 == 0) ? @"even" : @"odd";
+        }];
+        NSArray *byParity = [parity sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            return [[[(NSArray *)a firstObject] description] compare:[[(NSArray *)b firstObject] description]];
+        }];
+
+        DVTExpectEqualObjects(byParity, (@[@[@1, @3], @[@2, @4]]),
+                              @"array unorderedArrayByGroupingObjectsUsingKeys: groups members sharing a key");
+        DVTExpectEqualObjects([(NSArray *)byParity.firstObject objectAtIndex:0], @1,
+                              @"array unorderedArrayByGroupingObjectsUsingKeys: a group keeps receiver order");
+        /* The key is the whole answer, not its members, so an array answer keys on that
+           array. Asking for the member itself therefore separates every member. */
+        DVTExpect([@[@"x", @"y"] dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id o) {
+            return @[o, o];
+        }].count == 2,
+                  @"array unorderedArrayByGroupingObjectsUsingKeys: an array answer keys on the whole array");
+        /* The groups are mutable while the answer holding them is not, which is what
+           -allValues of the accumulating dictionary gives. */
+        DVTExpect([parity.firstObject isKindOfClass:[NSMutableArray class]],
+                  @"array unorderedArrayByGroupingObjectsUsingKeys: answers mutable groups");
+        DVTExpect(![parity isKindOfClass:[NSMutableArray class]],
+                  @"array unorderedArrayByGroupingObjectsUsingKeys: answers an immutable array of groups");
+        __block NSUInteger keyCalls = 0;
+        (void)[@[@"a", @"b"] dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id o) {
+            keyCalls++;
+            return o;
+        }];
+        DVTExpect(keyCalls == 2, @"array unorderedArrayByGroupingObjectsUsingKeys: asks once per member");
+        DVTExpect([@[] dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id o) { return o; }].count == 0,
+                  @"array unorderedArrayByGroupingObjectsUsingKeys: is empty for an empty receiver");
+        /* The key is sent -dvt_isNonEmpty, so the key is any object answering it, not
+           necessarily a string. The faults that follow from anything else -- a nil or
+           empty key asserting, a number not implementing the method at all -- abort in
+           Apple too, and are recorded in the README rather than asserted here. */
+        DVTExpect([[@[@1] dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id o) { return @"k"; }] count] == 1,
+                  @"array unorderedArrayByGroupingObjectsUsingKeys: a string key is accepted");
+    }
+
+    {
+        /* Key-path grouping, the computed-key twin of the block form. A member is keyed
+           by the array of the values it has for the paths, so two members agree exactly
+           when those values do. */
+        NSArray *rows = @[@{@"a": @1, @"b": @2}, @{@"a": @1, @"b": @3}, @{@"a": @1, @"b": @2}];
+        NSArray *groups = [rows dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"a", @"b"]];
+        NSArray *sorted = [groups sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            return [[[(NSArray *)a firstObject] description] compare:[[(NSArray *)b firstObject] description]];
+        }];
+
+        DVTExpectEqualObjects(sorted, (@[@[@{@"a": @1, @"b": @2}, @{@"a": @1, @"b": @2}], @[@{@"a": @1, @"b": @3}]]),
+                              @"array unorderedArrayByGroupingObjectsUsingKeyPaths: groups members whose path values agree");
+        /* The paths are all applied, so dropping to one path merges the two b groups. */
+        DVTExpect([rows dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"a"]].count == 1,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: every path has to agree");
+        /* A dotted path is one path, not two. */
+        DVTExpect([@[@{@"x": @{@"y": @"deep"}}] dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"x.y"]].count == 1,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: takes a dotted path whole");
+        /* A member with no value for a path is keyed by a shared sentinel rather than
+           dropped, so keyless members land together instead of aborting on an empty
+           key -- and they do not join a member whose value is NSNull. */
+        NSArray *keyless = [@[@{}, @{}] dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"k"]];
+        DVTExpect(keyless.count == 1 && [(NSArray *)keyless.firstObject count] == 2,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: members missing a path group together");
+        NSArray *keylessVersusNull = [@[@{}, @{@"k": [NSNull null]}]
+                                          dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"k"]];
+        DVTExpect(keylessVersusNull.count == 2,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: a missing path does not group with NSNull");
+        DVTExpect([@[] dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"k"]].count == 0,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: is empty for an empty receiver");
+        /* What is left to reject is a fault rather than an answer: an empty path list aborts
+           on the -dvt_isNonEmpty check, and because the paths are applied through
+           -dvt_arrayByApplyingBlock: a non-array argument such as a bare string
+           faults on an unrecognized selector. Both abort in Apple too, and are
+           recorded in the README rather than asserted here. */
+        DVTExpect([@[@{@"k": @"v"}] dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:@[@"k"]].count == 1,
+                  @"array unorderedArrayByGroupingObjectsUsingKeyPaths: a non-empty path list is accepted");
+    }
+
+    {
+        /* The shell-style joiner. Two members and three or more go through different
+           format strings, so the two-member answer has a space either side of the final
+           join string while the longer one runs the separator twice. */
+        NSArray *abc = @[@"a", @"b", @"c"];
+
+        DVTExpectEqualObjects([@[] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"",
+                              @"array componentsJoinedByString: is empty for an empty receiver");
+        /* A lone member is described rather than returned, so a non-string member does
+           not survive; a string member does, which is why this reads as identity. */
+        DVTExpectEqualObjects([@[@"a"] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"a",
+                              @"array componentsJoinedByString: a lone member answers its description");
+        DVTExpectEqualObjects([@[@42] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"42",
+                              @"array componentsJoinedByString: a lone number answers its description");
+        DVTExpectEqualObjects([@[[NSNull null]] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"<null>",
+                              @"array componentsJoinedByString: a lone NSNull answers its description");
+        DVTExpectEqualObjects([@[@"a", @"b"] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"a ! b",
+                              @"array componentsJoinedByString: two members join with a space either side");
+        DVTExpectEqualObjects([@[@"a", @"b", @"c"] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"a|b|! c",
+                              @"array componentsJoinedByString: three members repeat the separator before the final join");
+        DVTExpectEqualObjects([@[@"a", @"b", @"c", @"d"] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"],
+                              @"a|b|c|! d",
+                              @"array componentsJoinedByString: four members join the head by the separator");
+        /* A nil separator joins with nothing, leaving the final join string to mark the
+           boundary. A nil final join string prints as (null). */
+        DVTExpectEqualObjects([abc dvt_componentsJoinedByString:nil finalComponentJoinString:@"!"], @"ab! c",
+                              @"array componentsJoinedByString: a nil separator joins with nothing");
+        DVTExpectEqualObjects([abc dvt_componentsJoinedByString:@"" finalComponentJoinString:@"!"], @"ab! c",
+                              @"array componentsJoinedByString: an empty separator joins with nothing");
+        DVTExpectEqualObjects([@[@"a", @"b"] dvt_componentsJoinedByString:@"|" finalComponentJoinString:nil], @"a (null) b",
+                              @"array componentsJoinedByString: a nil final join string prints as (null)");
+        /* Empty members are joined like any other, so they leave bare separators. */
+        DVTExpectEqualObjects([@[@"", @"", @""] dvt_componentsJoinedByString:@"|" finalComponentJoinString:@"!"], @"||! ",
+                              @"array componentsJoinedByString: empty members leave bare separators");
+    }
+
+    {
         /* The count selector is shared with NSArray, so the two are asked the same
            questions, including the ones only a cast block can reach. */
         NSArray *array = @[@"a", @"b", @"c"];

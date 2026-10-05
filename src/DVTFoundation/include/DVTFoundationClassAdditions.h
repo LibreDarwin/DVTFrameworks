@@ -236,6 +236,69 @@ NS_ASSUME_NONNULL_BEGIN
 /** Elements satisfying `block`, re-wrapped into an array. */
 - (NSArray *)dvt_arrayByFilteringUsingBlock:(BOOL (^)(id object))block;
 /**
+ Members gathered into the maximal runs `block` calls equal, each run one member.
+
+ `block` is a comparator over the previous and the current member, and is asked once per
+ adjacent pair -- `n` members give `n - 1` calls. A new run starts wherever the
+ comparator answers false between a member and the one before it, so a run is anywhere
+ from one member to the whole receiver. Order, repeats, and member identity survive.
+
+ An empty receiver answers `nil` rather than an empty array. The runs are subarrays of
+ the receiver, except when the receiver holds a single member, where the only run is a
+ copy of the receiver -- which is the receiver itself when the receiver is immutable,
+ and a fresh array when it is not.
+ */
+- (NSArray *_Nullable)dvt_arrayByGroupingAdjacentObjectsUsingBlock:(BOOL (^)(id previous, id current))block;
+/**
+ Members grouped under the key `block` gives each, the groups in no particular order.
+
+ `block` is asked once per member and answers the key that member belongs under. The key
+ may be any non-empty object -- a string, an array, a number -- and members that share a
+ key land in one group, in receiver order.
+
+ The answer is unordered: it is the `allValues` of the dictionary Apple accumulates
+ into, so the groups cannot be compared by index across two runs. Each group is a fresh
+ mutable array while the answer itself is immutable.
+
+ A key that comes out `nil` or empty aborts, as it has to be stored as a dictionary key.
+ */
+- (NSArray *)dvt_unorderedArrayByGroupingObjectsUsingKeys:(id _Nullable (^)(id object))block;
+/**
+ Members grouped by their values for each of `keyPaths`, which is an array of key paths
+ rather than a block.
+
+ A member is keyed by the array of the values it has for `keyPaths`, so two members group
+ together exactly when those values agree. This is the block form above with the
+ per-member key computed for you, and it shares that method's unordered answer and its
+ abort on a key that comes out empty.
+
+ `keyPaths` has to be a non-empty array of key paths. An empty array aborts, and a
+ string faults, since it is asked for the key path and then sent `dvt_arrayByApplyingBlock:`.
+
+ A member that has no value for a path is keyed by a shared sentinel rather than
+ dropped, so such members group together instead of raising on an empty key. They do
+ not group with a member whose value happens to be `NSNull`.
+ */
+- (NSArray *)dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:(id)keyPaths;
+/**
+ Members joined with `separator`, with the final member introduced differently.
+
+ The shape is the one a command line wants: everything up to the final member is joined
+ with `separator`, and the final member is introduced by `finalComponentJoinString`
+ instead, so the last member reads as the argument the rest qualify.
+
+ `count` picks between two joins, and they are not the same string:
+ - no members: the empty string
+ - one member: that member's `description`
+ - two members: `first finalComponentJoinString last`
+ - three or more: the first `count - 1` joined by `separator`, then `separator`, then
+   `finalComponentJoinString`, then a space, then the last member
+
+ A `nil` separator joins with nothing. A `nil` final join string prints as `(null)`.
+ */
+- (NSString *)dvt_componentsJoinedByString:(NSString *_Nullable)separator
+                  finalComponentJoinString:(NSString *_Nullable)finalComponentJoinString;
+/**
  Like `dvt_arrayByApplyingBlock:`, returning a set.
 
  Answers that repeat collapse, so the result can be smaller than the receiver even

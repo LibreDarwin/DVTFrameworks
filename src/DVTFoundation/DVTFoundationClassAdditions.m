@@ -568,6 +568,112 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return [self dvt_objectsPassingTest:block];
 }
 
+- (NSArray *)dvt_arrayByGroupingAdjacentObjectsUsingBlock:(BOOL (^)(id previous, id current))block
+{
+    NSUInteger count = self.count;
+    if (count == 0) {
+        return nil;
+    }
+    if (count == 1) {
+        /* Apple copies the receiver on this path instead of taking a subarray of it, so
+           the single run is a copy -- which for an immutable receiver is the receiver
+           itself, and for a mutable one a fresh immutable array. The longer path below
+           always hands back a distinct subarray, so the copy stays. */
+        return [NSArray arrayWithObject:[self copy]];
+    }
+    NSMutableArray *runs = [NSMutableArray arrayWithCapacity:count];
+    NSUInteger runStart = 0;
+    NSUInteger runLength = 1;
+    for (NSUInteger index = 1; index < count; index++) {
+        if (block([self objectAtIndex:index - 1], [self objectAtIndex:index])) {
+            runLength++;
+            continue;
+        }
+        [runs addObject:[self subarrayWithRange:NSMakeRange(runStart, runLength)]];
+        runStart = index;
+        runLength = 1;
+    }
+    [runs addObject:[self subarrayWithRange:NSMakeRange(runStart, runLength)]];
+    /* Apple builds the answer with -initWithObjects:count: over a stack buffer, which is
+       what lands a one-run answer on __NSSingleObjectArrayI rather than the plain
+       __NSArrayI a -copy of this build would give. The buffer is not observable, the
+       class ladder is. */
+    NSUInteger runCount = runs.count;
+    void *buffer = calloc(runCount, sizeof(id));
+    CFArrayGetValues((__bridge CFArrayRef)runs, CFRangeMake(0, (CFIndex)runCount), buffer);
+    NSArray *result = [NSArray arrayWithObjects:(const __unsafe_unretained id *)buffer count:runCount];
+    free(buffer);
+    return result;
+}
+
+- (NSArray *)dvt_unorderedArrayByGroupingObjectsUsingKeys:(id (^)(id object))block
+{
+    /* The key is the whole answer the block gives, not its members, so a block that
+       answers an array keys on that array. Members sharing a key keep receiver order
+       inside the group; the groups themselves come back in dictionary order, which is
+       why the answer is unordered and the groups come from -allValues. */
+    NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+    for (id object in self) {
+        id key = block(object);
+        DVTAssert([key dvt_isNonEmpty], @"key.dvt_isNonEmpty", nil, @"%@", key);
+        NSMutableArray *group = groups[key];
+        if (group == nil) {
+            group = [NSMutableArray arrayWithCapacity:1];
+            groups[key] = group;
+        }
+        [group addObject:object];
+    }
+    return groups.allValues;
+}
+
+static id DVTMissingKeyPathSentinel(void)
+{
+    /* Apple reaches for a shared sentinel when a member has no value for a key path,
+       which keeps every such member in one group instead of raising on the empty key
+       the block form asserts about. It is a singleton, so the members share a key. A
+       fresh object per member would give each its own group. */
+    static id sentinel = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sentinel = [[NSObject alloc] init];
+    });
+    return sentinel;
+}
+
+- (NSArray *)dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:(id)keyPaths
+{
+    DVTAssert([keyPaths dvt_isNonEmpty], @"keyPaths.dvt_isNonEmpty", nil, @"%@", keyPaths);
+    id sentinel = DVTMissingKeyPathSentinel();
+    return [self dvt_unorderedArrayByGroupingObjectsUsingKeys:^id(id object) {
+        return [keyPaths dvt_arrayByApplyingBlock:^id(id keyPath) {
+            id value = [object valueForKeyPath:keyPath];
+            return value != nil ? value : sentinel;
+        }];
+    }];
+}
+
+- (NSString *)dvt_componentsJoinedByString:(NSString *)separator
+                  finalComponentJoinString:(NSString *)finalComponentJoinString
+{
+    NSString *join = separator != nil ? separator : @"";
+    NSUInteger count = self.count;
+    switch (count) {
+        case 0:
+            return @"";
+        case 1:
+            /* A lone member is described rather than returned, so a member that is not
+               itself a string does not survive the trip. */
+            return [[self objectAtIndex:0] description];
+        case 2:
+            return [NSString stringWithFormat:@"%@ %@ %@", [self objectAtIndex:0], finalComponentJoinString,
+                                              [self objectAtIndex:1]];
+        default: {
+            NSString *head = [[self subarrayWithRange:NSMakeRange(0, count - 1)] componentsJoinedByString:join];
+            return [NSString stringWithFormat:@"%@%@%@ %@", head, join, finalComponentJoinString, [self lastObject]];
+        }
+    }
+}
+
 - (NSSet *)dvt_setByApplyingBlock:(id (^)(id object))block
 {
     if (block == nil) {

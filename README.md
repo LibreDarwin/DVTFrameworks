@@ -223,9 +223,10 @@ Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), in-place
 sorting by a derived key, both in place on a mutable array and as a copy on an
 array or a set, stable partitioning, shuffling, unique-string lookup,
-contiguous-run search, a command-line renderer, and an `NSHashTable`
+contiguous-run search, grouping by a block key or by key path, joining with a
+final-component separator, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 125 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 129 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -1225,13 +1226,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 192 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 524 will not find
-it here. Two of the 192 are additions rather than reproductions:
+This project implements 196 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 520 will not find
+it here. Two of the 196 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 190 are reproduced against the
+rather than a match for those variants. The other 194 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what
@@ -1267,6 +1268,34 @@ Recovered from Apple's binary, or matched against it byte for byte:
 - `dvt_arrayByRemovingObject:` drops every element that is pointer-identical to
   or `isEqual:` to the argument, not just the first, despite the singular
   argument name
+- `dvt_arrayByGroupingAdjacentObjectsUsingBlock:` answers `nil` for an empty
+  receiver rather than an empty array, and calls the comparator once per adjacent
+  pair, so a receiver of *n* members is compared *n - 1* times. Its runs come from
+  `subarrayWithRange:` except when the receiver holds one member, where the only
+  run is a `-copy` of the whole receiver — which for an immutable receiver is the
+  receiver itself, so identity, not content, is what separates the two paths. A
+  `nil` block is not checked and dereferences
+- `dvt_unorderedArrayByGroupingObjectsUsingKeys:` is unordered only in the sense
+  the name promises: the block is called once per member and its answer is used
+  directly as a dictionary key, so the outer array is `allValues` in whatever order
+  the dictionary hands them back. The key is not a string — any object answering
+  `dvt_isNonEmpty` works, and since only some Foundation classes implement that
+  method an `NSNumber` key faults with an unrecognized selector. The groups
+  themselves are `NSMutableArray`s of capacity one
+- `dvt_unorderedArrayByGroupingObjectsUsingKeyPaths:` asserts that `keyPaths` is
+  non-empty and then delegates to the keys form, mapping each path through
+  `valueForKeyPath:`. A missing value becomes a single shared sentinel object —
+  not `nil` and not `NSNull` — so members missing the same path group together,
+  while a member whose value is itself `NSNull` or the `keyPaths` array stays in a
+  group of its own. Because the delegation sends `dvt_arrayByApplyingBlock:` to
+  `keyPaths`, a non-array argument such as a bare string faults rather than
+  producing a clean assertion
+- `dvt_componentsJoinedByString:finalComponentJoinString:` builds two- and
+  three-element answers from two distinct formats, `'%@ %@ %@'` and
+  `'%@%@%@ %@'`, where the second only drops a separator between the leading
+  components. A `nil` separator is treated as `nil` — empty — elsewhere rather
+  than crashing, a `nil` final separator renders as `(null)` through the format,
+  and a one-element receiver is answered with `-description` of its member
 - `dvt_stringByConcatenatingAsCommandLineArguments` escapes exactly four
   characters — `'`, space, `"`, and tab — and renders an empty argument as `""`.
   A backslash is *not* escaped, and neither is the rest of the shell
