@@ -1486,6 +1486,192 @@ static void DVTTestClassAdditions(void)
                   @"set setByApplyingSelector: answers a 300-member receiver in full");
     }
 
+    /* The two ranking folds and the plain fold. The comparator folds differ from
+       the block fold in the order their two arguments arrive in, which is the
+       part that is easy to get backwards and impossible to see in the answer
+       alone, so the argument order is checked directly. */
+
+    {
+        NSSet *abc = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSComparisonResult (^ascending)(id, id) = ^NSComparisonResult(id a, id b) {
+            return [a compare:b];
+        };
+        NSMutableArray *calls = [NSMutableArray array];
+        NSComparisonResult (^logged)(id, id) = ^NSComparisonResult(id a, id b) {
+            [calls addObject:[NSString stringWithFormat:@"(%@,%@)", a, b]];
+            return [a compare:b];
+        };
+
+        DVTExpect([[NSSet set] dvt_minimumObjectUsingComparator:ascending] == nil,
+                  @"set minimumObjectUsingComparator: is nil for an empty receiver");
+        DVTExpectEqualObjects([[NSSet setWithObject:@"solo"] dvt_minimumObjectUsingComparator:ascending],
+                              @"solo",
+                              @"set minimumObjectUsingComparator: hands back a lone member");
+        DVTExpectEqualObjects([abc dvt_minimumObjectUsingComparator:ascending], @"a",
+                              @"set minimumObjectUsingComparator: ranks the lowest member lowest");
+        /* The comparator sees the candidate first and the incumbent second: with
+           -compare: that is what leaves "a" held when "b" and "c" arrive. */
+        [calls removeAllObjects];
+        [abc dvt_minimumObjectUsingComparator:logged];
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"(b,a) (c,a)",
+                              @"set minimumObjectUsingComparator: asks (candidate, incumbent)");
+        /* Only an exact NSOrderedAscending replaces, so an out-of-contract -2 is
+           not treated as "less" and the incumbent survives both rounds. */
+        DVTExpectEqualObjects([abc dvt_minimumObjectUsingComparator:^NSComparisonResult(id a, id b) {
+            return (NSComparisonResult)-2;
+        }], @"a",
+                              @"set minimumObjectUsingComparator: only an exact -1 replaces the incumbent");
+        DVTExpectEqualObjects([abc dvt_minimumObjectUsingComparator:^NSComparisonResult(id a, id b) {
+            return NSOrderedDescending;
+        }], @"a",
+                              @"set minimumObjectUsingComparator: a descending answer never replaces");
+        /* Ties keep the incumbent, so the first member enumerated wins. */
+        DVTExpectEqualObjects([abc dvt_minimumObjectUsingComparator:^NSComparisonResult(id a, id b) {
+            return NSOrderedSame;
+        }], @"a",
+                              @"set minimumObjectUsingComparator: a tie keeps the incumbent");
+
+        DVTExpect([[NSSet set] dvt_maximumObjectUsingComparator:ascending] == nil,
+                  @"set maximumObjectUsingComparator: is nil for an empty receiver");
+        DVTExpectEqualObjects([abc dvt_maximumObjectUsingComparator:ascending], @"c",
+                              @"set maximumObjectUsingComparator: ranks the highest member highest");
+        /* The maximum is the minimum asked with a negated comparator, so its own
+           comparisons are made against the running maximum: "b" loses to "a" and
+           "c" then beats "b". */
+        [calls removeAllObjects];
+        [abc dvt_maximumObjectUsingComparator:logged];
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"(b,a) (c,b)",
+                              @"set maximumObjectUsingComparator: folds the minimum with a negated answer");
+        DVTExpectEqualObjects([abc dvt_maximumObjectUsingComparator:^NSComparisonResult(id a, id b) {
+            return NSOrderedSame;
+        }], @"a",
+                              @"set maximumObjectUsingComparator: shares the first-wins tie-break");
+
+        DVTExpect([[NSSet set] dvt_objectByFoldingWithBlock:^id(id a, id b) { return @"never"; }] == nil,
+                  @"set objectByFoldingWithBlock: is nil for an empty receiver");
+        /* A lone member is the accumulator without the block ever being called, so
+           what the block would return cannot matter. */
+        __block int blockCalls = 0;
+        DVTExpectEqualObjects([[NSSet setWithObject:@"solo"] dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            blockCalls++;
+            return @"never";
+        }], @"solo",
+                              @"set objectByFoldingWithBlock: seeds on the first member without calling the block");
+        DVTExpect(blockCalls == 0,
+                  @"set objectByFoldingWithBlock: does not call the block for a lone member");
+        [calls removeAllObjects];
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            [calls addObject:[NSString stringWithFormat:@"(%@,%@)", a, b]];
+            return [NSString stringWithFormat:@"%@%@", a, b];
+        }], @"abc",
+                              @"set objectByFoldingWithBlock: folds the members together");
+        /* The opposite order from the comparator folds: accumulator first. */
+        DVTExpectEqualObjects([calls componentsJoinedByString:@" "], @"(a,b) (ab,c)",
+                              @"set objectByFoldingWithBlock: asks (accumulator, next)");
+        /* A nil answer empties the accumulator and the next member re-seeds it, so
+           a block that always answers nil yields the last member rather than nil. */
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) { return nil; }], @"c",
+                              @"set objectByFoldingWithBlock: a nil answer re-seeds on the next member");
+        blockCalls = 0;
+        DVTExpectEqualObjects([abc dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            blockCalls++;
+            return nil;
+        }], @"c",
+                              @"set objectByFoldingWithBlock: an all-nil fold answers the last member");
+        /* One call, not two: the nil answer leaves the accumulator empty and the
+           last member then re-seeds it without the block being consulted. A
+           five-member receiver asks twice, so the skipped call is per re-seed
+           rather than a one-off. */
+        DVTExpect(blockCalls == 1,
+                  @"set objectByFoldingWithBlock: skips the call that would re-seed");
+        __block int fiveCalls = 0;
+        NSMutableSet *five = [NSMutableSet set];
+        for (int i = 0; i < 5; i++) {
+            [five addObject:[NSNumber numberWithInt:i]];
+        }
+        DVTExpectEqualObjects([five dvt_objectByFoldingWithBlock:^id(id a, id b) {
+            fiveCalls++;
+            return nil;
+        }], @4,
+                              @"set objectByFoldingWithBlock: an all-nil fold answers the last member");
+        DVTExpect(fiveCalls == 2, @"set objectByFoldingWithBlock: one call per re-seed");
+    }
+
+    /* The set-to-dictionary pair. The names run opposite to the answers: the
+       block's answer is the value in the first and the key in the second. */
+
+    {
+        NSSet *abc = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        id (^upper)(id) = ^id(id o) { return [o uppercaseString]; };
+
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper],
+                              (@{@"a": @"A", @"b": @"B", @"c": @"C"}),
+                              @"set EntriesAsKeysAndValues: member keyed, block answer valued");
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper],
+                              (@{@"A": @"a", @"B": @"b", @"C": @"c"}),
+                              @"set EntriesAsValuesAndKeys: block answer keyed, member valued");
+        DVTExpectEqualObjects([[NSSet set] dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper], @{},
+                              @"set EntriesAsKeysAndValues: is empty for an empty receiver");
+        DVTExpectEqualObjects([[NSSet set] dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper], @{},
+                              @"set EntriesAsValuesAndKeys: is empty for an empty receiver");
+        /* A nil answer is skipped rather than stored in either slot. */
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:^id(id o) {
+            return [o isEqualToString:@"b"] ? nil : o;
+        }], (@{@"a": @"a", @"c": @"c"}),
+                              @"set EntriesAsKeysAndValues: skips a nil answer");
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:^id(id o) {
+            return [o isEqualToString:@"b"] ? nil : o;
+        }], (@{@"a": @"a", @"c": @"c"}),
+                              @"set EntriesAsValuesAndKeys: skips a nil answer");
+        /* A constant answer leaves the members distinct as keys here, so every
+           member keeps an entry. */
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:^id(id o) { return @"k"; }],
+                              (@{@"a": @"k", @"b": @"k", @"c": @"k"}),
+                              @"set EntriesAsKeysAndValues: a constant answer keeps every member");
+        /* In the mirror image the answers are the keys, so they collide and the
+           last member enumerated is the one that survives. */
+        DVTExpectEqualObjects([abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:^id(id o) { return @"k"; }],
+                              (@{@"k": @"c"}),
+                              @"set EntriesAsValuesAndKeys: colliding answers leave the last member");
+        NSDictionary *keyed = [abc dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:upper];
+        NSDictionary *reverse = [abc dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:upper];
+        DVTExpect(![keyed isKindOfClass:[NSMutableDictionary class]],
+                  @"set EntriesAsKeysAndValues: answers an immutable dictionary");
+        DVTExpect(![reverse isKindOfClass:[NSMutableDictionary class]],
+                  @"set EntriesAsValuesAndKeys: answers an immutable dictionary");
+    }
+
+    /* NSSet's shuffle is a forward to -allObjects and then the array method, so
+       the threshold comes from that method rather than from here. */
+
+    {
+        NSSet *abc = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSArray *shuffled = [abc dvt_shuffledArray];
+        DVTExpect(shuffled.count == 3, @"set shuffledArray: answers every member");
+        DVTExpectEqualObjects([NSSet setWithArray:shuffled], abc,
+                              @"set shuffledArray: keeps the members and only reorders them");
+        /* Above one member the answer is a mutable array. */
+        DVTExpect([shuffled isKindOfClass:[NSMutableArray class]],
+                  @"set shuffledArray: a multi-member answer is mutable");
+        /* At one member or below it is a copy of an already immutable array, so
+           the empty answer is the shared instance rather than a fresh array. */
+        NSArray *lone = [[NSSet setWithObject:@"solo"] dvt_shuffledArray];
+        DVTExpect(![lone isKindOfClass:[NSMutableArray class]],
+                  @"set shuffledArray: a lone member answers an immutable array");
+        /* Two -allObjects calls answer two distinct arrays, so the empty answer
+           is a copy of a fresh empty array rather than one shared instance. */
+        DVTExpect([[NSSet set] dvt_shuffledArray] != [[NSSet set] dvt_shuffledArray],
+                  @"set shuffledArray: each empty answer is its own object");
+        DVTExpect([[[NSSet set] dvt_shuffledArray] count] == 0,
+                  @"set shuffledArray: an empty receiver answers an empty array");
+        NSMutableSet *big = [NSMutableSet set];
+        for (int i = 0; i < 300; i++) {
+            [big addObject:[NSString stringWithFormat:@"m%03d", i]];
+        }
+        DVTExpect([big dvt_shuffledArray].count == 300,
+                  @"set shuffledArray: answers a 300-member receiver in full");
+    }
+
     /* The plain sorting trio. All three take -allObjects, sort it, and skip the
        sort entirely below two members. */
 

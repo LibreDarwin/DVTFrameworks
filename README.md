@@ -225,7 +225,7 @@ sorting by a derived key, both in place on a mutable array and as a copy on an
 array or a set, stable partitioning, shuffling, unique-string lookup,
 contiguous-run search, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 117 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 123 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -311,6 +311,51 @@ selector answers an empty set here, and a member that does not carry the selecto
 skipped rather than taken to the assertion — so a set mixing strings and numbers
 asked for `uppercaseString` keeps the strings instead of dying. Both were
 confirmed by running each case in its own process.
+
+Three more folds sit on the same class, and the reason they are worth writing out
+is that their two arguments arrive in **different orders**. The comparator folds
+ask the block `(candidate, incumbent)` — the member under consideration first, the
+member held so far second. With `-[a compare:b]` that is exactly what leaves `"a"`
+held while `"b"` and `"c"` arrive, and the probe's call log is `(b,a)` then
+`(c,a)`. `dvt_objectByFoldingWithBlock:` asks the opposite,
+`(accumulator, next)`, so the log reads `(a,b)` then `(ab,c)`. Getting either
+backwards still returns an object, just the wrong one.
+
+`dvt_minimumObjectUsingComparator:` replaces the incumbent only on an *exact*
+`NSOrderedAscending`, so a `NSOrderedSame` answer is a tie that keeps the
+incumbent and the first member enumerated wins, and an out-of-contract `-2` does
+not compare as "less" — the probe answers `"a"` for both. `dvt_maximumObjectUsingComparator:`
+is not a second fold at all: the binary wraps the caller's block in a stack block
+that calls it and negates the result, then tail-calls
+`dvt_minimumObjectUsingComparator:`, which is why the two share a tie-break and
+why `NSOrderedSame` answers `"a"` there too. An empty receiver answers `nil`
+without reaching the block at all.
+
+The plain fold has the sharper edge. It does not test the answer for `nil`, so a
+`nil` answer empties the accumulator and the *next* member becomes the accumulator
+directly, without the block being consulted. A fold that always answers `nil` over
+`a`, `b`, `c` therefore answers **`c`**, not `nil` — and the call log shows why:
+one call, `(a,b)`, instead of two. Over five members it is two calls. One call is
+saved per re-seed, which is the same arithmetic as the answer.
+
+`NSSet`'s `dvt_shuffledArray` is a forward rather than a second shuffle: `-allObjects`
+then `dvt_shuffledArray` on the result, so the `count > 1` threshold is inherited
+from the array method and the answer is `__NSArrayM` above one member and
+`__NSArrayI_Transfer` at one or below. Each `-allObjects` call answers its own
+array even when the receiver is empty, so the empty answer is a copy of a *fresh*
+empty array rather than a shared instance — worth stating because the class name
+suggests otherwise.
+
+The two set-to-dictionary methods are named the other way round from where the
+answer lands, and the disassembly settles it: `-setObject:forKeyedSubscript:` is
+sent with the block's answer in the value slot and the member in the key slot for
+`…AsKeysAndValuesFromBlock:`, and the other way round for `…AsValuesAndKeysFromBlock:`.
+A member `"a"` with an uppercasing block answers `a->A` in the first and `A->a` in
+the second. A `nil` answer is skipped in both rather than stored, so nothing reaches
+the subscript setter with a `nil` in either slot. Collisions are not a special case
+— because the members stay distinct as keys, a constant answer still yields one
+entry per member, `a->k, b->k, c->k` — while in the mirror image the answers are
+the keys and so collide, leaving `k->c`, the last member enumerated.
 
 `NSString` also carries the letter-casing family, where the interesting work is
 `dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
@@ -1109,7 +1154,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 57,009 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 57,047 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1126,7 +1171,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **57,009 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **57,047 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1143,13 +1188,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 181 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 535 will not find
-it here. Two of the 181 are additions rather than reproductions:
+This project implements 187 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 529 will not find
+it here. Two of the 187 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 179 are reproduced against the
+rather than a match for those variants. The other 185 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what

@@ -1589,6 +1589,131 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return [result copy];
 }
 
+- (id)dvt_minimumObjectUsingComparator:(NSComparisonResult (^)(id, id))comparator
+{
+    /* A fold that keeps the first member and only replaces it when the
+       comparator answers an exact NSOrderedAscending.
+
+       The order of the two arguments is not interchangeable and is the reason
+       this is written out rather than delegated: the comparator is asked
+       (candidate, incumbent), not (incumbent, candidate). With
+       -[a compare:b] that is what makes the minimum correct -- "b" against a
+       held "a" answers 1, so "a" stays -- and the probe's call log shows exactly
+       that pairing, (b,a) then (c,a). Only an exact -1 replaces, so the
+       out-of-contract -2 leaves the incumbent alone rather than comparing as
+       "less"; an answer of NSOrderedSame is a tie and keeps the incumbent,
+       which makes first-in-enumeration-order win.
+
+       An empty receiver answers nil without ever reaching the comparator. */
+    id incumbent = nil;
+    for (id candidate in self) {
+        if (incumbent == nil) {
+            incumbent = candidate;
+            continue;
+        }
+        if (comparator(candidate, incumbent) == NSOrderedAscending) {
+            incumbent = candidate;
+        }
+    }
+    return incumbent;
+}
+
+- (id)dvt_maximumObjectUsingComparator:(NSComparisonResult (^)(id, id))comparator
+{
+    /* Not a second fold: this is the minimum method asked with the comparator's
+       answer negated, which is why the two share their tie-break and their
+       first-wins rule. Apple wraps the caller's block in a stack block that
+       calls it and negates the result, then sends that to
+       dvt_minimumObjectUsingComparator: -- visible in the binary as a single
+       tail call after the block literal is built. */
+    return [self dvt_minimumObjectUsingComparator:^NSComparisonResult(id a, id b) {
+        return (NSComparisonResult)-(NSInteger)comparator(a, b);
+    }];
+}
+
+- (id)dvt_objectByFoldingWithBlock:(id (^)(id, id))block
+{
+    /* Unlike the minimum fold this one asks (accumulator, next) -- the opposite
+       order -- and it does not test the answer for nil before using it.
+
+       That last point is the observable one. A nil answer does not stop the
+       fold: the next member finds a nil accumulator and simply becomes the new
+       accumulator without the block being called, so a fold that returns nil for
+       every member answers the *last* member rather than nil. The call log shows
+       it -- a three-member all-nil fold consults the block once rather than twice,
+       and a five-member one consults it twice, one call saved per re-seed. An
+       empty receiver still answers nil, and a one-member receiver answers that
+       member with the block never called at all.
+
+       A nil block faults here as it does in the predicate families, since Apple
+       loads the invoke pointer unchecked. */
+    id accumulator = nil;
+    for (id member in self) {
+        if (accumulator == nil) {
+            accumulator = member;
+            continue;
+        }
+        accumulator = block(accumulator, member);
+    }
+    return accumulator;
+}
+
+- (NSArray *)dvt_shuffledArray
+{
+    /* A forward rather than a second shuffle: Apple's body is -allObjects
+       followed by dvt_shuffledArray on the result. The array method is the one
+       that branches on -count, so this inherits its threshold -- above one
+       member the answer is a mutable array, and at one or below it is the copy
+       of an already immutable array, hence __NSArrayI_Transfer. Each -allObjects
+       call answers its own array even when the receiver is empty, so the empty
+       answer is a copy of a fresh empty array rather than one shared instance. */
+    return [[self allObjects] dvt_shuffledArray];
+}
+
+- (NSDictionary *)dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:(id (^)(id))block
+{
+    /* The names of these two are the other way round from where the answer
+       lands. Here the member becomes the *key* and the block's answer becomes
+       the value: a member "a" with the block uppercasing answers a->A. Apple
+       sends -setObject:forKeyedSubscript: with the block's answer in the value
+       slot and the member in the key slot, which is what the disassembly shows
+       and the probe confirms.
+
+       A nil answer is skipped rather than stored, so nothing reaches the
+       subscript setter with a nil in either slot. Collisions are not a special
+       case: the members stay distinct as keys, so a constant answer produces
+       one entry per member, and the answer is immutable either way because the
+       mutable dictionary built here is copied before it is returned. */
+    NSMutableDictionary *result = [[NSMutableDictionary alloc] initWithCapacity:self.count];
+    for (id member in self) {
+        id answer = block(member);
+        if (answer != nil) {
+            result[member] = answer;
+        }
+    }
+    return [result copy];
+}
+
+- (NSDictionary *)dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:(id (^)(id))block
+{
+    /* The mirror image of the method above: the block's answer becomes the key
+       and the member becomes the value, so the same uppercasing block answers
+       A->a. Collisions now do collapse -- a constant answer leaves one entry
+       whose value is the last member enumerated, since each write replaces the
+       previous one.
+
+       Apple's capacity hint is the receiver's count here as well, which is why
+       an empty receiver answers the shared empty dictionary. */
+    NSMutableDictionary *result = [[NSMutableDictionary alloc] initWithCapacity:self.count];
+    for (id member in self) {
+        id answer = block(member);
+        if (answer != nil) {
+            result[answer] = member;
+        }
+    }
+    return [result copy];
+}
+
 - (id)dvt_onlyObject
 {
     /* An empty or multi-member set answers nil, so -anyObject is only reached

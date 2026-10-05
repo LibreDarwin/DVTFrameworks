@@ -718,6 +718,82 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (NSSet *)dvt_setByApplyingSelector:(SEL _Nullable)selector;
 
+/**
+  The member the `comparator` ranks lowest, or `nil` for an empty receiver.
+
+  The comparator is asked `(candidate, incumbent)` — the member being considered
+  first, the member held so far second — and only an exact `NSOrderedAscending`
+  replaces the incumbent. A `NSOrderedSame` answer is a tie and keeps the
+  incumbent, so among equally-ranked members the first one enumerated wins. A
+  result outside `NSOrderedAscending`/`Same`/`Descending` does not compare as
+  "less", so an out-of-contract `-2` leaves the incumbent in place.
+
+  A `nil` `comparator` faults, as Apple loads the block's invoke pointer without
+  checking it.
+ */
+- (id _Nullable)dvt_minimumObjectUsingComparator:(NSComparisonResult (^_Nullable)(id _Nullable, id _Nullable))comparator;
+
+/**
+  The member the `comparator` ranks highest, or `nil` for an empty receiver.
+
+  This is `dvt_minimumObjectUsingComparator:` asked with the comparator's answer
+  negated, so the tie-break is shared: an equal-ranked member keeps the incumbent
+  and the first one enumerated wins.
+ */
+- (id _Nullable)dvt_maximumObjectUsingComparator:(NSComparisonResult (^_Nullable)(id _Nullable, id _Nullable))comparator;
+
+/**
+  The members folded into one object, or `nil` for an empty receiver.
+
+  The block is asked `(accumulator, next)` — the opposite order from
+  `dvt_minimumObjectUsingComparator:` — starting from the first member, which is
+  returned untouched without the block being called. The answer is not checked for
+  `nil`: a `nil` answer leaves the accumulator empty, and the following member then
+  becomes the accumulator directly, so a block that always answers `nil` yields the
+  *last* member rather than `nil`.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (id _Nullable)dvt_objectByFoldingWithBlock:(id _Nullable (^_Nullable)(id _Nullable, id _Nullable))block;
+
+/**
+  The members as an array, shuffled.
+
+  A forward to `dvt_shuffledArray` on `-allObjects`, so the answer follows the
+  array method's branch on `count`: above one member it is a mutable array, and at
+  one member or below it is a copy of an already immutable array — the same object
+  for an empty receiver.
+ */
+- (NSArray *)dvt_shuffledArray;
+
+/**
+  A dictionary keyed by each member, valued by the block's answer for it.
+
+  Despite the name, the block's answer is the *value* and the member is the key, so
+  a member `"a"` with an uppercasing block answers `a->A`. A `nil` answer is skipped
+  rather than stored. The members stay distinct as keys, so a constant answer
+  produces one entry per member. The answer is immutable.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (NSDictionary *)dvt_dictionaryWithEntriesAsKeysAndValuesFromBlock:(id _Nullable (^_Nullable)(id))block;
+
+/**
+  A dictionary keyed by the block's answer for each member, valued by the member.
+
+  The mirror image of the method above: the block's answer is the *key* and the
+  member is the value, so the same uppercasing block answers `A->a`. Because the
+  answers are the keys here, a block answering one constant leaves a single entry
+  whose value is the last member enumerated. A `nil` answer is skipped rather than
+  stored, and the answer is immutable.
+
+  A `nil` block faults, as Apple loads the block's invoke pointer without checking
+  it.
+ */
+- (NSDictionary *)dvt_dictionaryWithEntriesAsValuesAndKeysFromBlock:(id _Nullable (^_Nullable)(id))block;
+
 @end
 
 @interface NSMutableSet (DVTFoundationClassAdditions)
