@@ -225,7 +225,7 @@ sorting by a derived key, both in place on a mutable array and as a copy on an
 array or a set, stable partitioning, shuffling, unique-string lookup,
 contiguous-run search, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 106 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 112 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -244,6 +244,42 @@ this family across four category names (`DVTFoundationClassAdditions`,
 `DVTNSSetAdditions`, `DVTNSOrderedSetAdditions`, `DVTNSMapTableAdditions`) and
 so does this project, because the names are readable in the category metadata and
 a class dump of the two binaries lines up only if they match.
+
+The mapping and filtering family is the one place where `NSSet` and `NSArray`
+share six selector names and still owe different answers, so both are installed
+here and the differences are reproduced rather than flattened into a single
+helper. `dvt_arrayByApplyingBlock:`, `dvt_setByApplyingBlock:` and their
+`Strictly` variants compact-map the receiver; `dvt_setByFilteringUsingBlock:` and
+`dvt_objectsPassingTest:` filter it. Three behaviours are load-bearing. A loose
+mapping **drops** a `nil` answer and asks about every member, while the
+`Strictly` variants answer the whole result `nil` at the first `nil` and stop
+there — one block call, not one per member, confirmed by counting calls. Every
+mapping and filtering answer is **immutable**, including the ones that came from
+a mutable receiver. And a filter that rejects nobody returns `[self copy]`, so an
+immutable receiver comes back as itself by identity while a mutable one comes
+back as an immutable snapshot; that identity is shared by `NSSet`'s
+`dvt_setByFilteringUsingBlock:` and `dvt_objectsPassingTest:`, but *not* by
+`NSArray`'s, which has to build a set either way and so always allocates.
+`dvt_objectsPassingTest:` also answers the collection it was sent to: a set on
+`NSSet`, an array on `NSArray`. The mapping order is the receiver's enumeration
+order, and repeated answers collapse in the set forms — a three-member set whose
+block answers the same object every time yields a one-member set with no `nil`
+anywhere, which is a different thing from filtering.
+
+One difference is recorded rather than closed: when a mapped set comes back with
+exactly one unique member, Apple answers `__NSSetI` and this framework answers
+`__NSSingleObjectSetI`. Both are immutable one-member sets that compare equal,
+and the probes report the collection kind separately from the class name so the
+difference stays visible instead of being hidden behind an equality check.
+Matching the name would mean guessing which of Foundation's internal set
+initialisers Apple happens to land on for a given input, and the name is not
+observable through any public API.
+
+**One deliberate deviation.** A `nil` block faults in all six: Apple loads the
+block's invoke pointer without a check in each one, confirmed by running all six
+isolated probes, each exiting `139`. This framework returns an immutable copy of
+the receiver instead. As with the predicate families above, the guard can only
+differ where the original crashes.
 
 `NSString` also carries the letter-casing family, where the interesting work is
 `dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
@@ -1042,7 +1078,7 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 56,937 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 56,981 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
   additions, the string casing, word splitting and identifier mangling, the property list value
@@ -1059,7 +1095,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **56,937 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **56,981 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1076,13 +1112,13 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 170 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 546 will not find
-it here. Two of the 170 are additions rather than reproductions:
+This project implements 176 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 540 will not find
+it here. Two of the 176 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, where Apple's same-named methods take a
 comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 168 are reproduced against the
+rather than a match for those variants. The other 174 are reproduced against the
 binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what

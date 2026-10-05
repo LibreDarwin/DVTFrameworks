@@ -256,7 +256,14 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
             [result addObject:object];
         }
     }
-    return result;
+    /* Nothing was filtered out, so the answer is the receiver rather than a
+       rebuilt one. -copy keeps that shortcut for an immutable receiver while
+       still handing a mutable receiver an immutable snapshot, which is the
+       distinction a caller can observe. */
+    if (result.count == self.count) {
+        return [self copy];
+    }
+    return [result copy];
 }
 
 - (id)dvt_firstObjectPassingTest:(BOOL (^)(id object))test
@@ -442,7 +449,11 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
 
 - (NSArray *)dvt_arrayByApplyingBlock:(id (^)(id object))block
 {
-    return [self dvt_compactMap:block];
+    /* -dvt_compactMap: is the loose body with the same dropped nils, but it hands
+       back the mutable array it built. Apple answers an immutable one, and the
+       class ladder an empty, one-member and three-member answer lands on is that
+       of a copy rather than of the build. */
+    return [[self dvt_compactMap:block] copy];
 }
 
 - (NSArray *)dvt_arrayByApplyingBlockStrictly:(id (^)(id object))block
@@ -454,9 +465,16 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     NSEnumerator *enumerator = [self objectEnumerator];
     id object = nil;
     while ((object = [enumerator nextObject]) != nil) {
-        [result addObject:block(object) ?: (id)[NSNull null]];
+        id mapped = block(object);
+        /* Strictly means a nil answer sinks the whole result. Apple stops at the
+           first nil -- the block runs once, not once per member -- so this
+           returns immediately rather than finishing the scan. */
+        if (mapped == nil) {
+            return nil;
+        }
+        [result addObject:mapped];
     }
-    return result;
+    return [result copy];
 }
 
 - (NSArray *)dvt_arrayByApplyingBlockWithIndex:(id (^)(id object, NSUInteger index))block
@@ -494,7 +512,7 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
             [result addObject:mapped];
         }
     }
-    return result;
+    return [result copy];
 }
 
 - (NSSet *)dvt_setByApplyingBlockStrictly:(id (^)(id object))block
@@ -506,9 +524,15 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     NSEnumerator *enumerator = [self objectEnumerator];
     id object = nil;
     while ((object = [enumerator nextObject]) != nil) {
-        [result addObject:block(object) ?: (id)[NSNull null]];
+        id mapped = block(object);
+        /* Strictly means a nil answer sinks the whole result; Apple stops at the
+           first nil rather than finishing the scan. */
+        if (mapped == nil) {
+            return nil;
+        }
+        [result addObject:mapped];
     }
-    return result;
+    return [result copy];
 }
 
 - (NSSet *)dvt_setByFilteringUsingBlock:(BOOL (^)(id object))block
@@ -1413,6 +1437,61 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 }
 
 #pragma mark - Single members and counts
+
+#pragma mark - Mapping and filtering
+
+/* The mapping bodies on NSSet are the NSArray bodies instruction for
+   instruction, so each one is reached by handing the members over as the array
+   the same body was written for. That keeps one copy of each answer's shape --
+   the Strictly nil behaviour, the dropped nils, the -copy that makes the result
+   immutable -- and leaves only -objectsPassingTest: needing its own copy,
+   because it answers with a set rather than with an array. */
+
+- (NSArray *)dvt_arrayByApplyingBlock:(id (^)(id object))block
+{
+    return [[self allObjects] dvt_arrayByApplyingBlock:block];
+}
+
+- (NSArray *)dvt_arrayByApplyingBlockStrictly:(id (^)(id object))block
+{
+    return [[self allObjects] dvt_arrayByApplyingBlockStrictly:block];
+}
+
+- (NSSet *)dvt_setByApplyingBlock:(id (^)(id object))block
+{
+    return [[self allObjects] dvt_setByApplyingBlock:block];
+}
+
+- (NSSet *)dvt_setByApplyingBlockStrictly:(id (^)(id object))block
+{
+    return [[self allObjects] dvt_setByApplyingBlockStrictly:block];
+}
+
+- (NSSet *)dvt_setByFilteringUsingBlock:(BOOL (^)(id object))block
+{
+    /* Asked of a set this answers with the receiver when nothing is filtered
+       out, which the array form does not: it has to build a set either way. */
+    return [self dvt_objectsPassingTest:block];
+}
+
+- (NSSet *)dvt_objectsPassingTest:(BOOL (^)(id object))test
+{
+    if (test == nil) {
+        return [self copy];
+    }
+    NSMutableSet *result = [[NSMutableSet alloc] initWithCapacity:self.count];
+    for (id object in self) {
+        if (test(object)) {
+            [result addObject:object];
+        }
+    }
+    /* A set that loses nobody comes back as the receiver, and only because of
+       -copy does that stay true for a mutable receiver too. */
+    if (result.count == self.count) {
+        return [self copy];
+    }
+    return [result copy];
+}
 
 - (id)dvt_onlyObject
 {

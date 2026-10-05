@@ -1193,6 +1193,179 @@ static void DVTTestClassAdditions(void)
     }
 
     {
+        /* The mapping answers come back in the set's own order, so the tests sort
+           before comparing. What is checked exactly is the contract: the members
+           that survive, whether the answer is immutable, and how many times the
+           block ran. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSArray *mapped = [three dvt_arrayByApplyingBlock:^id(id o) {
+            return [o uppercaseString];
+        }];
+        DVTExpectEqualObjects([NSSet setWithArray:[mapped sortedArrayUsingSelector:@selector(compare:)]],
+                              [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"set arrayByApplyingBlock: maps every member");
+        DVTExpect(![mapped respondsToSelector:@selector(addObject:)],
+                  @"set arrayByApplyingBlock: answers an immutable array");
+
+        /* The loose form drops a nil answer and keeps going. */
+        NSArray *withGap = [three dvt_arrayByApplyingBlock:^id(id o) {
+            return [o isEqualToString:@"b"] ? nil : o;
+        }];
+        DVTExpectEqualObjects([NSSet setWithArray:[withGap sortedArrayUsingSelector:@selector(compare:)]],
+                              [NSSet setWithObjects:@"a", @"c", nil],
+                              @"set arrayByApplyingBlock: drops the members whose block answers nil");
+        NSArray *noneAtAll = [three dvt_arrayByApplyingBlock:^id(id o) { return nil; }];
+        DVTExpectEqualObjects(noneAtAll, @[], @"set arrayByApplyingBlock: is empty when every answer is nil");
+        __block int looseCalls = 0;
+        [three dvt_arrayByApplyingBlock:^id(id o) { looseCalls++; return nil; }];
+        DVTExpect(looseCalls == 3, @"set arrayByApplyingBlock: asks about every member even so");
+
+        /* Strictly sinks the whole answer at the first nil rather than dropping
+           it, and it stops there -- one call, not one per member. */
+        __block int strictCalls = 0;
+        id strictNil = [three dvt_arrayByApplyingBlockStrictly:^id(id o) {
+            strictCalls++;
+            return nil;
+        }];
+        DVTExpect(strictNil == nil, @"set arrayByApplyingBlockStrictly: answers nil for a nil answer");
+        DVTExpect(strictCalls == 1, @"set arrayByApplyingBlockStrictly: stops at the first nil");
+        NSArray *strictKept = [three dvt_arrayByApplyingBlockStrictly:^id(id o) { return [o uppercaseString]; }];
+        DVTExpect(![strictKept respondsToSelector:@selector(addObject:)],
+                  @"set arrayByApplyingBlockStrictly: answers an immutable array");
+        DVTExpectEqualObjects([NSSet setWithArray:[strictKept sortedArrayUsingSelector:@selector(compare:)]],
+                              [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"set arrayByApplyingBlockStrictly: maps when no answer is nil");
+    }
+
+    {
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+
+        NSSet *asSet = [three dvt_setByApplyingBlock:^id(id o) { return [o uppercaseString]; }];
+        DVTExpectEqualObjects(asSet, [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"set setByApplyingBlock: maps every member into a set");
+        DVTExpect(![asSet respondsToSelector:@selector(addObject:)],
+                  @"set setByApplyingBlock: answers an immutable set");
+        /* Repeated answers collapse, so the result can be smaller than the
+           receiver without a single answer having been nil. */
+        NSSet *collapsed = [three dvt_setByApplyingBlock:^id(id o) { return @"same"; }];
+        DVTExpectEqualObjects(collapsed, [NSSet setWithObject:@"same"],
+                              @"set setByApplyingBlock: collapses repeated answers");
+        DVTExpectEqualObjects([three dvt_setByApplyingBlock:^id(id o) { return nil; }], [NSSet set],
+                              @"set setByApplyingBlock: is empty when every answer is nil");
+
+        __block int strictSetCalls = 0;
+        id strictSetNil = [three dvt_setByApplyingBlockStrictly:^id(id o) {
+            strictSetCalls++;
+            return nil;
+        }];
+        DVTExpect(strictSetNil == nil, @"set setByApplyingBlockStrictly: answers nil for a nil answer");
+        DVTExpect(strictSetCalls == 1, @"set setByApplyingBlockStrictly: stops at the first nil");
+        NSSet *strictSetKept = [three dvt_setByApplyingBlockStrictly:^id(id o) { return [o uppercaseString]; }];
+        DVTExpectEqualObjects(strictSetKept, [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"set setByApplyingBlockStrictly: maps when no answer is nil");
+        DVTExpect(![strictSetKept respondsToSelector:@selector(addObject:)],
+                  @"set setByApplyingBlockStrictly: answers an immutable set");
+    }
+
+    {
+        /* Filtering a set answers with a set, and a set that lost nobody comes
+           back as the receiver itself. That identity is the one behaviour the
+           array form does not share, because it has to build a set either way. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSSet *twoKept = [three dvt_setByFilteringUsingBlock:^BOOL(id o) {
+            return [o isEqualToString:@"a"] || [o isEqualToString:@"b"];
+        }];
+        DVTExpectEqualObjects(twoKept, [NSSet setWithObjects:@"a", @"b", nil],
+                              @"set setByFilteringUsingBlock: keeps the members that pass");
+        DVTExpect([three dvt_setByFilteringUsingBlock:^BOOL(id o) { return YES; }] == three,
+                  @"set setByFilteringUsingBlock: answers the receiver when nothing is filtered out");
+        DVTExpectEqualObjects([three dvt_setByFilteringUsingBlock:^BOOL(id o) { return NO; }], [NSSet set],
+                              @"set setByFilteringUsingBlock: is empty when nothing passes");
+        DVTExpectEqualObjects([[NSSet set] dvt_setByFilteringUsingBlock:^BOOL(id o) { return YES; }], [NSSet set],
+                              @"set setByFilteringUsingBlock: is empty for an empty set");
+        DVTExpect(![twoKept respondsToSelector:@selector(addObject:)],
+                  @"set setByFilteringUsingBlock: answers an immutable set");
+
+        NSSet *mutableThree = [NSMutableSet setWithObjects:@"a", @"b", @"c", nil];
+        NSSet *fromMutable = [mutableThree dvt_setByFilteringUsingBlock:^BOOL(id o) { return YES; }];
+        DVTExpect(fromMutable != mutableThree,
+                  @"set setByFilteringUsingBlock: does not hand back a mutable set");
+        DVTExpect(![fromMutable respondsToSelector:@selector(addObject:)],
+                  @"set setByFilteringUsingBlock: answers an immutable set for a mutable receiver");
+
+        /* The same selector on an array answers an array. */
+        NSArray *array = @[@"a", @"b", @"c"];
+        id fromArray = [array dvt_objectsPassingTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }];
+        DVTExpect([fromArray isKindOfClass:[NSArray class]],
+                  @"array objectsPassingTest: answers an array where the set form answers a set");
+        DVTExpect(![fromArray isKindOfClass:[NSSet class]],
+                  @"array objectsPassingTest: does not answer a set");
+    }
+
+    {
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        DVTExpectEqualObjects([three dvt_objectsPassingTest:^BOOL(id o) {
+                       return [o isEqualToString:@"a"] || [o isEqualToString:@"b"];
+                   }],
+                              [NSSet setWithObjects:@"a", @"b", nil],
+                              @"set objectsPassingTest: keeps the members that pass");
+        DVTExpect([three dvt_objectsPassingTest:^BOOL(id o) { return YES; }] == three,
+                  @"set objectsPassingTest: answers the receiver when every member passes");
+        DVTExpect([three dvt_objectsPassingTest:^BOOL(id o) { return NO; }] != three,
+                  @"set objectsPassingTest: answers a new set when a member fails");
+        DVTExpectEqualObjects([three dvt_objectsPassingTest:^BOOL(id o) { return NO; }], [NSSet set],
+                              @"set objectsPassingTest: is empty when nothing passes");
+        NSSet *kept = [three dvt_objectsPassingTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }];
+        DVTExpect(![kept respondsToSelector:@selector(addObject:)],
+                  @"set objectsPassingTest: answers an immutable set");
+        __block int passCalls = 0;
+        [three dvt_objectsPassingTest:^BOOL(id o) { passCalls++; return NO; }];
+        DVTExpect(passCalls == 3, @"set objectsPassingTest: asks about every member");
+    }
+
+    {
+        /* Regression cover for the shared array forms. Each of these used to
+           answer the mutable collection it had just built, and the two Strictly
+           forms used to put an NSNull where a nil answer came back. */
+        NSArray *three = @[@"a", @"b", @"c"];
+
+        NSArray *arrayMapped = [three dvt_arrayByApplyingBlock:^id(id o) { return [o uppercaseString]; }];
+        DVTExpect(![arrayMapped respondsToSelector:@selector(addObject:)],
+                  @"array arrayByApplyingBlock: answers an immutable array");
+        DVTExpectEqualObjects(arrayMapped, @[@"A", @"B", @"C"],
+                              @"array arrayByApplyingBlock: maps every member");
+
+        DVTExpect([three dvt_arrayByApplyingBlockStrictly:^id(id o) { return nil; }] == nil,
+                  @"array arrayByApplyingBlockStrictly: answers nil rather than inserting NSNull");
+        __block int arrayStrictCalls = 0;
+        [three dvt_arrayByApplyingBlockStrictly:^id(id o) { arrayStrictCalls++; return nil; }];
+        DVTExpect(arrayStrictCalls == 1, @"array arrayByApplyingBlockStrictly: stops at the first nil");
+        /* The NSNull that used to be inserted has no -compare:, so sorting the
+           answer is what made the old behaviour observable as a crash. */
+        NSArray *strictAnswer = [three dvt_arrayByApplyingBlockStrictly:^id(id o) { return [o uppercaseString]; }];
+        DVTExpectEqualObjects([strictAnswer sortedArrayUsingSelector:@selector(compare:)],
+                              @[@"A", @"B", @"C"], @"array arrayByApplyingBlockStrictly: maps when no answer is nil");
+
+        NSSet *arrayMappedSet = [three dvt_setByApplyingBlock:^id(id o) { return [o uppercaseString]; }];
+        DVTExpect(![arrayMappedSet respondsToSelector:@selector(addObject:)],
+                  @"array setByApplyingBlock: answers an immutable set");
+        DVTExpectEqualObjects(arrayMappedSet, [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"array setByApplyingBlock: maps into a set");
+        DVTExpect([three dvt_setByApplyingBlockStrictly:^id(id o) { return nil; }] == nil,
+                  @"array setByApplyingBlockStrictly: answers nil rather than inserting NSNull");
+        __block int setStrictCalls = 0;
+        [three dvt_setByApplyingBlockStrictly:^id(id o) { setStrictCalls++; return nil; }];
+        DVTExpect(setStrictCalls == 1, @"array setByApplyingBlockStrictly: stops at the first nil");
+
+        DVTExpect([three dvt_objectsPassingTest:^BOOL(id o) { return YES; }] == three,
+                  @"array objectsPassingTest: answers the receiver when every member passes");
+        NSArray *filtered = [three dvt_objectsPassingTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }];
+        DVTExpectEqualObjects(filtered, @[@"a"], @"array objectsPassingTest: keeps the members that pass");
+        DVTExpect(![filtered respondsToSelector:@selector(addObject:)],
+                  @"array objectsPassingTest: answers an immutable array");
+    }
+
+    {
         /* The count selector is shared with NSArray, so the two are asked the same
            questions, including the ones only a cast block can reach. */
         NSArray *array = @[@"a", @"b", @"c"];

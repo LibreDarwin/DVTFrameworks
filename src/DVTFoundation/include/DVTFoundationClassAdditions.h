@@ -62,7 +62,17 @@ NS_ASSUME_NONNULL_BEGIN
 /** Elements of `klass`, in order. */
 - (NSArray *)dvt_objectsOfClass:(Class)klass;
 
-/** Elements satisfying `test`, evaluated in order and synchronously. */
+/**
+ Elements satisfying `test`, evaluated in order and synchronously.
+
+ When every element passes, the receiver itself comes back rather than a rebuilt
+ copy. That identity holds for a mutable receiver as well, because `-copy` of a
+ mutable array is a different immutable object; the answer is immutable either
+ way. A `test` that rejects any element answers a fresh array instead.
+
+ On `NSSet` the same method answers a set, so the set/array split is the
+ receiver's collection rather than the selector's name.
+ */
 - (NSArray *)dvt_objectsPassingTest:(BOOL (^)(id object))test;
 
 /** The first element satisfying `test`, or `nil`. */
@@ -183,22 +193,36 @@ NS_ASSUME_NONNULL_BEGIN
  `isEqual:`. An empty prefix always matches. */
 - (BOOL)dvt_hasPrefix:(NSArray *)prefix;
 
-/** Elements mapped through `block`; `nil` results are dropped. */
+/** Elements mapped through `block`; `nil` results are dropped. The answer is immutable. */
 - (NSArray *)dvt_arrayByApplyingBlock:(id _Nullable (^)(id object))block;
 /**
- Like `dvt_arrayByApplyingBlock:`, but a `nil` result becomes `NSNull` so every
- input still occupies a slot and the result keeps the receiver's length.
+ Like `dvt_arrayByApplyingBlock:`, except a single `nil` result sinks the answer.
+
+ The whole result becomes `nil` at the first `nil`, and it does so there rather
+ than at the end -- `block` is asked about one element and no more. There is no
+ `NSNull` placeholder, so the result does not keep the receiver's length.
  */
-- (NSArray *)dvt_arrayByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
+- (NSArray *_Nullable)dvt_arrayByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
 /** Like `dvt_arrayByApplyingBlock:`, with the element index as a second argument. */
 - (NSArray *)dvt_arrayByApplyingBlockWithIndex:(id _Nullable (^)(id object, NSUInteger index))block;
 /** Elements satisfying `block`, re-wrapped into an array. */
 - (NSArray *)dvt_arrayByFilteringUsingBlock:(BOOL (^)(id object))block;
-/** Like `dvt_arrayByApplyingBlock:`, returning a set. */
+/**
+ Like `dvt_arrayByApplyingBlock:`, returning a set.
+
+ Answers that repeat collapse, so the result can be smaller than the receiver even
+ when no answer was `nil`.
+ */
 - (NSSet *)dvt_setByApplyingBlock:(id _Nullable (^)(id object))block;
 /** Like `dvt_arrayByApplyingBlockStrictly:`, returning a set. */
-- (NSSet *)dvt_setByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
-/** Elements satisfying `block`, re-wrapped into a set. */
+- (NSSet *_Nullable)dvt_setByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
+/**
+ Elements satisfying `block`, re-wrapped into a set.
+
+ Always a fresh set, even when nothing is filtered out, because the result has to
+ be a set regardless. `NSSet`'s form of this selector does return the receiver in
+ that case.
+ */
 - (NSSet *)dvt_setByFilteringUsingBlock:(BOOL (^)(id object))block;
 
 /** The object with the highest `compare:` result, or `nil` when empty. */
@@ -592,6 +616,63 @@ NS_ASSUME_NONNULL_BEGIN
  one's parameter is, cannot do that.
  */
 - (NSInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
+
+#pragma mark - Mapping and filtering
+
+/**
+  The members, in the set's own order, each run through `block`, minus the `nil`
+  answers.
+
+  A block that answers `nil` for a member leaves that member out rather than
+  sinking the whole result, which is what the two `Strictly` forms do instead.
+ */
+- (NSArray *)dvt_arrayByApplyingBlock:(id _Nullable (^)(id object))block;
+
+/**
+  As `dvt_arrayByApplyingBlock:`, except a single `nil` answer sinks the result.
+
+  The whole answer becomes `nil`, and it does so at the first `nil` -- `block` is
+  asked about one member and no more, so a set of three members whose block
+  answers `nil` first time still sees one call. There is no `NSNull` placeholder
+  in the array.
+ */
+- (NSArray *_Nullable)dvt_arrayByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
+
+/**
+  The members, each run through `block`, gathered into a set with the `nil` answers
+  dropped.
+
+  Answers that repeat collapse, so the result can be smaller than the receiver
+  even when no answer is `nil`.
+ */
+- (NSSet *)dvt_setByApplyingBlock:(id _Nullable (^)(id object))block;
+
+/**
+  As `dvt_setByApplyingBlock:`, except a single `nil` answer sinks the result.
+
+  The whole answer becomes `nil` at the first `nil`, exactly as
+  `dvt_arrayByApplyingBlockStrictly:` does, so `block` is not asked about the
+  remaining members.
+ */
+- (NSSet *_Nullable)dvt_setByApplyingBlockStrictly:(id _Nullable (^)(id object))block;
+
+/**
+  The members satisfying `block`, as a set. Answering `nil` yields an empty set.
+ */
+- (NSSet *)dvt_setByFilteringUsingBlock:(BOOL (^)(id object))block;
+
+/**
+  The members satisfying `test`, as a set.
+
+  When every member passes, the receiver itself comes back rather than a rebuilt
+  copy. That identity holds for a mutable receiver as well, because `-copy` of a
+  mutable set is a different immutable object; the answer is immutable either
+  way. A test that rejects any member answers a fresh set instead.
+
+  On `NSArray` the same method answers an array, so the set/array split is the
+  receiver's collection rather than the selector's name.
+ */
+- (NSSet *)dvt_objectsPassingTest:(BOOL (^)(id object))test;
 
 @end
 
