@@ -490,6 +490,61 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSArray *)dvt_objectsSortedByValueBlock:(id (^)(id object))valueBlock
                          duplicateHandler:(NSComparisonResult (^ _Nullable)(id first, id second))duplicateHandler;
 
+#pragma mark - Construction
+
+/**
+ A mutable copy of `objects`, built one member at a time.
+
+ The answer is always mutable even when the source is not, and always a fresh
+ object even when the source is empty, so it is safe to hand back for building
+ into. A `nil` source enumerates nothing and answers an empty mutable array.
+ */
++ (NSArray *)dvt_arrayWithEnumeratedObjects:(NSArray * _Nullable)objects;
+
+/**
+ A one-member array holding `object`, or `nil` when `object` is `nil`.
+
+ The `nil` case answers `nil` rather than an empty array, so this is the array
+ form of an `if (object)` guard. A `nil`-but-present member such as `NSNull` is
+ not `nil` and is kept, which is what separates this from filtering.
+ */
++ (NSArray *)dvt_arrayWithObjectIfNonNil:(id _Nullable)object;
+
+/**
+ An immutable array holding the same `object` `count` times.
+
+ Zero repetitions answers an empty array. A `nil` `object` is only tolerated at
+ zero; with a count of one or more the array cannot hold it and the call fails
+ the way any `NSArray` that is handed a `nil` member does.
+
+ The members are staged in a buffer before the array is built, so a `count` at
+ or below a few hundred costs no allocation beyond the answer itself.
+ */
++ (NSArray *)dvt_arrayWithRepetitions:(NSUInteger)count ofObject:(id)object;
+
+/**
+ How many leading members `array` and `otherArray` agree on.
+
+ The shorter of the two is the ceiling, so equal answers the whole receiver and
+ a prefix answers the prefix. Comparison stops at the first disagreement and the
+ index reached is returned; a `nil` array has no members to agree on and answers
+ zero.
+ */
++ (NSUInteger)dvt_lengthOfCommonPrefixBetween:(NSArray * _Nullable)array and:(NSArray * _Nullable)otherArray;
+
+@end
+
+@interface NSArray (DVTRangeArrayAdditions)
+
+/**
+ The `NSRange` carried by the member at `index`.
+
+ This reads the member rather than treating it as a range, so the element itself
+ has to answer `rangeValue`, and an index past the end fails the way any indexed
+ access does. It is the inverse of taking `rangeValue` off an `NSValue`.
+ */
+- (NSRange)rangeAtIndex:(NSUInteger)index;
+
 @end
 
 @interface NSMutableArray (DVTFoundationClassAdditions)

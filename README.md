@@ -1235,15 +1235,19 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 199 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 517 will not find
-it here. Two of the 199 are additions rather than reproductions:
+This project implements 203 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 513 will not find
+it here. Two of the 203 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, while Apple's same-named selectors take a
 comparison block. Those block forms, `dvt_minimumObject:` and
 `dvt_maximumObject:`, are reproduced here too, so the local no-argument pair is a
 convenience this port adds alongside the versions it matches rather than a
-substitute for them. The other 197 are reproduced against the binary.
+substitute for them. The other 201 are reproduced against the binary.
+
+One reproduced method falls outside the count because it is not `dvt`-prefixed:
+`-[NSArray rangeAtIndex:]`, from Apple's own `NSArray(DVTRangeArrayAdditions)`
+category, which is kept as a separate category here for the same reason.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -1330,6 +1334,29 @@ Recovered from Apple's binary, or matched against it byte for byte:
   previous replacement produced, so a character that an earlier replacement pushed
   past that length is left unescaped — `@"\\  "` escapes only its first space, and
   `@"\\\t "` escapes the tab but not the space after it
+- the four `NSArray` construction class methods disagree about `nil` in four
+  different ways, which is the whole reason they are worth reading together.
+  `dvt_arrayWithEnumeratedObjects:` answers a mutable array even for a `nil` source
+  (enumeration of `nil` produces nothing, so the answer is an empty *mutable*
+  array, never `nil`, and never the source itself). `dvt_arrayWithObjectIfNonNil:`
+  is the opposite: `nil` in, `nil` out, with `NSNull` kept because it is not
+  `nil`. `dvt_arrayWithRepetitions:ofObject:` tolerates a `nil` object only at a
+  count of zero — the repeats are staged in a buffer first, so a positive count
+  hands the `nil` to `initWithObjects:count:` and raises `NSInvalidArgumentException`
+  rather than dropping it. `dvt_lengthOfCommonPrefixBetween:and:` needs no guard at
+  all, since a `nil` array has a count of zero and so answers a zero-length prefix
+- `dvt_arrayWithRepetitions:ofObject:` is the only method here that allocates by
+  size: the answer is staged in a 256-pointer stack buffer, so a count at or below
+  that costs nothing beyond the array itself and only a larger count calls out.
+  That boundary is invisible in the answer, and is pinned by the tests rather than
+  asserted by the implementation
+- `rangeAtIndex:` lives in Apple's own `NSArray(DVTRangeArrayAdditions)` category
+  and is its only member, so it is kept separate here too. It does not validate
+  anything itself — it is a bare forward to `-[object rangeValue]`, so both faults
+  come from Foundation: `NSRangeException` from `objectAtIndex:` past the end, and
+  `NSInvalidArgumentException` for a member that does not answer `rangeValue`. A
+  `nil` receiver does *not* raise, because `objectAtIndex:` on `nil` answers `nil`
+  and `rangeValue` on `nil` answers a zeroed `NSRange`
 - `DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` take an integer
   selector rather than a suite name, and both are called with the literal `2`.
   Selector `0` asserts without consulting a gate, `1`–`5` map to the gates

@@ -121,6 +121,17 @@ static void DVTExpectEqualRects(CGRect actual, CGRect expected, NSString *what)
     DVTExpect(equal, what);
 }
 
+/** Compares ranges field by field, exactly, for the same reason as rects. */
+static void DVTExpectEqualRanges(NSRange actual, NSRange expected, NSString *what)
+{
+    BOOL equal = actual.location == expected.location && actual.length == expected.length;
+    if (!equal) {
+        printf("       actual:   {%lu,%lu}\n", (unsigned long)actual.location, (unsigned long)actual.length);
+        printf("       expected: {%lu,%lu}\n", (unsigned long)expected.location, (unsigned long)expected.length);
+    }
+    DVTExpect(equal, what);
+}
+
 /** Writes `length` bytes to a file in the temporary directory. */
 static NSString *DVTWriteBytes(const void *bytes, uint32_t length, NSString *name)
 {
@@ -3863,6 +3874,143 @@ static void DVTTestClassAdditions(void)
         DVTExpectEqualObjects([array dvt_uniqueStringToAddToArray:@"k"], @"k",
                               @"dvt_uniqueStringToAddToArray: tolerates non-string members");
     }
+    {
+        /* The enumeration answer is mutable even for an immutable source, so it
+           can be built into, and it is never the source itself. */
+        NSArray *source = [NSMutableArray arrayWithObjects:@"a", @"b", nil];
+        NSArray *enumerated = [NSArray dvt_arrayWithEnumeratedObjects:source];
+        DVTExpectEqualObjects(enumerated, (@[@"a", @"b"]),
+                              @"dvt_arrayWithEnumeratedObjects: copies an immutable source");
+        DVTExpect(enumerated != source, @"dvt_arrayWithEnumeratedObjects: answers a fresh array");
+        DVTExpect([enumerated isKindOfClass:[NSMutableArray class]],
+                  @"dvt_arrayWithEnumeratedObjects: the answer is mutable");
+        [(NSMutableArray *)enumerated addObject:@"c"];
+        DVTExpect(source.count == 2, @"dvt_arrayWithEnumeratedObjects: building into the answer leaves the source alone");
+    }
+    {
+        /* A nil source enumerates nothing, and still answers a mutable array
+           rather than nil -- that is the difference from the objectIfNonNil form. */
+        NSArray *enumeratedNil = [NSArray dvt_arrayWithEnumeratedObjects:nil];
+        DVTExpectEqualObjects(enumeratedNil, @[], @"dvt_arrayWithEnumeratedObjects: a nil source is empty");
+        DVTExpect([enumeratedNil isKindOfClass:[NSMutableArray class]],
+                  @"dvt_arrayWithEnumeratedObjects: a nil source still answers a mutable array");
+        NSArray *enumeratedEmpty = [NSArray dvt_arrayWithEnumeratedObjects:@[]];
+        DVTExpectEqualObjects(enumeratedEmpty, @[],
+                              @"dvt_arrayWithEnumeratedObjects: an empty source is empty");
+        DVTExpect([enumeratedEmpty isKindOfClass:[NSMutableArray class]],
+                  @"dvt_arrayWithEnumeratedObjects: an empty source still answers a mutable array");
+    }
+    {
+        /* This is the array form of an if (object) guard, so nil answers nil
+           rather than an empty array -- the difference from the enumerating
+           form, which always answers an array. A nil-but-present member is
+           still kept. */
+        DVTExpect([NSArray dvt_arrayWithObjectIfNonNil:nil] == nil,
+                  @"dvt_arrayWithObjectIfNonNil: a nil object answers nil");
+        NSArray *single = [NSArray dvt_arrayWithObjectIfNonNil:@"x"];
+        DVTExpectEqualObjects(single, (@[@"x"]), @"dvt_arrayWithObjectIfNonNil: wraps a non-nil object");
+        DVTExpectEqualObjects([NSArray dvt_arrayWithObjectIfNonNil:[NSNull null]], @[[NSNull null]],
+                              @"dvt_arrayWithObjectIfNonNil: NSNull is not nil and is kept");
+        DVTExpect(![single isKindOfClass:[NSMutableArray class]],
+                  @"dvt_arrayWithObjectIfNonNil: the answer is immutable");
+    }
+    {
+        /* Repeats and holes survive: the answer holds the same object count
+           times, not a flattened set. */
+        NSMutableArray *shared = [NSMutableArray arrayWithObject:@"q"];
+        NSArray *repeated = [NSArray dvt_arrayWithRepetitions:3 ofObject:shared];
+        DVTExpect(repeated.count == 3, @"dvt_arrayWithRepetitions:ofObject: honours the count");
+        DVTExpect([repeated[0] isEqual:shared] && repeated[0] == repeated[2],
+                  @"dvt_arrayWithRepetitions:ofObject: repeats the same object, not a copy of it");
+        DVTExpect(![repeated isKindOfClass:[NSMutableArray class]],
+                  @"dvt_arrayWithRepetitions:ofObject: the answer is immutable");
+    }
+    {
+        /* The staged buffer is only a size question, so the answer must not
+           change shape across the stack/allocation boundary. */
+        NSArray *atLimit = [NSArray dvt_arrayWithRepetitions:256 ofObject:@"a"];
+        NSArray *pastLimit = [NSArray dvt_arrayWithRepetitions:257 ofObject:@"a"];
+        DVTExpect(atLimit.count == 256 && pastLimit.count == 257,
+                  @"dvt_arrayWithRepetitions:ofObject: counts past the buffer boundary are exact");
+        DVTExpectEqualObjects(atLimit[255], @"a", @"dvt_arrayWithRepetitions:ofObject: the buffer-boundary last member is set");
+        DVTExpectEqualObjects(pastLimit[256], @"a",
+                              @"dvt_arrayWithRepetitions:ofObject: the first member past the buffer is set");
+        DVTExpectEqualObjects([NSArray dvt_arrayWithRepetitions:0 ofObject:@"a"], @[],
+                              @"dvt_arrayWithRepetitions:ofObject: zero repetitions is empty");
+        DVTExpectEqualObjects([NSArray dvt_arrayWithRepetitions:0 ofObject:nil], @[],
+                              @"dvt_arrayWithRepetitions:ofObject: a nil object is fine at zero");
+    }
+    {
+        /* A nil object at one or more is not dropped -- the array simply cannot
+           hold it, which is a fault rather than a shorter answer. */
+        @try {
+            [NSArray dvt_arrayWithRepetitions:2 ofObject:nil];
+            DVTExpect(NO, @"dvt_arrayWithRepetitions:ofObject: a nil object at a positive count raises");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                      @"dvt_arrayWithRepetitions:ofObject: a nil object at a positive count raises NSInvalidArgumentException");
+        }
+    }
+    {
+        /* Prefix length is bounded by the shorter member in both directions, and
+           stops at the first disagreement rather than counting matches. */
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[@"a", @"b"] and:@[@"a", @"c"]] == 1,
+                  @"dvt_lengthOfCommonPrefixBetween:and: stops at the first disagreement");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[@"a", @"b", @"c"] and:@[@"a", @"b", @"c", @"d"]] == 3,
+                  @"dvt_lengthOfCommonPrefixBetween:and: a shorter first member bounds the answer");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[@"a", @"b", @"c", @"d"] and:@[@"a", @"b", @"c"]] == 3,
+                  @"dvt_lengthOfCommonPrefixBetween:and: a shorter second member bounds the answer");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[] and:@[@"a"]] == 0,
+                  @"dvt_lengthOfCommonPrefixBetween:and: an empty member is a zero-length prefix");
+    }
+    {
+        /* Agreement is by equality, so a distinct but equal object matches,
+           NSNull matches itself, and a cross-type pair does not. */
+        NSMutableArray *twin = [@"a" mutableCopy];
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[twin] and:@[@"a"]] == 1,
+                  @"dvt_lengthOfCommonPrefixBetween:and: an equal but distinct object matches");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[[NSNull null]] and:@[[NSNull null]]] == 1,
+                  @"dvt_lengthOfCommonPrefixBetween:and: NSNull agrees with itself");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[@1] and:@[@"1"]] == 0,
+                  @"dvt_lengthOfCommonPrefixBetween:and: a number and a string do not agree");
+    }
+    {
+        /* A nil member has no members to agree on, so it is a zero-length
+           prefix rather than a fault. */
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:nil and:nil] == 0,
+                  @"dvt_lengthOfCommonPrefixBetween:and: two nils are a zero-length prefix");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:nil and:@[@"a", @"b"]] == 0,
+                  @"dvt_lengthOfCommonPrefixBetween:and: a nil first member is a zero-length prefix");
+        DVTExpect([NSArray dvt_lengthOfCommonPrefixBetween:@[@"a"] and:nil] == 0,
+                  @"dvt_lengthOfCommonPrefixBetween:and: a nil second member is a zero-length prefix");
+    }
+    {
+        NSArray *ranges = @[[NSValue valueWithRange:NSMakeRange(0, 0)],
+                            [NSValue valueWithRange:NSMakeRange(5, 7)],
+                            [NSValue valueWithRange:NSMakeRange(100, 1)]];
+        DVTExpectEqualRanges([ranges rangeAtIndex:0], NSMakeRange(0, 0), @"rangeAtIndex: reads the first member");
+        DVTExpectEqualRanges([ranges rangeAtIndex:1], NSMakeRange(5, 7), @"rangeAtIndex: reads a middle member");
+        DVTExpectEqualRanges([ranges rangeAtIndex:2], NSMakeRange(100, 1), @"rangeAtIndex: reads the last member");
+        DVTExpectEqualRanges([(NSArray *)[ranges mutableCopy] rangeAtIndex:1], NSMakeRange(5, 7),
+                             @"rangeAtIndex: a mutable receiver answers the same");
+        /* Both faults come from the forwarding, not from a check of its own: the
+           indexed access raises out of range, and the send raises for a member
+           that is not a range at all. */
+        @try {
+            [ranges rangeAtIndex:3];
+            DVTExpect(NO, @"rangeAtIndex: past the end raises");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:NSRangeException],
+                      @"rangeAtIndex: past the end raises NSRangeException");
+        }
+        @try {
+            [@[@"not a range"] rangeAtIndex:0];
+            DVTExpect(NO, @"rangeAtIndex: a member that is not a range raises");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                      @"rangeAtIndex: a member that is not a range raises NSInvalidArgumentException");
+        }
+    }
 }
 
 #pragma mark - Property list values
@@ -4573,17 +4721,6 @@ static void DVTTestFilterExpression(void)
        three assert instead, so there is no out of range case to check here. The
        abort is verified out of process in the differential, because an assert
        would take the test runner down with it. */
-}
-
-/** Compares ranges field by field, exactly. */
-static void DVTExpectEqualRanges(NSRange actual, NSRange expected, NSString *what)
-{
-    BOOL equal = actual.location == expected.location && actual.length == expected.length;
-    if (!equal) {
-        printf("       actual:   {%lu,%lu}\n", (unsigned long)actual.location, (unsigned long)actual.length);
-        printf("       expected: {%lu,%lu}\n", (unsigned long)expected.location, (unsigned long)expected.length);
-    }
-    DVTExpect(equal, what);
 }
 
 /** Builds a table for `text`, poisoning the bytes first so a field the

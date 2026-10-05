@@ -153,6 +153,77 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
 
 @implementation NSArray (DVTFoundationClassAdditions)
 
+#pragma mark - Construction
+
+/*
+ The answer is a fresh mutable array rather than a copy or the source itself, so
+ it is always safe to build into, and a nil source still answers a mutable array
+ because enumeration of nil yields nothing rather than failing. Enumeration is
+ the fast-enumeration protocol, so mutating the source while it is being walked
+ faults the way any fast enumeration does.
+ */
++ (NSArray *)dvt_arrayWithEnumeratedObjects:(NSArray *)objects
+{
+    NSMutableArray *result = [NSMutableArray array];
+    for (id object in objects) {
+        [result addObject:object];
+    }
+    return result;
+}
+
++ (NSArray *)dvt_arrayWithObjectIfNonNil:(id)object
+{
+    if (object == nil) {
+        return nil;
+    }
+    return [NSArray arrayWithObject:object];
+}
+
+/*
+ The buffer is what makes a nil member a fault for every count but zero: the
+ repeats are staged first and the array is built from the staged pointers in one
+ pass, so a nil object reaches -initWithObjects:count: instead of being dropped.
+ The stack buffer covers the small counts, and the allocation only pays off past
+ its capacity.
+ */
++ (NSArray *)dvt_arrayWithRepetitions:(NSUInteger)count ofObject:(id)object
+{
+    __unsafe_unretained id stackBuffer[256];
+    __unsafe_unretained id *buffer = stackBuffer;
+    if (count > 256) {
+        buffer = (__unsafe_unretained id *)calloc(count, sizeof(id));
+    }
+    for (NSUInteger index = 0; index < count; index++) {
+        buffer[index] = object;
+    }
+    NSArray *result = [[NSArray alloc] initWithObjects:(const id *)buffer count:count];
+    if (buffer != stackBuffer) {
+        free(buffer);
+    }
+    return result;
+}
+
+/*
+ The shorter array bounds the walk, and the answer is the index reached rather
+ than a separately tracked count -- so equal answers return the whole of the
+ shorter member, and the first disagreement returns the index before it. A nil
+ array answers zero through its own missing count rather than through a guard.
+ */
++ (NSUInteger)dvt_lengthOfCommonPrefixBetween:(NSArray *)array and:(NSArray *)otherArray
+{
+    NSUInteger limit = MIN(array.count, otherArray.count);
+    NSUInteger index = 0;
+    while (index < limit) {
+        id object = [array objectAtIndexedSubscript:index];
+        id otherObject = [otherArray objectAtIndexedSubscript:index];
+        if (object != otherObject && ![object isEqual:otherObject]) {
+            break;
+        }
+        index++;
+    }
+    return index;
+}
+
 #pragma mark - Size and bounds
 
 - (BOOL)dvt_hasContent
@@ -1237,6 +1308,21 @@ static id DVTMissingKeyPathSentinel(void)
     NSMutableArray *mutableCopy = [self mutableCopy];
     [mutableCopy dvt_sortByValueBlock:valueBlock duplicateHandler:duplicateHandler];
     return [mutableCopy copy];
+}
+
+@end
+
+/*
+ -rangeAtIndex: is the only member of its category on Apple, and it is a bare
+ forwarding to -rangeValue. Both faults come from that forwarding rather than from
+ any check of its own: the indexed access raises for an out-of-range index, and
+ the send raises for a member that does not answer -rangeValue.
+ */
+@implementation NSArray (DVTRangeArrayAdditions)
+
+- (NSRange)rangeAtIndex:(NSUInteger)index
+{
+    return [[self objectAtIndex:index] rangeValue];
 }
 
 @end
