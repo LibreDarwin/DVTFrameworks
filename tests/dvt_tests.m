@@ -945,6 +945,81 @@ static void DVTTestClassAdditions(void)
     DVTExpectEqualObjects(sample.dvt_maximumObject, @"ccc", @"maximum object");
     DVTExpectEqualObjects(sample.dvt_minimumObject, @"a", @"minimum object");
 
+    {
+        /* The comparator forms of the extremes, which are the same fold as the no-argument
+           pair above but ranked by a block instead of by -compare:. */
+        NSComparisonResult (^ascending)(id, id) = ^NSComparisonResult(id a, id b) {
+            return [a compare:b];
+        };
+        NSArray *numbers = @[@3, @1, @2];
+
+        DVTExpect([[NSArray array] dvt_minimumObject:ascending] == nil,
+                  @"array minimumObject: is nil for an empty receiver");
+        DVTExpect([[NSArray array] dvt_maximumObject:ascending] == nil,
+                  @"array maximumObject: is nil for an empty receiver");
+        DVTExpectEqualObjects([numbers dvt_minimumObject:ascending], @1, @"array minimumObject: ranks lowest");
+        DVTExpectEqualObjects([numbers dvt_maximumObject:ascending], @3, @"array maximumObject: ranks highest");
+        /* A block that inverts the order swaps the two answers, which is the clearest
+           statement that the ranking is the caller's and not a fixed direction. */
+        DVTExpectEqualObjects([numbers dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            return [b compare:a];
+        }], @3, @"array minimumObject: ranks by the comparator given");
+        /* Asked once per adjacent step, so a member count of n costs n-1 calls. */
+        __block NSUInteger minimumCalls = 0;
+        (void)[numbers dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            minimumCalls++;
+            return [a compare:b];
+        }];
+        DVTExpect(minimumCalls == 2, @"array minimumObject: asks once per adjacent step");
+        __block NSUInteger maximumCalls = 0;
+        (void)[numbers dvt_maximumObject:^NSComparisonResult(id a, id b) {
+            maximumCalls++;
+            return [a compare:b];
+        }];
+        DVTExpect(maximumCalls == 2, @"array maximumObject: asks once per adjacent step");
+        /* The comparator is asked (candidate, incumbent). With -compare: that is what
+           makes the ranking come out right -- "2" measured against a held "1" answers
+           descending and is discarded -- so the pair order is the whole mechanism. */
+        NSMutableArray *pairs = [NSMutableArray array];
+        (void)[numbers dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            [pairs addObject:[NSString stringWithFormat:@"(%@,%@)", a, b]];
+            return [a compare:b];
+        }];
+        DVTExpectEqualObjects([pairs componentsJoinedByString:@" "], @"(1,3) (2,1)",
+                              @"array minimumObject: asks (candidate, incumbent)");
+        /* A lone member is never compared, so it comes back untouched and the comparator
+           need not even be asked -- which is what leaves a nil comparator usable here. */
+        __block NSUInteger soloCalls = 0;
+        DVTExpectEqualObjects([@[@7] dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            soloCalls++;
+            return NSOrderedSame;
+        }], @7, @"array minimumObject: answers a lone member");
+        DVTExpect(soloCalls == 0, @"array minimumObject: does not compare a lone member");
+        DVTExpectEqualObjects([@[@7] dvt_maximumObject:nil], @7,
+                              @"array maximumObject: goes unasked for a lone member");
+        DVTExpect([[NSArray array] dvt_minimumObject:nil] == nil,
+                  @"array minimumObject: goes unasked for an empty receiver");
+        /* A tie keeps the incumbent, so the first of the equal members wins. */
+        DVTExpectEqualObjects([@[@1, @1, @1] dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            return NSOrderedSame;
+        }], @1, @"array minimumObject: a tie keeps the incumbent");
+        DVTExpectEqualObjects([@[@1, @1, @1] dvt_maximumObject:^NSComparisonResult(id a, id b) {
+            return NSOrderedSame;
+        }], @1, @"array maximumObject: a tie keeps the incumbent");
+        /* Only an exact NSOrderedAscending replaces the incumbent. An answer outside the
+           contract is not "less" and does not win, and NSOrderedSame is a tie rather
+           than a descent -- so a comparator answering a constant answers nothing. */
+        DVTExpectEqualObjects([@[@1, @9] dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            return (NSComparisonResult)-2;
+        }], @1, @"array minimumObject: only an exact ascending replaces");
+        DVTExpectEqualObjects([@[@1, @9] dvt_minimumObject:^NSComparisonResult(id a, id b) {
+            return (NSComparisonResult)7;
+        }], @1, @"array minimumObject: an out-of-contract answer keeps the incumbent");
+        DVTExpectEqualObjects([@[@1, @9] dvt_maximumObject:^NSComparisonResult(id a, id b) {
+            return (NSComparisonResult)-2;
+        }], @1, @"array maximumObject: an out-of-contract answer keeps the incumbent");
+    }
+
     DVTExpectEqualObjects((@([@[@3, @1] dvt_numberOfObjectsPassingTest:^BOOL(id o) { return [o integerValue] > 1; }])), @1,
                           @"count of passing elements");
     DVTExpectEqualObjects([sample dvt_firstObjectPassingTest:^BOOL(id o) { return [o length] == 2; }], @"bb",

@@ -921,6 +921,48 @@ static id DVTMissingKeyPathSentinel(void)
     return best;
 }
 
+- (id)dvt_minimumObject:(NSComparisonResult (^)(id, id))comparator
+{
+    /* The same fold as -[NSSet dvt_minimumObjectUsingComparator:], down to the
+       argument order that makes it correct: the comparator is asked
+       (candidate, incumbent), not (incumbent, candidate), and only an exact
+       NSOrderedAscending replaces the incumbent, so NSOrderedSame is a tie that keeps
+       it and an out-of-contract -2 leaves it alone.
+
+       Apple walks the receiver with -countByEnumeratingWithState:objects:count: in
+       batches of sixteen rather than plain fast enumeration. That is not observable
+       from outside: neither form raises when the comparator mutates the receiver
+       mid-walk, because Apple's counter is only sampled at the top of each item
+       iteration, after the mutation has already been made.
+
+       An empty receiver answers nil before the comparator is reached, and a
+       single-member receiver never compares at all, which is what makes a nil
+       comparator safe for those two and a fault for anything longer. */
+    id incumbent = nil;
+    for (id candidate in self) {
+        if (incumbent == nil) {
+            incumbent = candidate;
+            continue;
+        }
+        if (comparator(candidate, incumbent) == NSOrderedAscending) {
+            incumbent = candidate;
+        }
+    }
+    return incumbent;
+}
+
+- (id)dvt_maximumObject:(NSComparisonResult (^)(id, id))comparator
+{
+    /* Not a second fold: this is the minimum method asked with the comparator's
+       answer negated. Apple builds a stack block that calls the caller's comparator
+       and negates the result, then sends that to dvt_minimumObject: -- a single tail
+       call once the block literal is set up -- so the maximum inherits the minimum's
+       tie-break, and the negation of NSOrderedSame is still NSOrderedSame. */
+    return [self dvt_minimumObject:^NSComparisonResult(id a, id b) {
+        return (NSComparisonResult)(-(NSInteger)comparator(a, b));
+    }];
+}
+
 - (id)dvt_objectByFoldingWithBlock:(id (^)(id, id))block
 {
     /* The same fold as -[NSSet dvt_objectByFoldingWithBlock:], and with the same

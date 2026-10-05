@@ -223,10 +223,11 @@ Nil-tolerant insertion, identity-sensitive lookup, array derivation
 (`dvt_arrayByRemovingObject:`, `dvt_arrayByReversingObjects`, …), in-place
 sorting by a derived key, both in place on a mutable array and as a copy on an
 array or a set, stable partitioning, shuffling, unique-string lookup,
-contiguous-run search, grouping by a block key or by key path, joining with a
+contiguous-run search, the array and set extremes by `compare:` or by a
+comparison block, grouping by a block key or by key path, joining with a
 final-component separator, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 129 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 131 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -331,6 +332,14 @@ that calls it and negates the result, then tail-calls
 `dvt_minimumObjectUsingComparator:`, which is why the two share a tie-break and
 why `NSOrderedSame` answers `"a"` there too. An empty receiver answers `nil`
 without reaching the block at all.
+
+`-[NSArray dvt_minimumObject:]` and `-[NSArray dvt_maximumObject:]` are that
+same pair under Apple's shorter names for the `NSArray` category, with the same
+argument order, the same exact-`NSOrderedAscending` replacement, and the same
+negated-block maximum; the argument orders match too, so a call log for the array
+form reads `(b,a)` then `(c,a)`. The argument-free `dvt_minimumObject` and
+`dvt_maximumObject` beside them rank by `compare:` and are a local addition —
+Apple has no block-less form of these on `NSArray`.
 
 The plain fold has the sharper edge. It does not test the answer for `nil`, so a
 `nil` answer empties the accumulator and the *next* member becomes the accumulator
@@ -1226,14 +1235,15 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 196 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 520 will not find
-it here. Two of the 196 are additions rather than reproductions:
+This project implements 198 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 518 will not find
+it here. Two of the 198 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
-argument and order with `compare:`, where Apple's same-named methods take a
-comparison block, so the local pair is a convenience this port adds alongside
-rather than a match for those variants. The other 194 are reproduced against the
-binary.
+argument and order with `compare:`, while Apple's same-named selectors take a
+comparison block. Those block forms, `dvt_minimumObject:` and
+`dvt_maximumObject:`, are reproduced here too, so the local no-argument pair is a
+convenience this port adds alongside the versions it matches rather than a
+substitute for them. The other 196 are reproduced against the binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -1296,6 +1306,15 @@ Recovered from Apple's binary, or matched against it byte for byte:
   components. A `nil` separator is treated as `nil` — empty — elsewhere rather
   than crashing, a `nil` final separator renders as `(null)` through the format,
   and a one-element receiver is answered with `-description` of its member
+- `dvt_minimumObject:` and `dvt_maximumObject:` are one fold, not two: the
+  maximum is the minimum asked with the comparator's answer negated, which Apple
+  does by handing a stack block to the minimum, so both share the tie-break. The
+  comparator is asked `(candidate, incumbent)` rather than the other way round, and
+  only an exact `NSOrderedAscending` replaces the incumbent — so `NSOrderedSame` is
+  a tie that leaves it alone, making the first of the equal members win, and an
+  out-of-contract answer replaces nothing. The comparator goes unasked for an empty
+  or single-member receiver, which is why a `nil` comparator works there and faults
+  with two or more
 - `dvt_stringByConcatenatingAsCommandLineArguments` escapes exactly four
   characters — `'`, space, `"`, and tab — and renders an empty argument as `""`.
   A backslash is *not* escaped, and neither is the rest of the shell

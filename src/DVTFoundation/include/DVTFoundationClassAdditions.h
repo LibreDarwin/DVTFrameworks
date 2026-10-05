@@ -322,6 +322,30 @@ NS_ASSUME_NONNULL_BEGIN
 - (id _Nullable)dvt_minimumObject;
 
 /**
+  The object the `comparator` ranks lowest, or `nil` for an empty receiver.
+
+  The comparator is asked `(candidate, incumbent)` and not the other way round, which
+  is the same order as `-[NSSet dvt_minimumObjectUsingComparator:]` uses. Only an
+  exact `NSOrderedAscending` replaces the incumbent, so an out-of-contract `-2`
+  leaves it in place rather than counting as "less", and `NSOrderedSame` is a tie
+  that keeps it — which makes the first of equally-ranked members win.
+
+  An empty or single-member receiver never reaches the comparator, so a `nil`
+  comparator is safe there; with two or more members it faults, as Apple loads the
+  block's invoke pointer without checking it.
+ */
+- (id _Nullable)dvt_minimumObject:(NSComparisonResult (^_Nullable)(id _Nullable, id _Nullable))comparator;
+
+/**
+  The object the `comparator` ranks highest, or `nil` for an empty receiver.
+
+  This is `dvt_minimumObject:` asked with the comparator's answer negated, so the
+  tie-break is shared: an equal-ranked member keeps the incumbent and the first one
+  enumerated wins.
+ */
+- (id _Nullable)dvt_maximumObject:(NSComparisonResult (^_Nullable)(id _Nullable, id _Nullable))comparator;
+
+/**
   The elements folded into one object, or `nil` for an empty receiver.
 
   The block is asked `(accumulator, next)` — the opposite order from a comparator
