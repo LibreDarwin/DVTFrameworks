@@ -416,7 +416,30 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)dvt_stringByConcatenatingAsCommandLineArguments;
 
 /**
- The index at which `object` belongs in the receiver under `comparator`.
+  Renders the receiver as shell command arguments: elements are separated by a
+  single space, the empty string is emitted as `""`, and an empty receiver yields
+  the empty string.
+
+  This is the shell counterpart of `dvt_stringByConcatenatingAsCommandLineArguments`
+  and escapes a different set. Exactly three characters are escaped -- backslash,
+  space, and tab -- each as a backslash followed by the character, so a literal
+  tab becomes a backslash and a real tab. Quotes, `$`, `*`, `~`, newline and the
+  rest of the shell metacharacters pass through untouched.
+
+  Unlike the command line variant, every element must be an `NSString`. Apple
+  guards each one with a `CFGetTypeID`/`CFStringGetTypeID` comparison and asserts
+  when it fails, so a non-string element aborts instead of being described.
+
+  All three replacements search the range `{0, length}` of the *original*
+  argument, not of the string produced by the preceding replacement. A character
+  that an earlier replacement pushed past that length is therefore left
+  unescaped: `@"\\  "` escapes only its first space, and `@"\\\t "` escapes the tab
+  but not the space after it.
+ */
+- (NSString *)dvt_stringByConcatenatingAsShellCommandArguments;
+
+/**
+  The index at which `object` belongs in the receiver under `comparator`.
 
  Apple answers `0` for an empty receiver without consulting `comparator`, and
  otherwise binary-searches the whole array with

@@ -1115,6 +1115,70 @@ static id DVTMissingKeyPathSentinel(void)
     return result;
 }
 
+- (NSString *)dvt_stringByConcatenatingAsShellCommandArguments
+{
+    /* Follows the shape of Apple's implementation: a single space separates
+       arguments and is skipped while the result is still empty, an empty
+       argument becomes two double quotes, and three literal replacements escape
+       a backslash, a space, and a tab as a backslash followed by the character.
+
+       All three replacements are handed the range {0, length} of the *original*
+       argument rather than of the string the previous replacement produced, so a
+       character that an earlier replacement pushed past that length is left
+       unescaped. The quirk is observable and deliberate here: @"\\  " escapes
+       only its first space, and @"\\\t " escapes the tab but not the space after
+       it, because the doubling backslash pushed both of them past the end of the
+       range. Apple quotes neither character and escapes no other metacharacter.
+
+       Elements must be strings, unlike the command line variant, which describes
+       them. Apple tests each element with CFGetTypeID against CFStringGetTypeID
+       and asserts on a nil element first, so both cases abort. */
+    NSUInteger count = self.count;
+    if (count == 0) {
+        return @"";
+    }
+
+    NSMutableString *result = [NSMutableString stringWithCapacity:64];
+
+    for (NSUInteger index = 0; index < count; index++) {
+        NSString *string = [self objectAtIndex:index];
+        DVTAssert(string != nil, @"(string) != nil", nil, @"%@ should be a string, but it is nil",
+                  @"string");
+        DVTAssert(CFGetTypeID((__bridge CFStringRef)string) == CFStringGetTypeID(),
+                  @"CFGetTypeID((CFStringRef)string) == CFStringGetTypeID()", nil,
+                  @"%@ should be a string, but it is %@", @"string", string);
+
+        if (result.length != 0) {
+            [result appendString:@" "];
+        }
+
+        if (string.length == 0) {
+            [result appendString:@"\"\""];
+            continue;
+        }
+
+        /* The search range deliberately stays pinned to the original length
+           across all three replacements. See the comment above. */
+        NSRange range = NSMakeRange(0, string.length);
+        NSString *escaped =
+            [string stringByReplacingOccurrencesOfString:@"\\"
+                                              withString:@"\\\\"
+                                                 options:NSLiteralSearch
+                                                   range:range];
+        escaped = [escaped stringByReplacingOccurrencesOfString:@" "
+                                                     withString:@"\\ "
+                                                        options:NSLiteralSearch
+                                                          range:range];
+        escaped = [escaped stringByReplacingOccurrencesOfString:@"\t"
+                                                     withString:@"\\\t"
+                                                        options:NSLiteralSearch
+                                                          range:range];
+        [result appendString:escaped];
+    }
+
+    return result;
+}
+
 - (NSInteger)dvt_sortedInsertionIndexForObject:(id)object
                                 withComparator:(NSComparisonResult (^)(id first, id second))comparator
 {

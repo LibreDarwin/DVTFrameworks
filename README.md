@@ -1235,15 +1235,15 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 198 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 518 will not find
-it here. Two of the 198 are additions rather than reproductions:
+This project implements 199 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 517 will not find
+it here. Two of the 199 are additions rather than reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, while Apple's same-named selectors take a
 comparison block. Those block forms, `dvt_minimumObject:` and
 `dvt_maximumObject:`, are reproduced here too, so the local no-argument pair is a
 convenience this port adds alongside the versions it matches rather than a
-substitute for them. The other 196 are reproduced against the binary.
+substitute for them. The other 197 are reproduced against the binary.
 
 What is implemented is matched against Apple's binary rather than guessed; what
 is not implemented is not stubbed out, so its absence is visible as a missing
@@ -1319,6 +1319,17 @@ Recovered from Apple's binary, or matched against it byte for byte:
   characters — `'`, space, `"`, and tab — and renders an empty argument as `""`.
   A backslash is *not* escaped, and neither is the rest of the shell
   metacharacters, so its output is not shell-safe
+- `dvt_stringByConcatenatingAsShellCommandArguments` is its shell counterpart and
+  escapes a different set: exactly backslash, space, and tab, each as a backslash
+  followed by the character, so a literal tab becomes a backslash and a real tab
+  while quotes and `$` pass through unescaped. It shares the space separator and
+  the `""` rendering of an empty argument, but asserts instead of describing when
+  an element is not a string, guarding each one with
+  `CFGetTypeID`/`CFStringGetTypeID` the way Apple does. All three replacements
+  search `{0, length}` of the *original* argument rather than of the string the
+  previous replacement produced, so a character that an earlier replacement pushed
+  past that length is left unescaped — `@"\\  "` escapes only its first space, and
+  `@"\\\t "` escapes the tab but not the space after it
 - `DVTIsAssertionEnvironment` and `DVTShouldAssertForEnvironment` take an integer
   selector rather than a suite name, and both are called with the literal `2`.
   Selector `0` asserts without consulting a gate, `1`–`5` map to the gates

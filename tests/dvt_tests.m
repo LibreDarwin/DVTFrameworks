@@ -2527,6 +2527,57 @@ static void DVTTestClassAdditions(void)
                               [renderingCase objectAtIndex:2], [renderingCase objectAtIndex:0]);
     }
 
+    /* The shell variant shares the space separator and the "" rendering for an
+       empty argument, but escapes backslash, space, and tab instead of the four
+       quote-and-whitespace characters the command line variant escapes. */
+    NSArray *shellCases = @[
+        @[@"shell: no arguments", @[], @""],
+        @[@"shell: single argument", @[@"one"], @"one"],
+        @[@"shell: arguments are space separated", @[@"one", @"two"], @"one two"],
+        @[@"shell: empty argument is quoted", @[@""], @"\"\""],
+        @[@"shell: every empty argument is quoted", @[@"", @""], @"\"\" \"\""],
+        /* An empty first argument still leaves a non-empty result behind, so the
+           separator before the next argument is still written. */
+        @[@"shell: separator follows a quoted empty argument", @[@"", @"a"], @"\"\" a"],
+        @[@"shell: spaces are backslash escaped", @[@"a b"], @"a\\ b"],
+        /* A tab is escaped by prefixing a backslash to the real tab, not by
+           spelling it as the two characters backslash-t. */
+        @[@"shell: tabs are backslash escaped", @[@"a\tb"], @"a\\\tb"],
+        @[@"shell: backslashes are doubled", @[@"a\\b"], @"a\\\\b"],
+        /* Quotes, dollar signs, globs, and newlines are deliberately not part of
+           the escaping set here even though the command line variant escapes the
+           two quote characters. */
+        @[@"shell: double quotes are left alone", @[@"a\"b"], @"a\"b"],
+        @[@"shell: single quotes are left alone", @[@"a'b"], @"a'b"],
+        @[@"shell: other shell metacharacters are left alone", @[@"a$b^c~d*e;f|g&h>i<j"], @"a$b^c~d*e;f|g&h>i<j"],
+        @[@"shell: newlines are left alone", @[@"a\nb"], @"a\nb"],
+
+        /* All three replacements search {0, length} of the original argument, so
+           the doubling backslash pushes later characters out of the range and they
+           survive unescaped. These four rows pin that down. */
+        @[@"shell: a backslash hides the following space", @[@"\\  "], @"\\\\\\  "],
+        @[@"shell: a backslash hides two following spaces", @[@"\\   "], @"\\\\\\ \\  "],
+        @[@"shell: a backslash hides three following spaces", @[@"\\    "], @"\\\\\\ \\ \\  "],
+        /* Here the space escapes and the backslash pushes the tab out of range,
+           so the tab is left bare while the space is escaped. */
+        @[@"shell: a backslash hides the following tab", @[@"\\\t "], @"\\\\\\\t "],
+        /* Two backslashes push the tab past the range even further. */
+        @[@"shell: two backslashes hide the following tab", @[@"\\\\\t"], @"\\\\\\\\\t"],
+    ];
+    for (NSArray *shellCase in shellCases) {
+        NSArray *input = [shellCase objectAtIndex:1];
+        DVTExpectEqualObjects([input dvt_stringByConcatenatingAsShellCommandArguments],
+                              [shellCase objectAtIndex:2], [shellCase objectAtIndex:0]);
+    }
+
+    /* Unlike the command line variant this one asserts on a non-string element
+       instead of describing it, so only string-only arrays may be passed. */
+    NSMutableArray *shellMutable = [@[@"a", @"b"] mutableCopy];
+    DVTExpectEqualObjects([shellMutable dvt_stringByConcatenatingAsShellCommandArguments], @"a b",
+                          @"dvt_stringByConcatenatingAsShellCommandArguments: a mutable receiver renders the same");
+    DVTExpectEqualObjects([[NSMutableArray array] dvt_stringByConcatenatingAsShellCommandArguments], @"",
+                          @"dvt_stringByConcatenatingAsShellCommandArguments: an empty mutable receiver is empty");
+
     NSMutableArray *mutable = [NSMutableArray arrayWithCapacity:0];
     [mutable dvt_addObjectIfNonNil:nil];
     DVTExpect(mutable.count == 0, @"dvt_addObjectIfNonNil: ignores nil");
