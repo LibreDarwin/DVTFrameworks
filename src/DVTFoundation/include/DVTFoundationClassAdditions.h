@@ -115,8 +115,20 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (id _Nullable)dvt_objectBeforeFirstOccurenceOfObject:(id)object;
 
-/** How many elements satisfy `test`. */
-- (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
+/**
+ Every element is asked, and the answer is the total, so a `test` that always
+ returns `YES` over a three element array gives 3.
+
+ The block's return value is added up rather than counted, so a block that
+ returns something other than `YES` or `NO` contributes that value: returning 3
+ for each of three elements totals 9. A block declared to answer `BOOL`, as this
+ one's parameter is, cannot do that. `NSSet` and `NSMutableArray` share this
+ behaviour, so it is the one place the selector's name is actively misleading.
+
+ A `nil` test faults on Apple, which reaches the block without checking it. This
+ returns the count instead, the same deliberate guard the all/any predicates use.
+ */
+- (NSInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
 
 /** Maps each element through `block`, dropping `nil` results. */
 - (NSArray *)dvt_compactMap:(id _Nullable (^)(id object))block;
@@ -542,6 +554,44 @@ NS_ASSUME_NONNULL_BEGIN
  the whole order and is asked about every pair.
  */
 - (NSArray *)dvt_sortedArrayUsingComparator:(NSComparisonResult (^)(id first, id second))comparator;
+
+/**
+ The receiver's only member, or `nil` when it has none or has more than one.
+
+ An empty set never reaches `-anyObject`, so a multi-member set answers `nil`
+ without picking one of its members to return.
+ */
+- (id)dvt_onlyObject;
+
+/**
+ The first member, in the set's own order, that satisfies `test` -- or `nil`.
+
+ This answers the member rather than whether one passed, so despite the name it
+ is not the boolean predicate `dvt_anyObjectsPassTest:` is. The walk stops at the
+ first match, so the remaining members are never asked.
+ */
+- (id)dvt_anyObjectPassingTest:(BOOL (^)(id object))test;
+
+/**
+ The member satisfying `test` when exactly one member does, and `nil` otherwise.
+
+ `nil` therefore covers two different outcomes: nothing passed, and more than one
+ member did. The second is decided as soon as it happens rather than after the
+ walk finishes, so the block is asked about as few members as the answer allows.
+ Which member wins when exactly one passes does not depend on the set's order.
+ */
+- (id)dvt_onlyObjectPassingTest:(BOOL (^)(id object))test;
+
+/**
+ How many members satisfy `test`. Every member is asked; the walk does not stop
+ at the first match or the first failure.
+
+ The block's return value is added up rather than counted, so a block that
+ returns something other than `YES` or `NO` contributes that value: returning 3
+ for each of three members totals 9. A block declared to answer `BOOL`, as this
+ one's parameter is, cannot do that.
+ */
+- (NSInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test;
 
 @end
 

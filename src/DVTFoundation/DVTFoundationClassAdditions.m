@@ -85,6 +85,22 @@ static BOOL DVTAllObjectsPassTest(id<NSFastEnumeration> collection, BOOL (^test)
     return YES;
 }
 
+/** The raw 32 bits a test block hands back, which is what
+    `dvt_numberOfObjectsPassingTest:` adds up.
+
+    Apple's loop accumulates `w0` directly, so a block that returns something
+    other than a boolean adds its own value rather than 1 -- three from each of
+    three members totals 9, and -1 from each totals 12884901885 rather than
+    wrapping. Reading the value as `BOOL` here would silently flatten both to a
+    plain count, so the call goes through a differently spelled block type. Only
+    a caller who casts a block of another return type can tell the two apart. */
+typedef unsigned int (^DVTRawTestReturn)(id object);
+
+static unsigned int DVTRawTestValue(BOOL (^test)(id object), id object)
+{
+    return ((DVTRawTestReturn)test)(object);
+}
+
 static NSUInteger DVTIndexOfObject(NSArray *array, id object)
 {
     NSUInteger count = array.count;
@@ -368,20 +384,22 @@ static NSComparisonResult (^DVTComparatorForSelector(SEL selector))(id, id)
     return [self dvt_anyObjectsPassTest:test];
 }
 
-- (NSUInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
+- (NSInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
 {
     if (test == nil) {
-        return self.count;
+        /* Apple reaches the block without checking it and faults here. Guarding it
+           is a documented deviation, kept like the nil-test guards on the
+           all/any predicates. */
+        return (NSInteger)self.count;
     }
-    NSUInteger matching = 0;
-    NSEnumerator *enumerator = [self objectEnumerator];
-    id object = nil;
-    while ((object = [enumerator nextObject]) != nil) {
-        if (test(object)) {
-            matching++;
-        }
+    /* Sums the raw returns rather than counting the truthy answers, which is what
+       Apple's copy does on all three classes carrying this selector. See
+       DVTRawTestValue. Signed, not unsigned: Apple's encoding is `q`. */
+    NSInteger total = 0;
+    for (id object in self) {
+        total += (NSUInteger)DVTRawTestValue(test, object);
     }
-    return matching;
+    return total;
 }
 
 #pragma mark - Mapping
@@ -1392,6 +1410,59 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     /* Apple retains the comparator around this call, which is just ARC holding
        the argument alive across the send; nothing else is done with it. */
     return [members sortedArrayUsingComparator:comparator];
+}
+
+#pragma mark - Single members and counts
+
+- (id)dvt_onlyObject
+{
+    /* An empty or multi-member set answers nil, so -anyObject is only reached
+       when there is exactly one thing to hand back. */
+    return self.count == 1 ? [self anyObject] : nil;
+}
+
+- (id)dvt_anyObjectPassingTest:(BOOL (^)(id object))test
+{
+    /* Answers the member that passes, not whether one did, so the name reads
+       like the boolean predicate it is not. The first match in the set's own
+       order wins and the rest are never asked. */
+    for (id object in self) {
+        if (test(object)) {
+            return object;
+        }
+    }
+    return nil;
+}
+
+- (id)dvt_onlyObjectPassingTest:(BOOL (^)(id object))test
+{
+    /* Exactly one member has to pass. A second match abandons the walk there and
+       answers nil rather than finishing the enumeration to be sure, which is
+       observable through how many times the block is asked. */
+    id only = nil;
+    for (id object in self) {
+        if (test(object)) {
+            if (only != nil) {
+                return nil;
+            }
+            only = object;
+        }
+    }
+    return only;
+}
+
+- (NSInteger)dvt_numberOfObjectsPassingTest:(BOOL (^)(id object))test
+{
+    /* Sums what the block returns instead of counting the truthy answers, and
+       never stops early: every member is asked. See DVTRawTestValue.
+
+       Signed, not unsigned: Apple's encoding is `q`, and the accumulator holds
+       the zero-extended 32-bit returns without ever wrapping. */
+    NSInteger total = 0;
+    for (id object in self) {
+        total += (NSUInteger)DVTRawTestValue(test, object);
+    }
+    return total;
 }
 
 @end

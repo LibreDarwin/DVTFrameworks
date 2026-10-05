@@ -1083,6 +1083,136 @@ static void DVTTestClassAdditions(void)
                   @"set objectsSortedByValueBlock: asserts on a nil derived value");
     }
 
+    /* dvt_onlyObject, the two matching-member predicates, and the count. */
+
+    {
+        NSSet *one = [NSSet setWithObject:@"only"];
+        NSSet *none = [NSSet set];
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        DVTExpectEqualObjects([one dvt_onlyObject], @"only",
+                              @"set onlyObject answers its only member");
+        DVTExpect([none dvt_onlyObject] == nil, @"set onlyObject answers nil when empty");
+        DVTExpect([three dvt_onlyObject] == nil,
+                  @"set onlyObject answers nil rather than picking one of several members");
+        DVTExpectEqualObjects([one dvt_onlyObject], [one anyObject],
+                              @"set onlyObject answers the member -anyObject would");
+        NSMutableSet *mutableOne = [NSMutableSet setWithObject:@"solo"];
+        DVTExpectEqualObjects([mutableOne dvt_onlyObject], @"solo",
+                              @"set onlyObject answers a mutable set's only member");
+    }
+
+    {
+        /* Despite the name this answers the member that passed, not whether one
+           did. Which of several matches wins is the set's own order, so only
+           membership is checked; the call counts are what pin the early exit. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        DVTExpectEqualObjects([three dvt_anyObjectPassingTest:^BOOL(id o) { return [o isEqualToString:@"a"]; }],
+                              @"a", @"set anyObjectPassingTest: answers the matching member");
+        DVTExpect([three dvt_anyObjectPassingTest:^BOOL(id o) { return NO; }] == nil,
+                  @"set anyObjectPassingTest: answers nil when nothing passes");
+        __block int anyCalls = 0;
+        id anyAnswer = [three dvt_anyObjectPassingTest:^BOOL(id o) { anyCalls++; return YES; }];
+        DVTExpect(anyCalls == 1, @"set anyObjectPassingTest: stops at the first match");
+        DVTExpect([three containsObject:anyAnswer], @"set anyObjectPassingTest: answers a member");
+        __block int anyEmptyCalls = 0;
+        id anyEmptyAnswer = [[NSSet set] dvt_anyObjectPassingTest:^BOOL(id o) { anyEmptyCalls++; return YES; }];
+        DVTExpect(anyEmptyAnswer == nil, @"set anyObjectPassingTest: answers nil for an empty set");
+        DVTExpect(anyEmptyCalls == 0, @"set anyObjectPassingTest: never asks the test for an empty set");
+        __block int anySeen = 0;
+        id anyB = [three dvt_anyObjectPassingTest:^BOOL(id o) { anySeen++; return [o isEqualToString:@"b"]; }];
+        DVTExpectEqualObjects(anyB, @"b", @"set anyObjectPassingTest: finds a later member");
+        DVTExpect(anySeen < 3, @"set anyObjectPassingTest: stops before asking every member");
+    }
+
+    {
+        /* Exactly one member has to pass. A second match answers nil right away,
+           which is visible in how many times the test is asked. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        DVTExpectEqualObjects([three dvt_onlyObjectPassingTest:^BOOL(id o) { return [o isEqualToString:@"c"]; }],
+                              @"c", @"set onlyObjectPassingTest: answers the one member that passes");
+        DVTExpect([three dvt_onlyObjectPassingTest:^BOOL(id o) { return NO; }] == nil,
+                  @"set onlyObjectPassingTest: answers nil when nothing passes");
+        DVTExpect([three dvt_onlyObjectPassingTest:^BOOL(id o) {
+                       return [o isEqualToString:@"b"] || [o isEqualToString:@"c"];
+                   }] == nil,
+                  @"set onlyObjectPassingTest: answers nil when two members pass");
+        __block int severalCalls = 0;
+        id severalAnswer = [three dvt_onlyObjectPassingTest:^BOOL(id o) { severalCalls++; return YES; }];
+        DVTExpect(severalCalls == 2, @"set onlyObjectPassingTest: stops as soon as a second member passes");
+        DVTExpect(severalAnswer == nil, @"set onlyObjectPassingTest: answers nil for two or more matches");
+        __block int emptyOnlyCalls = 0;
+        DVTExpect([[NSSet set] dvt_onlyObjectPassingTest:^BOOL(id o) { emptyOnlyCalls++; return YES; }] == nil,
+                  @"set onlyObjectPassingTest: answers nil for an empty set");
+        DVTExpect(emptyOnlyCalls == 0, @"set onlyObjectPassingTest: never asks the test for an empty set");
+        __block int singleCalls = 0;
+        id singleMatch = [three dvt_onlyObjectPassingTest:^BOOL(id o) {
+            singleCalls++;
+            return [o isEqualToString:@"a"];
+        }];
+        DVTExpect(singleCalls == 3, @"set onlyObjectPassingTest: asks about every member when one passes");
+        DVTExpectEqualObjects(singleMatch, @"a", @"set onlyObjectPassingTest: answers that member");
+        NSSet *none = [NSSet set];
+        DVTExpect([none dvt_onlyObjectPassingTest:^BOOL(id o) { return YES; }] == nil,
+                  @"set onlyObjectPassingTest: answers nil when an empty set cannot pass");
+        NSSet *one = [NSSet setWithObject:@"solo"];
+        DVTExpectEqualObjects([one dvt_onlyObjectPassingTest:^BOOL(id o) { return YES; }], @"solo",
+                              @"set onlyObjectPassingTest: answers a single passing member");
+    }
+
+    {
+        /* Every member is asked; the walk does not stop early. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        __block int calls = 0;
+        NSInteger passing = [three dvt_numberOfObjectsPassingTest:^BOOL(id o) {
+            calls++;
+            return [o isEqualToString:@"a"] || [o isEqualToString:@"b"];
+        }];
+        DVTExpect(passing == 2, @"set numberOfObjectsPassingTest: counts the members that pass");
+        DVTExpect(calls == 3, @"set numberOfObjectsPassingTest: asks about every member");
+        DVTExpect([three dvt_numberOfObjectsPassingTest:^BOOL(id o) { return YES; }] == 3,
+                  @"set numberOfObjectsPassingTest: totals the member count when all pass");
+        DVTExpect([three dvt_numberOfObjectsPassingTest:^BOOL(id o) { return NO; }] == 0,
+                  @"set numberOfObjectsPassingTest: is zero when none pass");
+        DVTExpect([[NSSet set] dvt_numberOfObjectsPassingTest:^BOOL(id o) { return YES; }] == 0,
+                  @"set numberOfObjectsPassingTest: is zero for an empty set");
+        NSSet *one = [NSSet setWithObject:@"solo"];
+        DVTExpect([one dvt_numberOfObjectsPassingTest:^BOOL(id o) { return YES; }] == 1,
+                  @"set numberOfObjectsPassingTest: is one for a single passing member");
+        /* The block's return value is added up, not counted, which a caller can
+           only reach by casting a block of another return type. Apple does the
+           same, so the totals below are the sums rather than 0 or 3. */
+        NSInteger (^threeEach)(id) = ^NSInteger(id o) { return 3; };
+        DVTExpect([three dvt_numberOfObjectsPassingTest:(BOOL (^)(id))threeEach] == 9,
+                  @"set numberOfObjectsPassingTest: sums what the block returns");
+        NSInteger (^negative)(id) = ^NSInteger(id o) { return -1; };
+        DVTExpect([three dvt_numberOfObjectsPassingTest:(BOOL (^)(id))negative] == 12884901885LL,
+                  @"set numberOfObjectsPassingTest: zero-extends each return rather than wrapping");
+        NSInteger (^hundred)(id) = ^NSInteger(id o) { return 100000; };
+        DVTExpect([one dvt_numberOfObjectsPassingTest:(BOOL (^)(id))hundred] == 100000,
+                  @"set numberOfObjectsPassingTest: sums a large return over one member");
+    }
+
+    {
+        /* The count selector is shared with NSArray, so the two are asked the same
+           questions, including the ones only a cast block can reach. */
+        NSArray *array = @[@"a", @"b", @"c"];
+        DVTExpect([array dvt_numberOfObjectsPassingTest:^BOOL(id o) {
+                       return [o isEqualToString:@"a"] || [o isEqualToString:@"b"];
+                   }] == 2,
+                  @"array numberOfObjectsPassingTest: counts the members that pass");
+        NSInteger (^threeEach)(id) = ^NSInteger(id o) { return 3; };
+        DVTExpect([array dvt_numberOfObjectsPassingTest:(BOOL (^)(id))threeEach] == 9,
+                  @"array numberOfObjectsPassingTest: sums what the block returns");
+        NSInteger (^negative)(id) = ^NSInteger(id o) { return -1; };
+        DVTExpect([array dvt_numberOfObjectsPassingTest:(BOOL (^)(id))negative] == 12884901885LL,
+                  @"array numberOfObjectsPassingTest: zero-extends each return like the set does");
+        /* A nil test faults on Apple; the port guards it. */
+        DVTExpect([array dvt_numberOfObjectsPassingTest:(BOOL (^)(id))nil] == 3,
+                  @"array numberOfObjectsPassingTest: guards a nil test and answers the count");
+        DVTExpect([@[] dvt_numberOfObjectsPassingTest:^BOOL(id o) { return YES; }] == 0,
+                  @"array numberOfObjectsPassingTest: is zero for an empty array");
+    }
+
     /* The plain sorting trio. All three take -allObjects, sort it, and skip the
        sort entirely below two members. */
 
