@@ -1493,6 +1493,102 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
     return [result copy];
 }
 
+#pragma mark - Set algebra
+
+- (Class)dvt_mutableClass
+{
+    /* The one answer this selector gives is the mutable counterpart of the
+       class that declares it, and Apple's body is a load of that class
+       reference. Only the set pair carries the selector: an array, a string and
+       a dictionary do not answer it, so this cannot be a shared body. */
+    return [NSMutableSet class];
+}
+
+- (NSSet *)dvt_setByIntersectingSet:(NSSet *)set
+{
+    /* Disassembly: retain the argument, ask it for its count, and branch. A
+       non-empty argument is turned into a block of the form
+       "[argument containsObject:o]" handed straight to
+       dvt_objectsPassingTest:; an empty one skips the whole walk and answers
+       +[NSSet set], which is why subtracting the same empty set is not
+       symmetric here -- that one copies the receiver instead.
+
+       A nil argument reads as empty, since asking nil for a count is zero, so
+       it lands on the +set branch rather than raising. */
+    if (set.count == 0) {
+        return [NSSet set];
+    }
+    return [self dvt_objectsPassingTest:^BOOL(id candidate) {
+        return [set containsObject:candidate];
+    }];
+}
+
+- (NSSet *)dvt_setBySubtractingSet:(NSSet *)set
+{
+    /* The same three steps as the intersection, with the block's result
+       negated and the empty branch reaching for a copy of the receiver rather
+       than a new empty set. An empty argument therefore leaves the members --
+       and the identity -- alone, where the intersection would empty them. */
+    if (set.count == 0) {
+        return [self copy];
+    }
+    return [self dvt_objectsPassingTest:^BOOL(id candidate) {
+        return ![set containsObject:candidate];
+    }];
+}
+
+- (NSSet *)dvt_setByRemovingObject:(id)object
+{
+    /* Disassembly asks -containsObject: on the receiver first and copies the
+       receiver when it is absent, so the block is only built for an object that
+       is really there. The block itself is "!isEqual:", with no pointer check
+       ahead of it: an equal-but-distinct argument goes just the same, which
+       -setByRemovingObjects: cannot promise.
+
+       Apple's call target is the unprefixed -objectsPassingTest: rather than the
+       dvt_ spelling the other set bodies use; the answers are the same either
+       way, because -containsObject: guarantees the walk removes at least one
+       member, so the count-equality shortcut never fires here. */
+    if (![self containsObject:object]) {
+        return [self copy];
+    }
+    return [self dvt_objectsPassingTest:^BOOL(id candidate) {
+        return ![candidate isEqual:object];
+    }];
+}
+
+- (NSSet *)dvt_setByApplyingSelector:(SEL)selector
+{
+    /* The untyped twin of dvt_setByApplyingBlock:, with the same dropped nils and
+       the same collapse of repeated answers.
+
+       Apple keeps the answers in a 256-slot stack buffer and only calls out to
+       malloc once the receiver passes 256 members, then builds the set with
+       -initWithObjects:count:. Neither detail is observable, so the answer is
+       gathered in a mutable set here.
+
+       Two inputs abort Apple's method and are answered differently here, both
+       documented as deviations: a member that does not carry the selector takes
+       it to an assertion, where this walk skips the member, and a nil selector
+       does the same, where this answers an empty set. A selector that returns
+       something other than an object faults in both -- Apple retains the answer
+       as an object, and so does the send below. */
+    if (selector == NULL) {
+        return [NSSet set];
+    }
+    NSMutableSet *result = [[NSMutableSet alloc] initWithCapacity:self.count];
+    for (id object in self) {
+        if (![object respondsToSelector:selector]) {
+            continue;
+        }
+        id mapped = ((id (*)(id, SEL))objc_msgSend)(object, selector);
+        if (mapped != nil) {
+            [result addObject:mapped];
+        }
+    }
+    return [result copy];
+}
+
 - (id)dvt_onlyObject
 {
     /* An empty or multi-member set answers nil, so -anyObject is only reached

@@ -1386,6 +1386,106 @@ static void DVTTestClassAdditions(void)
                   @"array numberOfObjectsPassingTest: is zero for an empty array");
     }
 
+    {
+        /* Set algebra. The three set-to-set and set-to-object methods are one
+           shape: an early branch on the argument, then a hand-off to
+           -dvt_objectsPassingTest: with a one-line block. What that shape buys
+           is the identity answer when nothing is dropped, which is the part a
+           rebuilt-set implementation cannot reproduce. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSSet *two = [NSSet setWithObjects:@"b", @"c", nil];
+        NSSet *empty = [NSSet set];
+        NSMutableSet *mutable = [NSMutableSet setWithObjects:@"a", @"b", @"c", nil];
+
+        DVTExpect([three dvt_mutableClass] == [NSMutableSet class],
+                  @"set mutableClass answers NSMutableSet");
+        DVTExpect([three dvt_mutableClass] == [mutable dvt_mutableClass],
+                  @"set mutableClass is the same Class whichever set asks");
+
+        DVTExpectEqualObjects([three dvt_setByIntersectingSet:two], two,
+                              @"set setByIntersectingSet: keeps the shared members");
+        DVTExpect([three dvt_setByIntersectingSet:three] == three,
+                  @"set setByIntersectingSet: answers the receiver when all members survive");
+        DVTExpect([mutable dvt_setByIntersectingSet:mutable] != mutable,
+                  @"set setByIntersectingSet: copies even a mutable receiver");
+        DVTExpect(![[mutable dvt_setByIntersectingSet:mutable] isKindOfClass:[NSMutableSet class]],
+                  @"set setByIntersectingSet: answers an immutable set");
+        DVTExpectEqualObjects([three dvt_setByIntersectingSet:empty], empty,
+                              @"set setByIntersectingSet: an empty argument empties the receiver");
+        DVTExpect([three dvt_setByIntersectingSet:empty] != three,
+                  @"set setByIntersectingSet: an empty argument does not answer the receiver");
+        DVTExpectEqualObjects([three dvt_setByIntersectingSet:nil], empty,
+                              @"set setByIntersectingSet: a nil argument reads as empty");
+
+        DVTExpectEqualObjects([three dvt_setBySubtractingSet:two],
+                              [NSSet setWithObject:@"a"],
+                              @"set setBySubtractingSet: drops the members the argument holds");
+        DVTExpect([three dvt_setBySubtractingSet:empty] == three,
+                  @"set setBySubtractingSet: an empty argument leaves the identity alone");
+        DVTExpect([three dvt_setBySubtractingSet:nil] == three,
+                  @"set setBySubtractingSet: a nil argument leaves the identity alone");
+        DVTExpectEqualObjects([three dvt_setBySubtractingSet:three], empty,
+                              @"set setBySubtractingSet: subtracting everything empties the receiver");
+        DVTExpectEqualObjects([three dvt_setBySubtractingSet:two], [NSSet setWithObject:@"a"],
+                              @"set setBySubtractingSet: repeated answers agree");
+
+        DVTExpectEqualObjects([three dvt_setByRemovingObject:@"b"],
+                              [NSSet setWithObjects:@"a", @"c", nil],
+                              @"set setByRemovingObject: drops the member it is given");
+        DVTExpect([three dvt_setByRemovingObject:@"z"] == three,
+                  @"set setByRemovingObject: an absent object leaves the identity alone");
+        DVTExpect([three dvt_setByRemovingObject:nil] == three,
+                  @"set setByRemovingObject: a nil object leaves the identity alone");
+        /* isEqual: rather than pointer identity, so an equal-but-distinct
+           argument still removes the member. */
+        NSString *distinct = [@"b" mutableCopy];
+        DVTExpectEqualObjects([three dvt_setByRemovingObject:distinct],
+                              [NSSet setWithObjects:@"a", @"c", nil],
+                              @"set setByRemovingObject: compares by isEqual:, not identity");
+        DVTExpectEqualObjects([empty dvt_setByRemovingObject:@"a"], empty,
+                              @"set setByRemovingObject: removing from an empty set stays empty");
+        DVTExpectEqualObjects([[NSSet setWithObjects:@7, @"x", nil] dvt_setByRemovingObject:@7],
+                              [NSSet setWithObject:@"x"],
+                              @"set setByRemovingObject: an equal number goes as well");
+        DVTExpect(![[mutable dvt_setByRemovingObject:@"a"] isKindOfClass:[NSMutableSet class]],
+                  @"set setByRemovingObject: answers an immutable set");
+    }
+
+    {
+        /* The untyped mapping twin. Same dropped nils and same collapse of
+           repeated answers as the block form, so the distinguishing cover is
+           the selector dispatch: a member that does not carry the selector is
+           skipped rather than raising, and a nil selector answers empty. Both
+           abort on Apple. */
+        NSSet *three = [NSSet setWithObjects:@"a", @"b", @"c", nil];
+        NSSet *mapped = [three dvt_setByApplyingSelector:@selector(uppercaseString)];
+        DVTExpectEqualObjects(mapped, [NSSet setWithObjects:@"A", @"B", @"C", nil],
+                              @"set setByApplyingSelector: sends the selector to every member");
+        DVTExpect(![mapped respondsToSelector:@selector(addObject:)],
+                  @"set setByApplyingSelector: answers an immutable set");
+        /* Every member answers the same Class, so the three answers collapse. */
+        DVTExpect([[three dvt_setByApplyingSelector:@selector(class)] count] == 1,
+                  @"set setByApplyingSelector: collapses repeated answers");
+        /* A member that cannot answer is skipped, so the ones that can survive. */
+        NSSet *mixed = [NSSet setWithObjects:@"ab", @3, nil];
+        DVTExpectEqualObjects([mixed dvt_setByApplyingSelector:@selector(uppercaseString)],
+                              [NSSet setWithObject:@"AB"],
+                              @"set setByApplyingSelector: skips a member that cannot answer");
+        DVTExpectEqualObjects([[NSSet set] dvt_setByApplyingSelector:@selector(uppercaseString)],
+                              [NSSet set],
+                              @"set setByApplyingSelector: is empty for an empty receiver");
+        DVTExpectEqualObjects([three dvt_setByApplyingSelector:(SEL)0], [NSSet set],
+                              @"set setByApplyingSelector: a nil selector answers empty rather than aborting");
+        /* Past the 256-slot buffer Apple switches to a malloc'd one, so a large
+           receiver is where a fixed-size stack buffer would show. */
+        NSMutableSet *big = [NSMutableSet set];
+        for (int i = 0; i < 300; i++) {
+            [big addObject:[NSString stringWithFormat:@"m%03d", i]];
+        }
+        DVTExpect([[big dvt_setByApplyingSelector:@selector(uppercaseString)] count] == 300,
+                  @"set setByApplyingSelector: answers a 300-member receiver in full");
+    }
+
     /* The plain sorting trio. All three take -allObjects, sort it, and skip the
        sort entirely below two members. */
 

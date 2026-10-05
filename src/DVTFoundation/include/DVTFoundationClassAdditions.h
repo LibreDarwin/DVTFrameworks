@@ -674,6 +674,50 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (NSSet *)dvt_objectsPassingTest:(BOOL (^)(id object))test;
 
+/** `[NSMutableSet class]`, asked of a set. */
+- (Class)dvt_mutableClass;
+
+/**
+  The members that `set` also holds, as a set.
+
+  An empty or `nil` `set` answers an empty set rather than the receiver, so this
+  empties the receiver where `dvt_setBySubtractingSet:` with the same empty
+  argument leaves it alone.
+
+  When every member survives, the answer is the receiver rather than a rebuilt
+  copy, as with `dvt_objectsPassingTest:`.
+ */
+- (NSSet *)dvt_setByIntersectingSet:(NSSet *_Nullable)set;
+
+/**
+  The members `set` does not hold, as a set.
+
+  An empty or `nil` `set` answers a copy of the receiver unchanged. Otherwise the
+  answer is the receiver when every member survives, and a fresh set when any
+  member is removed.
+ */
+- (NSSet *)dvt_setBySubtractingSet:(NSSet *_Nullable)set;
+
+/**
+  The members other than `object`, as a set.
+
+  An absent `object` answers a copy of the receiver unchanged. The comparison is
+  `isEqual:`, not pointer identity, so an equal-but-distinct argument removes the
+  matching member. A `nil` argument is absent and changes nothing.
+ */
+- (NSSet *)dvt_setByRemovingObject:(id _Nullable)object;
+
+/**
+  The members, each sent `selector`, gathered into a set with the `nil` answers
+  dropped and repeated answers collapsed.
+
+  `selector` has to answer an object; one that returns a scalar faults, as the
+  answer is treated as an object either way. A member that does not carry the
+  selector is skipped, and a `nil` `selector` answers an empty set. Both of those
+  abort Apple, as noted on the implementation.
+ */
+- (NSSet *)dvt_setByApplyingSelector:(SEL _Nullable)selector;
+
 @end
 
 @interface NSMutableSet (DVTFoundationClassAdditions)
