@@ -2920,3 +2920,57 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
 }
 
 @end
+
+@implementation NSObject (DVTObservingConvenience)
+
+- (void)dvt_changeValueForKey:(NSString *)key usingBlock:(void (^)(void))block
+{
+    /* Disassembly: retain the two arguments, send willChangeValueForKey:, branch
+       straight to the block's invoke pointer, release the block, then send
+       didChangeValueForKey:. Nothing is checked, so a nil block faults on the load
+       of its invoke pointer exactly as the binary does. */
+    [self willChangeValueForKey:key];
+    block();
+    [self didChangeValueForKey:key];
+}
+
+- (void)dvt_changeValueForKeys:(NSArray *)keys usingBlock:(void (^)(void))block
+{
+    /* The binary enumerates `keys` forward for the opening notifications, calls the
+       block once, and then enumerates a fresh -reverseObjectEnumerator for the
+       closing ones. Two separate enumerations rather than one walk in reverse, so a
+       repeated key is announced on both sides and the closing order is the exact
+       reverse of the opening order. */
+    for (NSString *key in keys) {
+        [self willChangeValueForKey:key];
+    }
+    block();
+    for (NSString *key in [keys reverseObjectEnumerator]) {
+        [self didChangeValueForKey:key];
+    }
+}
+
++ (void)dvt_cancelAllObservingTokensForOwner:(id)owner
+{
+    /* The body is an assertion and a soft assertion and then nothing: no token is
+       cancelled. The warning carries "Unsupported API. There is no replacement." from
+       DVTNSKeyValueObserving.m line 937, but Apple's -handleWarningInMethod: logs only
+       through +assertionLoggingAspect and returns silently when no aspect is installed,
+       which is every process outside Xcode. Routing it through the local handler would
+       print a report Apple does not make, so the observable answer is no output at all. */
+    (void)owner;
+}
+
++ (NSArray *)dvt_creationBacktracesOfObservingTokensForObservedObject:(id)object
+{
+    /* The binary loads ___NSArray0__struct and returns without reading the argument. */
+    (void)object;
+    return @[];
+}
+
++ (NSString *)dvt_keyPathOnSelfForUserDefaultsKey:(NSString *)key
+{
+    return [@"_dvt_standardUserDefaultsProxy." stringByAppendingString:key];
+}
+
+@end

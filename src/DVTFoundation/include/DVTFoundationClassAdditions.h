@@ -1331,6 +1331,78 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+/* Apple keeps a small set of KVO conveniences in `NSObject(DVTObservingConvenience)`,
+   a category of its own. Two of the five answer without touching any observation
+   state at all, and are reproduced that way; the notes on each say why, and what
+   the binary actually does instead. */
+
+/** Brackets a change with the two KVO notifications, and the two class helpers. */
+@interface NSObject (DVTObservingConvenience)
+
+/**
+  Runs `block` between a `willChangeValueForKey:` and the matching
+  `didChangeValueForKey:` on the receiver.
+
+  The two notifications are sent unconditionally and in that order, and the block
+  runs exactly once between them. A `nil` block is not guarded against: the binary
+  loads the block's invoke pointer straight out of it and branches to it, so the
+  argument has to be non-`nil`. A `nil` `key` is handed to Foundation untouched.
+ */
+- (void)dvt_changeValueForKey:(NSString *)key usingBlock:(void (^)(void))block;
+
+/**
+  Announces every member of `keys`, runs `block` once, then closes the
+  notifications in reverse order.
+
+  The two sides are independent enumerations -- the forward one walks `keys`
+  directly, the closing one walks `keys.reverseObjectEnumerator` -- so a member
+  that appears twice is announced twice on each side, and the closing order is the
+  exact reverse of the opening one. `nil` and empty arrays still run the block; they
+  simply have nothing to announce, because a message to `nil` answers zero and a
+  `nil` enumerator enumerates nothing. A `nil` block faults as in the single-key
+  form.
+ */
+- (void)dvt_changeValueForKeys:(NSArray * _Nullable)keys usingBlock:(void (^)(void))block;
+
+/**
+  Does nothing.
+
+  The selector exists in Apple's binary but its whole body is two assertion calls
+  and a return: a warning carrying `"Unsupported API. There is no replacement."`
+  from `DVTFoundation/DVTFoundation/FoundationClassCategories/DVTNSKeyValueObserving.m`
+  line 937, then the soft-assertion handler, then nothing else -- no observation is
+  cancelled and no token is touched.
+
+  The warning is not reachable output. It is dispatched to
+  `-handleWarningInMethod:object:fileName:lineNumber:messageFormat:arguments:`,
+  which logs only through `+[DVTAssertionHandler assertionLoggingAspect]` and
+  returns without logging when no aspect is installed, which is the case in every
+  process that is not Xcode. Calling the local warning handler instead would print a
+  full report where Apple stays silent, so this is a no-op rather than a report that
+  Apple does not make.
+ */
++ (void)dvt_cancelAllObservingTokensForOwner:(id _Nullable)owner;
+
+/**
+  The shared empty array, whatever `object` is.
+
+  The binary loads `___NSArray0__struct` and returns it without reading its
+  argument, so this is `@[]` -- the same singleton `[NSArray array]` answers with --
+  for a real object, a `nil`, or something that is not an observed object at all.
+ */
++ (NSArray *)dvt_creationBacktracesOfObservingTokensForObservedObject:(id _Nullable)object;
+
+/**
+  `key` appended to the stand-in receiver `_dvt_standardUserDefaultsProxy.`.
+
+  The answer for `@""` is the bare prefix, so a caller can see where the boundary
+  falls. A `nil` key raises `NSInvalidArgumentException`, as appending does, and a
+  value that is not a string raises rather than being coerced.
+ */
++ (NSString *)dvt_keyPathOnSelfForUserDefaultsKey:(NSString *)key;
+
+@end
+
 /* The older spelling of the two collection tests. Apple keeps them in categories
    of their own, all three named the same thing, and in the binary each one is a
    bare tail call onto the current spelling -- `dvt_areAllObjectsPassingTest:`

@@ -16,6 +16,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <libkern/OSByteOrder.h>
 
 #import "DVTFoundation.h"
@@ -4374,6 +4377,211 @@ static void DVTTestClassAdditions(void)
     }
 }
 
+#pragma mark - Observing convenience
+
+/** Records the two KVO bracket notifications in order, so the shape of a change
+    can be asserted instead of merely that one happened. */
+@interface DVTChangeLog : NSObject
+@property (nonatomic, strong) NSMutableArray<NSString *> *entries;
+@end
+
+@implementation DVTChangeLog
+@synthesize entries = _entries;
+
+- (NSMutableArray<NSString *> *)entries
+{
+    if (!_entries) {
+        _entries = [NSMutableArray array];
+    }
+    return _entries;
+}
+- (void)willChangeValueForKey:(NSString *)key
+{
+    [self.entries addObject:[NSString stringWithFormat:@"will:%@", key ?: @"<nil>"]];
+}
+- (void)didChangeValueForKey:(NSString *)key
+{
+    [self.entries addObject:[NSString stringWithFormat:@"did:%@", key ?: @"<nil>"]];
+}
+@end
+
+/** The single-key form with no block: Apple faults loading the block's invoke
+    pointer, so the call has to be made in a child. */
+static void DVTChangeOneKeyWithoutBlock(void)
+{
+    DVTChangeLog *log = [[DVTChangeLog alloc] init];
+    void (^block)(void) = nil;
+    [log dvt_changeValueForKey:@"count" usingBlock:block];
+}
+
+/** The key-list form with no block, which faults the same way. */
+static void DVTChangeKeyListWithoutBlock(void)
+{
+    DVTChangeLog *log = [[DVTChangeLog alloc] init];
+    void (^block)(void) = nil;
+    [log dvt_changeValueForKeys:@[@"count"] usingBlock:block];
+}
+
+/** Runs `body` in a child and names how it ended, so the two nil-block forms can be
+    asserted to fault rather than going untested for want of a way to survive them.
+
+    The wait is bounded: a child that never returns would hang the suite, so it is
+    killed and reported instead. */
+static NSString *DVTChildOutcome(void (*body)(void))
+{
+    pid_t child = fork();
+    if (child < 0) {
+        return @"fork failed";
+    }
+    if (child == 0) {
+        int nullFD = open("/dev/null", O_RDWR);
+        if (nullFD >= 0) {
+            dup2(nullFD, STDOUT_FILENO);
+            dup2(nullFD, STDERR_FILENO);
+        }
+        body();
+        _exit(77);
+    }
+
+    int status = 0;
+    for (int poll = 0; poll < 500; poll++) {
+        pid_t reaped = waitpid(child, &status, WNOHANG);
+        if (reaped == child) {
+            if (WIFSIGNALED(status)) {
+                int raised = WTERMSIG(status);
+                return raised == SIGSEGV ? @"SIGSEGV"
+                                         : [NSString stringWithFormat:@"signal %d", raised];
+            }
+            return [NSString stringWithFormat:@"exit %d", WEXITSTATUS(status)];
+        }
+        if (reaped < 0) {
+            return @"wait failed";
+        }
+        usleep(10000);
+    }
+    kill(child, SIGKILL);
+    waitpid(child, &status, 0);
+    return @"hung";
+}
+
+/** The five conveniences Apple keeps in `NSObject(DVTObservingConvenience)`.
+
+    Two of them answer without touching any observation state, so their tests are
+    about the answer being the empty one rather than about anything they changed. */
+static void DVTTestObservingConvenience(void)
+{
+    {
+        DVTChangeLog *log = [[DVTChangeLog alloc] init];
+        [log dvt_changeValueForKey:@"count" usingBlock:^{
+            [log.entries addObject:@"block"];
+        }];
+        DVTExpectEqualObjects([log.entries componentsJoinedByString:@", "],
+                              @"will:count, block, did:count",
+                              @"dvt_changeValueForKey: brackets the block with will and did");
+    }
+    {
+        /* The two sides are separate enumerations, not one walk played backwards:
+           a repeated key is announced twice on each side, and the closing order is
+           the exact reverse of the opening order. */
+        DVTChangeLog *log = [[DVTChangeLog alloc] init];
+        [log dvt_changeValueForKeys:@[@"a", @"a", @"b"] usingBlock:^{
+            [log.entries addObject:@"block"];
+        }];
+        DVTExpectEqualObjects([log.entries componentsJoinedByString:@", "],
+                              @"will:a, will:a, will:b, block, did:b, did:a, did:a",
+                              @"dvt_changeValueForKeys: opens forward and closes in reverse");
+    }
+    {
+        /* Nothing to announce either way, but the block still runs exactly once:
+           a message to nil answers zero and a nil enumerator enumerates nothing. */
+        DVTChangeLog *nilList = [[DVTChangeLog alloc] init];
+        __block NSUInteger runs = 0;
+        [nilList dvt_changeValueForKeys:nil usingBlock:^{ runs++; }];
+        DVTExpect(runs == 1 && nilList.entries.count == 0,
+                  @"a nil key list still runs the block once and announces nothing");
+
+        DVTChangeLog *emptyList = [[DVTChangeLog alloc] init];
+        runs = 0;
+        [emptyList dvt_changeValueForKeys:@[] usingBlock:^{ runs++; }];
+        DVTExpect(runs == 1 && emptyList.entries.count == 0,
+                  @"an empty key list still runs the block once and announces nothing");
+    }
+
+    DVTExpectEqualObjects([NSObject dvt_keyPathOnSelfForUserDefaultsKey:@"myKey"],
+                          @"_dvt_standardUserDefaultsProxy.myKey",
+                          @"dvt_keyPathOnSelfForUserDefaultsKey: appends to the proxy prefix");
+    DVTExpectEqualObjects([NSObject dvt_keyPathOnSelfForUserDefaultsKey:@""],
+                          @"_dvt_standardUserDefaultsProxy.",
+                          @"dvt_keyPathOnSelfForUserDefaultsKey: an empty key is the bare prefix");
+    {
+        /* Appending to nil raises, and a value that is not a string raises rather
+           than being coerced; only the class of the failure is under test, because
+           the reason names whichever class Foundation happened to build. */
+        NSString *nilKey = nil;
+        @try {
+            [NSObject dvt_keyPathOnSelfForUserDefaultsKey:nilKey];
+            DVTExpect(NO, @"dvt_keyPathOnSelfForUserDefaultsKey: with nil raises");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                      @"dvt_keyPathOnSelfForUserDefaultsKey: with nil raises NSInvalidArgumentException");
+        }
+        id notAString = @42;
+        @try {
+            [NSObject dvt_keyPathOnSelfForUserDefaultsKey:notAString];
+            DVTExpect(NO, @"dvt_keyPathOnSelfForUserDefaultsKey: with a number raises");
+        } @catch (NSException *exception) {
+            DVTExpect([exception.name isEqualToString:NSInvalidArgumentException],
+                      @"dvt_keyPathOnSelfForUserDefaultsKey: with a number raises NSInvalidArgumentException");
+        }
+    }
+
+    {
+        /* The shared empty array, for anything at all -- including an argument that
+           is not an observed object, which the binary never reads. */
+        NSArray *forObject = [NSObject dvt_creationBacktracesOfObservingTokensForObservedObject:@"observed"];
+        DVTExpect(forObject == [NSArray array] && forObject.count == 0,
+                  @"dvt_creationBacktracesOfObservingTokensForObservedObject: the shared empty array");
+        DVTExpect([NSObject dvt_creationBacktracesOfObservingTokensForObservedObject:nil] == [NSArray array],
+                  @"dvt_creationBacktracesOfObservingTokensForObservedObject: nil answers the same");
+        DVTExpect([NSObject dvt_creationBacktracesOfObservingTokensForObservedObject:@[@1]] == [NSArray array],
+                  @"dvt_creationBacktracesOfObservingTokensForObservedObject: a non-observed argument answers the same");
+    }
+
+    {
+        /* Apple's body is an assertion and then nothing, and the assertion it would
+           report is routed through an aspect that is not installed outside Xcode.
+           Capturing stderr is what makes "reports nothing" a check rather than an
+           assumption -- the local handler prints unconditionally, so calling it
+           would show up here. */
+        int savedStderr = dup(STDERR_FILENO);
+        char capturePath[] = "/tmp/dvt_cancel_XXXXXX";
+        int captureFD = mkstemp(capturePath);
+        BOOL captured = (savedStderr >= 0 && captureFD >= 0);
+        ssize_t length = -1;
+        if (captured) {
+            fflush(stderr);
+            dup2(captureFD, STDERR_FILENO);
+            [NSObject dvt_cancelAllObservingTokensForOwner:@"owner"];
+            [NSObject dvt_cancelAllObservingTokensForOwner:nil];
+            fflush(stderr);
+            dup2(savedStderr, STDERR_FILENO);
+            lseek(captureFD, 0, SEEK_SET);
+            char bytes[512];
+            length = read(captureFD, bytes, sizeof(bytes));
+            close(captureFD);
+            unlink(capturePath);
+        }
+        close(savedStderr);
+        DVTExpect(captured && length == 0,
+                  @"dvt_cancelAllObservingTokensForOwner: returns without writing anything");
+    }
+
+    DVTExpectEqualObjects(DVTChildOutcome(DVTChangeOneKeyWithoutBlock), @"SIGSEGV",
+                          @"dvt_changeValueForKey: with a nil block faults, as the binary does");
+    DVTExpectEqualObjects(DVTChildOutcome(DVTChangeKeyListWithoutBlock), @"SIGSEGV",
+                          @"dvt_changeValueForKeys: with a nil block faults, as the binary does");
+}
+
 #pragma mark - Property list values
 
 /** Rebuilds the wrong-type message a dictionary lookup is expected to produce.
@@ -6289,6 +6497,7 @@ int main(int argc, const char *argv[])
         DVTTestPersistableParameterOmission();
         DVTTestMachO();
         DVTTestClassAdditions();
+        DVTTestObservingConvenience();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();

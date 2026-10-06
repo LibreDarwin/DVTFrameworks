@@ -494,6 +494,38 @@ hazard on any of the six, since no member means the block is never reached, and 
 answer `nil` there. As with the guards above, each deviation can only differ where
 the original crashes.
 
+`NSObject` carries five conveniences under Apple's own category name
+`DVTObservingConvenience`, and they divide sharply: two bracket a change, one builds
+a key path, and two answer without doing anything at all.
+`dvt_changeValueForKey:usingBlock:` sends `willChangeValueForKey:`, calls the block
+once, then sends `didChangeValueForKey:`, with no guard on either argument. The
+multi-key form opens by walking `keys` forward and closes over a fresh
+`reverseObjectEnumerator`, so a key that appears twice is announced twice on each
+side and the closing order is the exact reverse of the opening one; `nil` and empty
+key lists still run the block, because a message to `nil` answers zero and a `nil`
+enumerator enumerates nothing. A `nil` block exits `139` in both forms on both
+binaries — Apple loads the block's invoke pointer straight out of it — so unlike the
+ordered-set family nothing is guarded here, and the tests make the two calls in a
+child process rather than taking the runner down. `dvt_keyPathOnSelfForUserDefaultsKey:`
+appends to the fixed receiver `_dvt_standardUserDefaultsProxy.`, so an empty key
+answers the bare prefix, a `nil` key raises as appending does, and a value that is
+not a string raises instead of being coerced.
+
+The other two are answers rather than operations. Apple's
+`dvt_cancelAllObservingTokensForOwner:` body is two assertion calls and a return:
+the first carries `Unsupported API. There is no replacement.` out of
+`DVTNSKeyValueObserving.m` line 937, and no observation is cancelled. That warning
+is not reachable output — it is dispatched to `handleWarningInMethod:…`, which logs
+only through `+assertionLoggingAspect` and returns silently when no aspect is
+installed, which is every process outside Xcode — while the local handler prints
+unconditionally, so calling it would report something Apple does not. The method is
+therefore a no-op, and its test captures stderr around both calls to check that.
+Likewise `dvt_creationBacktracesOfObservingTokensForObservedObject:` loads
+`__NSArray0` without reading its argument: the shared empty array for a real object,
+for a `nil`, and for something that was never observed. The shared-observer
+hierarchy the rest of that Apple category drives is still deferred, which is why
+these are the ones implemented and the owner-taking observation APIs are not.
+
 `NSString` also carries the letter-casing family, where the interesting work is
 `dvt_wordsFromString`. Only `a`–`z` are word characters: an uppercase letter
 always starts a word, a run of digits holds together, and anything else —
@@ -1291,10 +1323,11 @@ Apple's `DVTPropertyListValueDecoding` string.
 `make test` builds both test runners against the freshly built framework and
 runs them:
 
-- `tests/dvt_tests.m` — 57,311 checks covering the environment snapshot modes,
+- `tests/dvt_tests.m` — 57,325 checks covering the environment snapshot modes,
   thin/fat/byte-swapped Mach-O files (including synthetic ones it writes itself),
   a header that claims more load commands than the file holds, the collection
-  additions, the string casing, word splitting and identifier mangling, the property list value
+  additions, the five `NSObject` observing conveniences including their exception
+  and fault paths, the string casing, word splitting and identifier mangling, the property list value
   coercions, the command-line rendering table, both assertion report layouts,
   the three-way and epsilon comparison helpers, the geometry helpers including
   their negative-size and NaN-aspect behaviour, the text and find-style helpers
@@ -1308,7 +1341,7 @@ runs them:
   and `_DVTWarnFromSwift` from Swift, including the placeholder substitutions
   for nil arguments.
 
-Current status: **57,311 checks + 13 Swift checks, 0 failures**, on either SDK.
+Current status: **57,325 checks + 13 Swift checks, 0 failures**, on either SDK.
 
 The suite contains assertions that fail on purpose (its own
 `ASSERTION FAILURE in …` output is expected); the count of failures is what the
@@ -1325,15 +1358,16 @@ counts come from walking the runtime after loading the binary rather than from
 its symbol table, which names 608 selectors and so includes ones that no longer
 carry an implementation.
 
-This project implements 217 of those 714, chosen for what `IDETools` and the
-recovered usage actually reach. Callers using any of the other 499 will not find
-it here. Two of the 203 are additions rather than reproductions:
+This project implements 220 of those 714, chosen for what `IDETools` and the
+recovered usage actually reach. Callers using any of the other 494 will not find
+it here. Two of the 222 methods it answers with are additions rather than
+reproductions:
 `-[NSArray dvt_maximumObject]` and `-[NSArray dvt_minimumObject]` take no
 argument and order with `compare:`, while Apple's same-named selectors take a
 comparison block. Those block forms, `dvt_minimumObject:` and
 `dvt_maximumObject:`, are reproduced here too, so the local no-argument pair is a
 convenience this port adds alongside the versions it matches rather than a
-substitute for them. The other 215 are reproduced against the binary.
+substitute for them. The other 220 are reproduced against the binary.
 
 One reproduced method falls outside the count because it is not `dvt`-prefixed:
 `-[NSArray rangeAtIndex:]`, from Apple's own `NSArray(DVTRangeArrayAdditions)`
