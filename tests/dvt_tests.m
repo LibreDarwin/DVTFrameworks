@@ -5292,6 +5292,252 @@ static void DVTTestFilterExpression(void)
        would take the test runner down with it. */
 }
 
+/** Builds a patterns for `expression`, shaped like a real deserialized pattern:
+    the coder is the only path that mints a unique ID, and the backreference
+    machinery requires one. */
+static DVTFindPattern *DVTFindPatternWithExpression(NSString *expression)
+{
+    DVTFindPattern *pattern = [DVTFindPattern new];
+    pattern.regularExpression = expression;
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:pattern requiringSecureCoding:YES error:NULL];
+    return [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTFindPattern class] fromData:data error:NULL];
+}
+
+static void DVTTestFindPattern(void)
+{
+    fprintf(stdout, "\n== find patterns ==\n");
+
+    /* A plain string component passes through as its own representation and
+       summary, and its content is just non-emptiness. */
+    DVTExpectEqualObjects([@"lit" dvt_findPatternComponentRepresentation], @"lit",
+                          @"a string is its own representation");
+    DVTExpectEqualObjects([@"lit" dvt_findPatternComponentPropertyListRepresentation], @"lit",
+                          @"a string's property-list representation is itself");
+    DVTExpectEqualObjects([@"lit" dvt_findPatternComponentSummary], @"lit",
+                          @"a string's summary is itself");
+    DVTExpect([@"lit" dvt_findPatternHasContent], @"a non-empty string has content");
+    DVTExpect(![@"" dvt_findPatternHasContent], @"an empty string has no content");
+
+    /* A DVTFindPattern stands in for itself, keeping its negation in the
+       summary the way the find bar renders it. */
+    DVTFindPattern *negated = DVTFindPatternWithExpression(@"");
+    negated.tokenString = @"pat";
+    negated.isNegation = YES;
+    DVTExpectEqualObjects([negated dvt_findPatternComponentSummary], @"[!pat]",
+                          @"a negated pattern appears in brackets");
+    negated.isNegation = NO;
+    DVTExpectEqualObjects([negated dvt_findPatternComponentSummary], @"[pat]",
+                          @"an un-negated pattern stays in brackets");
+    DVTExpect([negated dvt_findPatternHasContent], @"a pattern always has content");
+    DVTExpectEqualObjects([negated dvt_findPatternComponentPropertyListRepresentation],
+                          negated.propertyListRepresentation, @"a pattern matches its own property list");
+
+    /* NSDictionary turns into a pattern through the property-list path. */
+    DVTFindPattern *pattern = DVTFindPatternWithExpression(@"pat");
+    pattern.captureGroupID = 2;
+    id plist = pattern.propertyListRepresentation;
+    DVTExpect([plist isKindOfClass:[NSDictionary class]], @"a pattern serializes to a dictionary");
+    DVTExpectEqualObjects([[NSDictionary dictionaryWithDictionary:plist] dvt_findPatternComponentRepresentation], pattern,
+                          @"a pattern dictionary becomes the same pattern");
+
+    /* Factory variants: an empty list, a single string, and a nil string. */
+    DVTExpect([DVTFindPatternComponents emptyComponents].components.count == 0, @"empty components");
+    DVTExpect([[DVTFindPatternComponents findPatternComponentsWithString:@"x"] components].count == 1,
+              @"string components hold the string");
+    DVTExpect([DVTFindPatternComponents findPatternComponentsWithString:nil].components.count == 0,
+              @"a nil string yields empty components");
+
+    /* The pasteboard path accepts a property-list array and rebuilds patterns. */
+    DVTFindPatternComponents *fromPasteboard =
+        [DVTFindPatternComponents findPatternComponentsFromPasteboardPropertyList:(@[plist, @"lit"])];
+    DVTExpect(fromPasteboard != nil, @"an array of property lists is accepted");
+    if (fromPasteboard != nil) {
+        DVTExpect(fromPasteboard.components.count == 2, @"both components survive the pasteboard");
+        DVTExpect([fromPasteboard.components[0] isEqualToFindPattern:pattern], @"the decoded pattern matches");
+        DVTExpectEqualObjects(fromPasteboard.components[1], @"lit", @"the literal survives");
+    }
+    DVTExpect([DVTFindPatternComponents findPatternComponentsFromPasteboardPropertyList:@"junk"] == nil,
+              @"a non-array property list is rejected");
+    DVTExpect([DVTFindPatternComponents findPatternComponentsFromPasteboardPropertyList:(@[@1])] == nil,
+              @"an unresolvable member rejects the whole list");
+    /* Empty strings carry no content, so they are dropped at initialization. */
+    DVTExpectEqualObjects([DVTFindPatternComponents findPatternComponentsFromPasteboardPropertyList:(@[@"", @"x"])].components,
+                          (@[@"x"]), @"an empty member is dropped");
+
+    /* Escape diagnostics: the printable characters named in the mask get a
+       backslash, and characters outside it pass through untouched. */
+    NSString *escapable = @"$()*+./?[\\]^{|}";
+    NSMutableString *escaped = [NSMutableString string];
+    for (NSUInteger i = 0; i < escapable.length; i++) {
+        [escaped appendFormat:@"\\%C", (unichar)[escapable characterAtIndex:i]];
+    }
+    DVTExpectEqualObjects([[DVTFindPatternComponents findPatternComponentsWithString:escapable] regularExpression],
+                          escaped, @"every escapable character gains a backslash");
+    DVTExpectEqualObjects([[DVTFindPatternComponents findPatternComponentsWithString:@"~"] regularExpression],
+                          @"~", @"a tilde is not escaped");
+    DVTExpectEqualObjects([[DVTFindPatternComponents findPatternComponentsWithString:@"aB3 :z"] regularExpression],
+                          @"aB3 :z", @"letters, digits, spaces, and colons pass through");
+
+    /* The same escaping applies to the replacement expression. */
+    DVTExpectEqualObjects([[DVTFindPatternComponents findPatternComponentsWithString:@"a.b"] replacementExpression],
+                          @"a\\.b", @"replacement expression escapes the literal");
+
+    /* A lone pattern is wrapped as a capture group; convenience derives via
+       escaping and backreferencing on. */
+    DVTFindPattern *base = DVTFindPatternWithExpression(@"x");
+    base.groupID = 1;
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[base])] regularExpression],
+                          @"(x)", @"a grouped pattern is wrapped for the regular expression");
+    DVTExpect((base.captureGroupID == 1), @"the combined pattern claims capture group 1");
+
+    /* A repeated pattern becomes a backreference instead of a fresh group. */
+    DVTFindPattern *first = DVTFindPatternWithExpression(@"(?:x)");
+    first.groupID = 0;
+    DVTFindPattern *second = DVTFindPatternWithExpression(@"y");
+    second.groupID = 1;
+    second.captureGroupID = 1;
+    DVTFindPattern *third = [second copy];
+    DVTFindPatternComponents *repeat =
+        [[DVTFindPatternComponents alloc] initWithComponents:(@[first, second, third])];
+    DVTExpectEqualObjects([repeat regularExpressionEscapingStrings:YES usingBackreferences:YES],
+                          @"(?:x)(y)(?:\\1)", @"the early non-capturing group does not count");
+    DVTExpectEqualObjects([repeat regularExpressionEscapingStrings:YES usingBackreferences:NO],
+                          @"(?:x)(y)(y)", @"without backreferences each pattern gets its own group");
+    DVTExpect((third.captureGroupID == 2), @"a repeated unwrapped pattern takes the next group");
+
+    /* The wrapper counts the pattern's own captures, so "(x)" contributes two
+       and pushes the next group one higher. */
+    DVTFindPattern *twoWide = DVTFindPatternWithExpression(@"(x)");
+    twoWide.groupID = 1;
+    DVTFindPattern *twoNext = DVTFindPatternWithExpression(@"z");
+    twoNext.groupID = 1;
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[twoWide, twoNext])]
+                               regularExpressionEscapingStrings:YES usingBackreferences:YES],
+                          @"((x))(z)", @"a nested capture in the pattern is counted");
+    DVTExpect((twoNext.captureGroupID == 3), @"the second group starts one past the inner captures");
+
+    /* The replacement expression substitutes, and a bare digit right after a
+       substitution gets a separating backslash. */
+    DVTFindPattern *replace = DVTFindPatternWithExpression(@"");
+    replace.replacementString = @"$1";
+    DVTFindPatternComponents *repl = [[DVTFindPatternComponents alloc] initWithComponents:(@[replace, @"2"])];
+    DVTExpectEqualObjects([repl replacementExpression], @"$1\\2", @"a digit after a replacement is separated");
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[replace, @"a"])] replacementExpression],
+                          @"$1a", @"a letter after a replacement is not");
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[replace, @""])] replacementExpression],
+                          @"$1", @"an empty literal keeps the prior state");
+
+    /* Status: literal-only lists are invalid, the placeholder is special, and a
+       real pattern makes the list valid. */
+    DVTExpect([DVTFindPatternComponents emptyComponents].patternStatus == DVTFindPatternStatusInvalid,
+              @"no patterns means invalid");
+    DVTExpect([[DVTFindPatternComponents findPatternComponentsWithString:@"lit"] patternStatus] ==
+                  DVTFindPatternStatusInvalid,
+              @"a literal-only list is still invalid");
+    DVTExpect([[[DVTFindPatternComponents alloc]
+                   initWithComponents:(@[[DVTFindPattern placeholderFindPattern]])] patternStatus] ==
+                  DVTFindPatternStatusPlaceholder,
+              @"the placeholder marks the list");
+    DVTExpect([[[DVTFindPatternComponents alloc] initWithComponents:(@[pattern])] patternStatus] ==
+                  DVTFindPatternStatusValid,
+              @"a real pattern makes the list valid");
+
+    /* hasContent and the string accessors. */
+    DVTExpect(![[DVTFindPatternComponents emptyComponents] hasContent], @"an empty list has no content");
+    DVTExpect([[[DVTFindPatternComponents alloc] initWithComponents:(@[@"", pattern])] hasContent],
+              @"a pattern counts as content even with an empty literal");
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[pattern, @"pre", @"post"])]
+                               stringComponents],
+                          (@[@"pre", @"post"]), @"string components skip patterns");
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[pattern, @"pre", @"post"])]
+                               stringByDeletingPatterns],
+                          @"prepost", @"deleting patterns concatenates the literals");
+
+    /* The summary concatenates component summaries with no separator. */
+    negated.isNegation = YES;
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[@"lit", negated])] summary],
+                          @"lit[!pat]", @"the summary joins component summaries");
+
+    /* The property-list representation maps every component. */
+    DVTExpectEqualObjects([[[DVTFindPatternComponents alloc] initWithComponents:(@[pattern, @"lit"])]
+                               propertyListRepresentation],
+                          (@[pattern.propertyListRepresentation, @"lit"]), @"components serialize member by member");
+
+    /* Immutability and equality: a copy is identity, and equal components hash
+       and compare the same. */
+    DVTFindPatternComponents *comp1 =
+        [[DVTFindPatternComponents alloc] initWithComponents:(@[first, @"a", second])];
+    DVTExpect([comp1 copy] == comp1, @"copyWithZone: returns the same immutable object");
+    DVTExpect(comp1.hash == first.hash * 33 + second.hash, @"hash is first times 33 plus last");
+    DVTFindPatternComponents *comp2 =
+        [[DVTFindPatternComponents alloc] initWithComponents:(@[first, @"a", second])];
+    DVTExpectEqualObjects(comp1, comp2, @"equal components compare equal");
+    DVTExpect([comp1 isEqualToFindPatternComponents:comp2], @"explicit equality agrees");
+    DVTExpect(![comp1 isEqual:@"x"], @"components are never equal to a string");
+
+    /* The placeholder does not survive the coder's unique-ID round trip, but a
+       real unique ID is preserved; repeatedPatternID is dropped by both the
+       coder and copy. */
+    DVTFindPattern *seeded = [DVTFindPattern new];
+    seeded.regularExpression = @"enc";
+    /* The first decode has no ID to preserve, so it mints one. */
+    NSError *coderError = nil;
+    NSData *encodedData = [NSKeyedArchiver archivedDataWithRootObject:seeded requiringSecureCoding:YES error:&coderError];
+    DVTExpect(encodedData != nil && coderError == nil, @"encoding a pattern works");
+    DVTFindPattern *encoded = coderError == nil
+        ? [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTFindPattern class] fromData:encodedData error:&coderError]
+        : nil;
+    DVTExpect(encoded != nil && coderError == nil, @"decoding an id-less pattern works");
+    DVTExpect(encoded.uniqueID != nil, @"decoding an id-less pattern mints a unique ID");
+    /* With no repeatedPatternID set, a round trip is an equality-preserving
+       identity: every compared field survives the coder. */
+    encodedData = [NSKeyedArchiver archivedDataWithRootObject:encoded requiringSecureCoding:YES error:&coderError];
+    DVTExpect(encodedData != nil && coderError == nil, @"re-encoding a pattern works");
+    DVTFindPattern *decoded = coderError == nil
+        ? [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTFindPattern class] fromData:encodedData error:&coderError]
+        : nil;
+    DVTExpect(decoded != nil && coderError == nil, @"re-decoding a pattern works");
+    DVTExpectEqualObjects(decoded, encoded, @"the coder round-trips a pattern");
+    DVTExpectEqualObjects(decoded.uniqueID, encoded.uniqueID, @"the unique ID survives the coder");
+    /* The coder rejects repeatedPatternID, so a re-encoded value is dropped on
+       decode, and equality falls apart. */
+    encoded.repeatedPatternID = 7;
+    encodedData = [NSKeyedArchiver archivedDataWithRootObject:encoded requiringSecureCoding:YES error:&coderError];
+    DVTExpect(encodedData != nil && coderError == nil, @"re-encoding a marked pattern works");
+    DVTFindPattern *markedDecoded = coderError == nil
+        ? [NSKeyedUnarchiver unarchivedObjectOfClass:[DVTFindPattern class] fromData:encodedData error:&coderError]
+        : nil;
+    DVTExpect(markedDecoded != nil && coderError == nil, @"re-decoding a marked pattern works");
+    DVTExpect(![markedDecoded isEqual:encoded], @"a dropped repeatedPatternID breaks equality");
+    DVTExpect(markedDecoded.repeatedPatternID == 0, @"repeatedPatternID is dropped by the coder");
+    DVTExpectEqualObjects(markedDecoded.uniqueID, encoded.uniqueID, @"the unique ID still survives");
+    DVTFindPattern *copied = [encoded copy];
+    DVTExpectEqualObjects(copied.uniqueID, encoded.uniqueID, @"copy keeps the unique ID");
+    DVTExpect(copied.repeatedPatternID == 0, @"repeatedPatternID is dropped by copy");
+
+    /* The NSObject category asserts for everything but the representation,
+       which falls back to nil; the failures are captured, not fatal. */
+    DVTTestCapturingHandler *handler = [DVTTestCapturingHandler new];
+    [DVTAssertionReportHandler setCurrentHandler:handler];
+    NSObject *mystery = [NSObject new];
+    DVTExpect([mystery dvt_findPatternComponentRepresentation] == nil,
+              @"an unknown object has no component representation");
+    DVTExpect(handler.reports.count == 0, @"the representation lookup does not assert");
+    id propertyList = [mystery dvt_findPatternComponentPropertyListRepresentation];
+    DVTExpect(propertyList == nil, @"the unknown property-list representation is nil");
+    DVTExpect(handler.reports.count == 1, @"the unknown property-list representation asserts");
+    id summary = [mystery dvt_findPatternComponentSummary];
+    DVTExpect(summary == nil, @"the unknown summary is nil");
+    DVTExpect(handler.reports.count == 2, @"the unknown summary asserts");
+    DVTExpect(![mystery dvt_findPatternHasContent], @"the unknown component has no content");
+    DVTExpect(handler.reports.count == 3, @"the unknown content check asserts");
+    for (NSString *report in handler.reports) {
+        DVTExpect([report containsString:@"subclass responsibility"], @"the assert names the subclass rule");
+    }
+    DVTExpect(!handler.lastWasWarning, @"subclass responsibility asserts are failures, not warnings");
+    [DVTAssertionReportHandler setCurrentHandler:nil];
+}
+
 /** Builds a table for `text`, poisoning the bytes first so a field the
     initialiser forgets to write shows up as junk rather than as zero. */
 static DVTTextLineOffsetTable DVTTableForText(NSString *text)
@@ -6487,6 +6733,7 @@ int main(int argc, const char *argv[])
         DVTTestGeometry();
         DVTTestTextExtras();
         DVTTestFilterExpression();
+        DVTTestFindPattern();
         DVTTestLineOffsetTableTextExtras();
         DVTTestTextUTF8Correspondence();
         DVTTestStringIndexQueryContext();

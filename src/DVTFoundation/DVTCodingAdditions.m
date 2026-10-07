@@ -1,5 +1,5 @@
 //
-//  DVTFoundation.h
+//  DVTCodingAdditions.m
 //  DVTFoundation
 //
 //  Copyright (C) 2026, LibreDarwin
@@ -23,33 +23,26 @@
 //  AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.
 //
 
-#ifndef DVT_FOUNDATION_H
-#define DVT_FOUNDATION_H
-
-#import "DVTDefines.h"
-#import "DVTAssertions.h"
-#import "DVTArchitecture.h"
-#import "DVTComparison.h"
-#import "DVTDispatch.h"
-#import "DVTGeometryAdditions.h"
-#import "DVTCertificateComparison.h"
-#import "DVTEnvironmentSnapshot.h"
-#import "DVTFoundationErrors.h"
-#import "DVTSimpleSerialization.h"
 #import "DVTCodingAdditions.h"
-#import "DVTDocumentLocation.h"
-#import "DVTDocumentLocationConversion.h"
-#import "DVTTextDocumentLocation.h"
-#import "DVTMachO.h"
-#import "DVTVersion.h"
-#import "DVTTextExtras.h"
-#import "DVTFilterExpression.h"
-#import "DVTFindPattern.h"
-#import "DVTFindPatternComponents.h"
-#import "DVTLineOffsetAwareStringWrapper.h"
-#import "DVTLineOffsetTableTextExtras.h"
-#import "DVTTextUTF8Correspondence.h"
-#import "DVTFoundationClassAdditions.h"
-#import "DVTPropertyListValue.h"
 
-#endif /* DVT_FOUNDATION_H */
+@implementation NSCoder (DVTCodingAdditions)
+- (NSData *_Nullable)dvt_decodeDataForKey:(NSString *)key {
+    return [self decodeObjectOfClass:[NSData class] forKey:key];
+}
+
+- (NSNumber *_Nullable)dvt_decodeNumberForKey:(NSString *)key {
+    return [self decodeObjectOfClass:[NSNumber class] forKey:key];
+}
+
+- (NSString *_Nullable)dvt_decodeStringForKey:(NSString *)key {
+    return [self decodeObjectOfClass:[NSString class] forKey:key];
+}
+
+- (NSURL *_Nullable)dvt_decodeURLForKey:(NSString *)key {
+    return [self decodeObjectOfClass:[NSURL class] forKey:key];
+}
+
+- (NSValue *_Nullable)dvt_decodeValueForKey:(NSString *)key {
+    return [self decodeObjectOfClass:[NSValue class] forKey:key];
+}
+@end

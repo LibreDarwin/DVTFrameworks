@@ -1,5 +1,5 @@
 //
-//  DVTFoundation.h
+//  DVTCodingAdditions.h
 //  DVTFoundation
 //
 //  Copyright (C) 2026, LibreDarwin
@@ -23,33 +23,31 @@
 //  AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.
 //
 
-#ifndef DVT_FOUNDATION_H
-#define DVT_FOUNDATION_H
+#ifndef DVT_CODING_ADDITIONS_H
+#define DVT_CODING_ADDITIONS_H
 
-#import "DVTDefines.h"
-#import "DVTAssertions.h"
-#import "DVTArchitecture.h"
-#import "DVTComparison.h"
-#import "DVTDispatch.h"
-#import "DVTGeometryAdditions.h"
-#import "DVTCertificateComparison.h"
-#import "DVTEnvironmentSnapshot.h"
-#import "DVTFoundationErrors.h"
-#import "DVTSimpleSerialization.h"
-#import "DVTCodingAdditions.h"
-#import "DVTDocumentLocation.h"
-#import "DVTDocumentLocationConversion.h"
-#import "DVTTextDocumentLocation.h"
-#import "DVTMachO.h"
-#import "DVTVersion.h"
-#import "DVTTextExtras.h"
-#import "DVTFilterExpression.h"
-#import "DVTFindPattern.h"
-#import "DVTFindPatternComponents.h"
-#import "DVTLineOffsetAwareStringWrapper.h"
-#import "DVTLineOffsetTableTextExtras.h"
-#import "DVTTextUTF8Correspondence.h"
-#import "DVTFoundationClassAdditions.h"
-#import "DVTPropertyListValue.h"
+#import <Foundation/Foundation.h>
 
-#endif /* DVT_FOUNDATION_H */
+NS_ASSUME_NONNULL_BEGIN
+
+/**
+ Conveniences for secure unarchiving the handful of value and container types
+ DVTFoundation regularly decodes from keyed archives.
+
+ Each method is a thin wrapper around `decodeObjectOfClass:forKey:` restricted
+ to a single class, so `NSKeyedUnarchiver` fails safe under `NSSecureCoding`
+ without callers having to spell out the class at every call site.
+ */
+@interface NSCoder (DVTCodingAdditions)
+
+- (NSData *_Nullable)dvt_decodeDataForKey:(NSString *)key;
+- (NSNumber *_Nullable)dvt_decodeNumberForKey:(NSString *)key;
+- (NSString *_Nullable)dvt_decodeStringForKey:(NSString *)key;
+- (NSURL *_Nullable)dvt_decodeURLForKey:(NSString *)key;
+- (NSValue *_Nullable)dvt_decodeValueForKey:(NSString *)key;
+
+@end
+
+NS_ASSUME_NONNULL_END
+
+#endif /* DVT_CODING_ADDITIONS_H */

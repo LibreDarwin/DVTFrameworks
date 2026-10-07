@@ -976,6 +976,65 @@ characters that matter here (space, tab, newline, backslash, and the
 range-safe two are driven past their ends on purpose, which is where their `nil`
 and fallback behaviour lives.
 
+### Find patterns
+
+`DVTFindPatternComponents` combines the find-bar components (literals and
+`DVTFindPattern` objects) into the regular expression, replacement expression,
+status, and summary the find bar shows and searches with.
+
+The interesting behaviour hides in the pattern bookkeeping:
+
+**A fresh `DVTFindPattern` has no unique ID, and that is by design.** The only
+place an ID is minted is the coder. `[DVTFindPattern new]` leaves `uniqueID`
+nil; `decodeWithCoder:` generates one when the archive holds none (`NSUUID`
+byte string), `copyWithZone:` preserves it, and `_setUniqueID:` copies rather
+than adopting its argument. This is why the backreference machinery — which
+records `uniqueID`s in the array it consults to detect repeats — will raise
+`NSInvalidArgumentException` on a pattern that never went through the coder.
+That is not a defensive gap in the port: Apple's code calls
+`addObject:` unconditionally too, so a coder-free pattern crashes identically.
+The tests build every pattern through the coder to carry a real ID.
+
+**The combined expression wraps each non-repeated pattern in a fresh group,
+counting the pattern's own captures.** The capture scan skips `(?:` groups and
+characters after a leading backslash, so a pattern whose text is `(x)`
+contributes two groups and pushes the next one a group higher. A repeated
+pattern (same `uniqueID`) instead becomes a backreference to its first capture
+group — or, with backreferences off, gets its own new group like anything else.
+Convenience (the `regularExpression` accessor) always enables escaping and
+backreferences.
+
+**The escape mask is a single 64-bit constant, not a character loop.**
+`__characterNeedsEscaping` maps a character through `(char - '$')` and tests
+bit 15 of that shift: the 15 escapable characters `$()*+./?[\]^{|}` sit at
+distinct offsets from `$` inside the 64-bit range, at the mask
+`0x0780000008000CF1`, and `~` and `:` fall outside it. The guard comparing the
+mapped index against `0x3A` (58) short-circuits before the shift, which keeps
+out-of-range characters like controls — whose `(uint32_t)(c - '$')` wraps to a
+huge value — from ever shifting a bit 64 or more out of place. In the escape
+loop, buffered-range start is clamped with `max(0, index − 4)` so `CFString`
+character access always stays in bounds.
+
+**A digit immediately following a substitution in the replacement expression
+gets a separating backslash** (`$1` then `2` yields `$1\2`), so the replacement
+can never be misread as `$12`. A letter or empty literal keeps the prior state.
+
+**`repeatedPatternID` never survives, by design.** Both the coder and
+`copyWithZone:` drop it (every other field, including the unique ID, survives
+both), so a pattern re-read or copied after being marked no longer compares
+equal to its source. `hash`, matching `isEqual:`'s short-circuit, is
+`firstObject.hash * 33 + lastObject.hash` of the components, which is exactly
+the classic Java string hash over a two-component list.
+
+The unhandled-component categories (`NSDictionary`, `NSObject`, and friends)
+follow the `DVTCompareCellHyphenated` convention: everything but the
+representation asserts "subclass responsibility" (captured, non-fatal, in the
+tests), while the representation itself returns nil.
+
+Differential against Apple pins all of the above: the unique-ID minting and
+dropping, every backreference shape, the mask-driven escaping byte for byte,
+and the replacement-expression backslash rules.
+
 ### Line offset tables
 
 `DVTLineOffsetTableTextExtras` maps UTF-16 offsets onto line indices for the
