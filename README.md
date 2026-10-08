@@ -592,6 +592,26 @@ replacement character as usual. Note that this is the opposite of the `U+FFFF`
 behaviour above, which truncates in the extended profile's absence rather than in
 its presence.
 
+### Error builders
+
+Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and
+its `arguments:` twin, are how DVTFoundation builds every reported failure.
+The variadic form holds nothing but a `va_start` forwarder; the twin is the
+body. It renders the message with `-[NSString initWithFormat:arguments:]`, wraps
+that in a one-entry `NSLocalizedDescriptionKey` dictionary, and assembles the
+error with `+errorWithDomain:code:userInfo:` — so `domain` and `errorCode`
+arrive verbatim and `userInfo` never grows a second key. Both are declared as
+`NSError(DVTFoundationClassAdditions)` in
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h`.
+
+These two selectors are the first slice of Apple's `NSError` family under that
+category name to land here; about two dozen more follow separately
+(`dvt_isNoSuchFileError`, `dvt_propertyListDictionary`,
+`dvt_errorFromPropertyList:`, …). They come first because Apple's property list
+selectors — the `__getValue` lookup helper behind `dvt_plistArrayForKey:error:`
+and friends, and the two decoding selectors in the section below — report
+through them, so nothing else can land before them.
+
 ### Property list values
 
 A property list can hold exactly six things: string, data, date, number, array,

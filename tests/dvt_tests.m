@@ -4597,6 +4597,58 @@ static NSString *DVTExpectedWrongTypeMessage(id value, Class plistClass, NSStrin
                                       NSStringFromClass(plistClass), key];
 }
 
+/** Drives the variadic builder through its `arguments:` twin, so the twin is
+    exercised with a real `va_list` and not only through the forwarder. */
+static NSError *DVTErrorWithMessageFormat(NSString *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    NSError *error = [NSError dvt_errorWithDomain:@"DVTTestErrorDomain"
+                                        errorCode:0
+                                    messageFormat:format
+                                        arguments:args];
+    va_end(args);
+    return error;
+}
+
+/** The error builders: domain and code pass through verbatim, and the whole
+    of the user info is the one rendered description. */
+static void DVTTestErrorBuilders(void)
+{
+    fprintf(stdout, "\n== error builders ==\n");
+
+    NSError *error = [NSError dvt_errorWithDomain:@"DVTTestErrorDomain"
+                                        errorCode:7
+                                    messageFormat:@"value %@ at index %d", @"x", 3];
+    DVTExpectEqualObjects(error.domain, @"DVTTestErrorDomain", @"the domain is the caller's");
+    DVTExpect(error.code == 7, @"the code is the caller's");
+    DVTExpectEqualObjects(error.localizedDescription, @"value x at index 3",
+                          @"the format is rendered with the arguments that follow it");
+    DVTExpect(error.userInfo.count == 1, @"the user info carries only a description");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedDescriptionKey], @"value x at index 3",
+                          @"the description is the rendered format under the standard key");
+
+    /* A format with nothing to substitute stands alone. */
+    error = [NSError dvt_errorWithDomain:@"DVTTestErrorDomain" errorCode:0 messageFormat:@"plain"];
+    DVTExpectEqualObjects(error.localizedDescription, @"plain", @"a bare format passes through");
+
+    /* An escaped percent renders, it does not leak. */
+    error = [NSError dvt_errorWithDomain:@"DVTTestErrorDomain" errorCode:-2
+                           messageFormat:@"100%% ready"];
+    DVTExpectEqualObjects(error.localizedDescription, @"100% ready", @"%% renders as a bare percent");
+
+    /* The arguments: twin takes a va_list directly. */
+    error = DVTErrorWithMessageFormat(@"list %@ and %@", @1, @2);
+    DVTExpectEqualObjects(error.domain, @"DVTTestErrorDomain", @"the twin keeps the domain");
+    DVTExpectEqualObjects(error.localizedDescription, @"list 1 and 2",
+                          @"the arguments: form renders its own va_list");
+
+    /* Zero and empty are ordinary values, not sentinels. */
+    error = [NSError dvt_errorWithDomain:@"DVTTestErrorDomain" errorCode:0 messageFormat:@""];
+    DVTExpect(error.code == 0, @"a zero code survives");
+    DVTExpectEqualObjects(error.localizedDescription, @"", @"an empty format yields an empty description");
+}
+
 /** Exercises the coercion family: every receiver answers one question with
     itself and the other five with nil, and the two dictionary lookups are the
     only ones in the family that say why. */
@@ -6870,6 +6922,7 @@ int main(int argc, const char *argv[])
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestObservingConvenience();
+        DVTTestErrorBuilders();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();

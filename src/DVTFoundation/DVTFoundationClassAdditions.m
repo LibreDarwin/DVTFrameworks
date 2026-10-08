@@ -2974,3 +2974,40 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
 }
 
 @end
+
+@implementation NSError (DVTFoundationClassAdditions)
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                   messageFormat:(NSString *)messageFormat, ...
+{
+    /* A pure forwarder: va_start at the first variadic slot, pass the va_list
+       on to the arguments: twin, va_end. The binary's body is those three steps
+       and nothing else -- the rendering lives in the twin. */
+    va_list args;
+    va_start(args, messageFormat);
+    NSError *error = [self dvt_errorWithDomain:domain
+                                     errorCode:errorCode
+                                 messageFormat:messageFormat
+                                     arguments:args];
+    va_end(args);
+    return error;
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                   messageFormat:(NSString *)messageFormat
+                       arguments:(va_list)args
+{
+    /* The whole of userInfo is one entry: the message rendered from the format
+       and the caller's va_list, under NSLocalizedDescriptionKey. The binary
+       spells it out as -initWithFormat:arguments:, a one-entry
+       dictionaryWithObjects:forKeys:count:, and +errorWithDomain:code:userInfo:,
+       in that order. */
+    NSString *message = [[NSString alloc] initWithFormat:messageFormat arguments:args];
+    return [NSError errorWithDomain:domain
+                               code:errorCode
+                           userInfo:@{ NSLocalizedDescriptionKey : message }];
+}
+
+@end

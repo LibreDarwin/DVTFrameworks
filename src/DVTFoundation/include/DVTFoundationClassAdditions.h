@@ -1403,6 +1403,48 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+/**
+  The error builder the reporting selectors build their failures with.
+
+  The `userInfo` dictionary carries exactly one entry -- `NSLocalizedDescription`
+  holding `messageFormat` rendered with the arguments that follow it -- because
+  the binary builds the message with `-initWithFormat:arguments:`, wraps it in a
+  one-entry `dictionaryWithObjects:forKeys:count:` and hands both to
+  `+errorWithDomain:code:userInfo:`. `domain` and `errorCode` pass through
+  untouched. This is the first slice of Apple's two-dozen-selector `NSError`
+  family to land here; the rest follow separately.
+  */
+@interface NSError (DVTFoundationClassAdditions)
+
+/**
+  An `NSError` in `domain` with code `errorCode`, whose `NSLocalizedDescription`
+  is `messageFormat` rendered with the following variadic arguments.
+
+  The variadic form is a forwarder: it starts a `va_list` at `messageFormat` and
+  hands the whole thing to the `arguments:` twin, which is where the rendering
+  actually happens -- the same split as `-initWithFormat:` and
+  `-initWithFormat:arguments:`.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                    messageFormat:(NSString *)messageFormat, ...;
+
+/**
+  The body of the method above: `messageFormat` rendered with an existing
+  `va_list` rather than a fresh `...`.
+
+  @param domain The error's domain, verbatim.
+  @param errorCode The error's code, verbatim.
+  @param messageFormat The format for `-initWithFormat:arguments:`.
+  @param args The arguments for the format; consumed by this call, not copied.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                    messageFormat:(NSString *)messageFormat
+                       arguments:(va_list)args;
+
+@end
+
 /* The older spelling of the two collection tests. Apple keeps them in categories
    of their own, all three named the same thing, and in the binary each one is a
    bare tail call onto the current spelling -- `dvt_areAllObjectsPassingTest:`
