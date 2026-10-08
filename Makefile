@@ -38,7 +38,7 @@ FRAMEWORK_TARGETS := $(foreach fw,$(FRAMEWORKS),$(BUILD_DIR)/$(fw).framework/Ver
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wobjc-missing-property-synthesis
 CFLAGS := -fobjc-arc -fPIC -O2 -g $(WARNINGS)
 CFLAGS += -isysroot $(SDK_PATH) -I$(COMMON_INC_DIR) -DDEBUG=1
-LDFLAGS := -isysroot $(SDK_PATH) -framework Foundation -framework CoreFoundation
+LDFLAGS := -isysroot $(SDK_PATH) -framework Foundation -framework CoreFoundation -lz
 
 TEST_BIN := $(BUILD_DIR)/dvt_tests
 

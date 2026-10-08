@@ -1035,6 +1035,34 @@ Differential against Apple pins all of the above: the unique-ID minting and
 dropping, every backreference shape, the mask-driven escaping byte for byte,
 and the replacement-expression backslash rules.
 
+### Diff hashing
+
+`DVTDiffHashing` turns objects into stable structural hashes for the diff
+token pipeline. `DVTStringGetCRC32Checksum(string, location, length)` computes
+a CRC-32 over the UTF-16 code units in the requested range, so
+`checksum(s,0,s.length)` equals `crc32(dataUsingEncoding:NSUTF16LittleEndian)`.
+Primitive hashers ignore the passed `dataSource`: `NSString` uses the UTF-16
+CRC-32, `NSData` hashes its raw bytes, and `NSNumber` returns
+`unsignedIntegerValue`. `NSArray` folds its members with `+=` in fast
+enumeration order, and `NSDictionary` enumerates keys and values and adds
+`hash(object)+hash(key)` for each pair. Every composite method forwards the
+`dataSource` argument to each member it touches, so callers can record the
+source context through a custom category implementation if they need to.
+
+`DVTDiffFNVHashCache` holds the modified and original FNV-64 hash vectors used
+by the diff store. The two pointer ivars are owned: setting a new pointer
+unconditionally frees the old one, setting `NULL` frees it, `-dealloc` frees
+both, and `-copyWithZone:` deep-copies each non-null buffer by `malloc` and
+`memcpy` into the copy. Both properties are writable on the public interface
+so the cache can be re-initialised from precomputed vectors.
+
+The `_DVTDiffHashingDictionaryDiffHashContext` class is implemented for symbol
+parity (only its initializer is referenced in Apple's binary). Its two ivars are
+`dataSource` (atomic strong) and `diffHash` (plain `NSUInteger`). The current
+dictionary hasher uses a `__block NSUInteger` instead of the context object, so
+this class is not exercised by the public API but keeps the Mach-O layout in
+sync.
+
 ### Line offset tables
 
 `DVTLineOffsetTableTextExtras` maps UTF-16 offsets onto line indices for the

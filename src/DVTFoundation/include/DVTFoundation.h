@@ -46,6 +46,7 @@
 #import "DVTFilterExpression.h"
 #import "DVTFindPattern.h"
 #import "DVTFindPatternComponents.h"
+#import "DVTDiffHashing.h"
 #import "DVTLineOffsetAwareStringWrapper.h"
 #import "DVTLineOffsetTableTextExtras.h"
 #import "DVTTextUTF8Correspondence.h"

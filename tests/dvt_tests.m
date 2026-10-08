@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <libkern/OSByteOrder.h>
+#include <zlib.h>
 
 #import "DVTFoundation.h"
 
@@ -5538,6 +5539,129 @@ static void DVTTestFindPattern(void)
     [DVTAssertionReportHandler setCurrentHandler:nil];
 }
 
+/** Records the data source it is asked to hash for, so the composite hashers'
+    forwarding can be observed. Copying returns the receiver, which is enough for
+    dictionary-literal use. */
+@interface DVTTestDataSourceProbe : NSObject <NSCopying>
+@property (nonatomic, strong) id receivedDataSource;
+@property (nonatomic) NSUInteger hashValue;
+@end
+
+@implementation DVTTestDataSourceProbe
+- (instancetype)copyWithZone:(NSZone *)zone
+{
+    (void)zone;
+    return self;
+}
+- (NSUInteger)dvt_diffHashForDataSource:(nullable id)dataSource
+{
+    self.receivedDataSource = dataSource;
+    return self.hashValue;
+}
+@end
+
+static void DVTTestDiffHashing(void)
+{
+    /* A zero-length range short-circuits before any characters are read, so an
+       empty string hashes to zero. */
+    DVTExpect(DVTStringGetCRC32Checksum(@"", 0, 0) == 0, @"an empty range hashes to zero");
+
+    /* The implementation feeds UTF-16 code units to zlib, so the result matches
+       a CRC-32 computed over the string's little-endian UTF-16 bytes. */
+    NSString *pinned = @"The quick brown fox jumps over the lazy dog";
+    NSData *utf16 = [pinned dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
+    DVTExpect(DVTStringGetCRC32Checksum(pinned, 0, pinned.length) ==
+              (NSUInteger)crc32(0, (const Bytef *)utf16.bytes, (uInt)utf16.length),
+              @"the string CRC-32 matches zlib over its UTF-16 bytes");
+    DVTExpect(DVTStringGetCRC32Checksum(@"foo", 0, 3) == 0xee4fddd9U,
+              @"three ASCII letters pin to a known CRC-32");
+
+    /* A nonzero location hashes only the selected span. */
+    DVTExpect(DVTStringGetCRC32Checksum(@"foo", 1, 2) == 0xa0644f21U,
+              @"a suffix range hashes the suffix alone");
+
+    /* The primitive hashers ignore their data source. */
+    DVTExpect([@"foo" dvt_diffHashForDataSource:@"irrelevant"] == 0xee4fddd9U,
+              @"a string hashes to its CRC-32");
+    DVTExpect([@"" dvt_diffHashForDataSource:nil] == 0, @"an empty string hashes to zero");
+
+    /* NSData hashes raw bytes, not their string interpretation. */
+    NSData *fooBytes = [NSData dataWithBytes:"foo" length:3];
+    DVTExpect([fooBytes dvt_diffHashForDataSource:@"irrelevant"] == 0x8c736521U,
+              @"an NSData hashes its raw bytes");
+    DVTExpect([[[NSData alloc] init] dvt_diffHashForDataSource:nil] == 0, @"empty data hashes to zero");
+
+    /* NSNumber hashes to its unsigned integer value. */
+    DVTExpect([@42 dvt_diffHashForDataSource:@"irrelevant"] == 42, @"a number hashes to its value");
+    DVTExpect([@0 dvt_diffHashForDataSource:nil] == 0, @"zero hashes to zero");
+
+    /* Arrays accumulate their member hashes and dictionaries accumulate their
+       key and value hashes, so order cannot matter. */
+    DVTExpect([@[@1, @"foo"] dvt_diffHashForDataSource:@"irrelevant"] == (NSUInteger)(1 + 0xee4fddd9U),
+              @"an array sums its members");
+    DVTExpect([@[] dvt_diffHashForDataSource:nil] == 0, @"an empty array hashes to zero");
+    DVTExpect([(@{@"a": @"foo"}) dvt_diffHashForDataSource:@"irrelevant"] ==
+              (NSUInteger)0x3d3f4819U + (NSUInteger)0xee4fddd9U,
+              @"a dictionary sums its key and value hashes");
+    DVTExpect([(@{}) dvt_diffHashForDataSource:nil] == 0, @"an empty dictionary hashes to zero");
+
+    /* Composite hashers forward the data source to their members. */
+    DVTTestDataSourceProbe *probe = [[DVTTestDataSourceProbe alloc] init];
+    probe.hashValue = 123;
+    DVTTestDataSourceProbe *keyProbe = [[DVTTestDataSourceProbe alloc] init];
+    keyProbe.hashValue = 456;
+    id probeSource = @"multi-source";
+    DVTExpect([@[probe] dvt_diffHashForDataSource:probeSource] == 123,
+              @"an array forwards the data source");
+    DVTExpect(probe.receivedDataSource == probeSource, @"the array member saw the data source");
+    DVTExpect([(@{keyProbe: probe}) dvt_diffHashForDataSource:probeSource] == 123 + 456,
+              @"a dictionary hashes both key and value");
+    DVTExpect(keyProbe.receivedDataSource == probeSource && probe.receivedDataSource == probeSource,
+              @"both the key and the value saw the data source");
+
+    /* A fresh cache is empty on both hash slots. */
+    DVTDiffFNVHashCache *cache = [[DVTDiffFNVHashCache alloc] init];
+    DVTExpect(cache.modifiedFNVHash == NULL && cache.modifiedFNVHashLength == 0 &&
+              cache.originalFNVHash == NULL && cache.originalFNVHashLength == 0,
+              @"a fresh cache is empty");
+
+    /* The cache stores whatever buffer it is handed. */
+    uint64_t *modified = malloc(3 * sizeof(uint64_t));
+    modified[0] = 7;
+    modified[1] = 8;
+    modified[2] = 9;
+    cache.modifiedFNVHash = modified;
+    cache.modifiedFNVHashLength = 3;
+    DVTExpect(cache.modifiedFNVHash == modified && cache.modifiedFNVHashLength == 3,
+              @"the modified hash is stored");
+
+    /* Copying duplicates the buffers, so the copy owns its own memory. */
+    DVTDiffFNVHashCache *cacheCopy = [cache copy];
+    DVTExpect(cacheCopy.modifiedFNVHash != cache.modifiedFNVHash &&
+              cacheCopy.modifiedFNVHash[0] == 7 && cacheCopy.modifiedFNVHash[1] == 8 &&
+              cacheCopy.modifiedFNVHash[2] == 9 && cacheCopy.modifiedFNVHashLength == 3,
+              @"a copy deep-copies the hash buffer");
+    cacheCopy.modifiedFNVHash[1] = 42;
+    DVTExpect(cache.modifiedFNVHash[1] == 8, @"the copy does not share the source buffer");
+
+    /* Clearing with NULL frees the owned buffer and reports an empty slot. */
+    cache.modifiedFNVHash = NULL;
+    cache.modifiedFNVHashLength = 0;
+    DVTExpect(cache.modifiedFNVHash == NULL && cache.modifiedFNVHashLength == 0,
+              @"clearing the modified hash empties its slot");
+
+    uint64_t *original = malloc(1 * sizeof(uint64_t));
+    original[0] = 0xdeadbeef;
+    cache.originalFNVHash = original;
+    cache.originalFNVHashLength = 1;
+    DVTExpect(cache.originalFNVHash == original && cache.originalFNVHashLength == 1,
+              @"the original hash is stored");
+    cache.originalFNVHash = NULL;
+    cache.originalFNVHashLength = 0;
+    DVTExpect(cache.originalFNVHash == NULL && cache.originalFNVHashLength == 0,
+              @"clearing the original hash empties its slot");
+}
+
 /** Builds a table for `text`, poisoning the bytes first so a field the
     initialiser forgets to write shows up as junk rather than as zero. */
 static DVTTextLineOffsetTable DVTTableForText(NSString *text)
@@ -6734,6 +6858,7 @@ int main(int argc, const char *argv[])
         DVTTestTextExtras();
         DVTTestFilterExpression();
         DVTTestFindPattern();
+        DVTTestDiffHashing();
         DVTTestLineOffsetTableTextExtras();
         DVTTestTextUTF8Correspondence();
         DVTTestStringIndexQueryContext();
