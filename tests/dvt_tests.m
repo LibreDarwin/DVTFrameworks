@@ -4649,9 +4649,46 @@ static void DVTTestErrorBuilders(void)
     DVTExpectEqualObjects(error.localizedDescription, @"", @"an empty format yields an empty description");
 }
 
-/** Exercises the coercion family: every receiver answers one question with
-    itself and the other five with nil, and the two dictionary lookups are the
-    only ones in the family that say why. */
+/**
+ A decoder of every plist value except numbers: enough to exercise both
+ directions the chain can fail in -- this class refusing a member, and the
+ selectors below refusing a key.
+ */
+@interface DVTTestDecodable : NSObject <DVTPropertyListValueDecoding>
+{
+    id _decodedValue;
+}
+- (id)decodedValue;
+@end
+
+@implementation DVTTestDecodable
+
+- (instancetype)initWithPropertyListValue:(id)value error:(NSError **)error
+{
+    if ([value isKindOfClass:[NSNumber class]]) {
+        if (error) {
+            *error = [NSError dvt_errorWithDomain:@"DVTTestDecodableErrorDomain"
+                                         errorCode:1
+                                      messageFormat:@"refused %@", value];
+        }
+        return nil;
+    }
+    if ((self = [super init]) != nil) {
+        _decodedValue = value;
+    }
+    return self;
+}
+
+- (id)decodedValue
+{
+    return _decodedValue;
+}
+
+@end
+
+/** Exercises the property list family: the coercions answer one question with
+    themselves and the other five with nil; the lookups and the missing-key
+    decoder are the ones that say why they failed. */
 static void DVTTestPropertyListValue(void)
 {
     fprintf(stdout, "\n== property list values ==\n");
@@ -4802,6 +4839,110 @@ static void DVTTestPropertyListValue(void)
 
     DVTExpectEqualObjects(DVTPropertyListValueDecodingErrorDomain, @"DVTPropertyListValueDecoding",
                           @"the domain symbol holds Apple's domain string");
+
+    /* The protocol itself: one plist value in, an instance or nil plus an
+       error out. The class decides; nothing here interprets the value. */
+    error = nil;
+    DVTTestDecodable *decoded = [[DVTTestDecodable alloc] initWithPropertyListValue:@"hello" error:&error];
+    DVTExpect(decoded != nil, @"the decoder accepts a string");
+    DVTExpectEqualObjects(decoded.decodedValue, @"hello", @"the instance carries the plist value");
+    DVTExpect(error == nil, @"a successful decode sets no error");
+
+    /* decodeObjectsOfClass: every member decoded, one failure fails all. */
+    error = nil;
+    NSArray *decodedArray = [@[ @"a", @"b" ] dvt_decodeObjectsOfClass:[DVTTestDecodable class]
+                                                                error:&error];
+    DVTExpect(decodedArray.count == 2, @"every member decodes");
+    DVTExpectEqualObjects([decodedArray[0] decodedValue], @"a", @"the first member keeps its value");
+    DVTExpectEqualObjects([decodedArray[1] decodedValue], @"b", @"the second member keeps its value");
+    DVTExpect(error == nil, @"a clean array decodes silently");
+
+    error = nil;
+    DVTExpect([@[ @"ok", @7 ] dvt_decodeObjectsOfClass:[DVTTestDecodable class] error:&error] == nil,
+              @"one undecodable member fails the whole array");
+    DVTExpectEqualObjects(error.localizedDescription, @"refused 7",
+                          @"the failing member's error reaches the caller");
+    DVTExpect([@[ @"ok", @7 ] dvt_decodeObjectsOfClass:[DVTTestDecodable class] error:NULL] == nil,
+              @"decodeObjectsOfClass tolerates a NULL error");
+
+    /* decodePlistObjectForKey: a hit is the decoder's business, a miss is
+       this method's own message -- and it names the class that wanted a
+       value, not the class that would have held one. */
+    NSDictionary *model = @{ @"name" : @"tree", @"count" : @3 };
+    error = nil;
+    DVTTestDecodable *named = [model dvt_decodePlistObjectForKey:@"name"
+                                                         ofClass:[DVTTestDecodable class]
+                                                           error:&error];
+    DVTExpect(named != nil, @"a present value decodes");
+    DVTExpectEqualObjects(named.decodedValue, @"tree", @"the value reaches the decoder");
+    DVTExpect(error == nil, @"a present value sets no error");
+
+    error = sentinel;
+    [model dvt_decodePlistObjectForKey:@"name" ofClass:[DVTTestDecodable class] error:&error];
+    DVTExpect(error == sentinel, @"a successful decode does not touch the caller's error");
+
+    error = nil;
+    DVTExpect([model dvt_decodePlistObjectForKey:@"count"
+                                         ofClass:[DVTTestDecodable class]
+                                           error:&error] == nil,
+              @"a value the decoder refuses fails the call");
+    DVTExpectEqualObjects(error.localizedDescription, @"refused 3",
+                          @"the decoder's own error passes through untouched");
+    DVTExpectEqualObjects(error.domain, @"DVTTestDecodableErrorDomain",
+                          @"the decoder owns its domain");
+
+    error = nil;
+    DVTExpect([model dvt_decodePlistObjectForKey:@"absent"
+                                         ofClass:[DVTTestDecodable class]
+                                           error:&error] == nil,
+              @"a missing key yields nil");
+    DVTExpectEqualObjects(error.localizedDescription,
+                          @"Missing plist representation of DVTTestDecodable for key: absent",
+                          @"a missing key names the class that wanted a value");
+    DVTExpectEqualObjects(error.domain, DVTPropertyListValueDecodingErrorDomain,
+                          @"a miss reports the decoding domain");
+    DVTExpect(error.code == 0, @"a miss uses code 0");
+    DVTExpect(error.userInfo.count == 1, @"the error carries only a description");
+    DVTExpect([model dvt_decodePlistObjectForKey:@"absent"
+                                         ofClass:[DVTTestDecodable class]
+                                           error:NULL] == nil,
+              @"a missing key with a NULL error pointer is a bare nil");
+
+    /* decodePlistArrayForKey: the lookup speaks first, the decoder second. */
+    NSDictionary *list = @{ @"tags" : @[ @"a", @"b" ], @"count" : @7,
+                            @"mix" : @[ @"ok", @7 ] };
+    error = nil;
+    NSArray *tags = [list dvt_decodePlistArrayForKey:@"tags"
+                                      objectsOfClass:[DVTTestDecodable class]
+                                               error:&error];
+    DVTExpect(tags.count == 2, @"a present array decodes member by member");
+    DVTExpectEqualObjects([tags[0] decodedValue], @"a", @"the chained decode keeps member values");
+    DVTExpect(error == nil, @"a clean chained decode is silent");
+
+    error = nil;
+    DVTExpect([list dvt_decodePlistArrayForKey:@"absent"
+                                objectsOfClass:[DVTTestDecodable class]
+                                         error:&error] == nil,
+              @"a missing array key yields nil");
+    DVTExpectEqualObjects(error.localizedDescription, @"Missing NSArray value for key: absent",
+                          @"the lookup's own error survives the chain");
+
+    error = nil;
+    [list dvt_decodePlistArrayForKey:@"count" objectsOfClass:[DVTTestDecodable class] error:&error];
+    DVTExpect([error.localizedDescription containsString:@"instead of NSArray for key: count"],
+              @"the lookup's wrong-type error survives the chain");
+
+    error = nil;
+    DVTExpect([list dvt_decodePlistArrayForKey:@"mix"
+                                objectsOfClass:[DVTTestDecodable class]
+                                         error:&error] == nil,
+              @"one undecodable member fails the chained decode");
+    DVTExpectEqualObjects(error.localizedDescription, @"refused 7",
+                          @"the member's error reaches the caller through the chain");
+    DVTExpect([list dvt_decodePlistArrayForKey:@"mix"
+                                objectsOfClass:[DVTTestDecodable class]
+                                         error:NULL] == nil,
+              @"the chained decode tolerates a NULL error");
 }
 
 #pragma mark - Assertions

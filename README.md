@@ -607,10 +607,10 @@ arrive verbatim and `userInfo` never grows a second key. Both are declared as
 These two selectors are the first slice of Apple's `NSError` family under that
 category name to land here; about two dozen more follow separately
 (`dvt_isNoSuchFileError`, `dvt_propertyListDictionary`,
-`dvt_errorFromPropertyList:`, …). They come first because Apple's property list
-selectors — the `__getValue` lookup helper behind `dvt_plistArrayForKey:error:`
-and friends, and the two decoding selectors in the section below — report
-through them, so nothing else can land before them.
+`dvt_errorFromPropertyList:`, …). They come first because everything in the
+property list section below that has a failure to report builds it with them —
+Apple's `__getValue` lookup helper calls this same builder, and the lookup helper
+and the missing-key decoder reimplemented beneath match it.
 
 ### Property list values
 
@@ -619,7 +619,7 @@ dictionary. The `DVTPropertyListValue` category asks any object which of those i
 already is, and the answer is always either the receiver itself or `nil` — these
 are deliberately **not** conversions, because a coercion that could fail has to
 report how it failed, and these report only "not this type". See
-`src/DVTFoundation/include/DVTPropertyListValue.h` for the 38 methods.
+`src/DVTFoundation/include/DVTPropertyListValue.h` for the 41 methods.
 
 Six selectors — `dvt_plistStringValue`, `dvt_plistDataValue`,
 `dvt_plistNumberValue`, `dvt_plistDateValue`, `dvt_plistArrayValue`,
@@ -635,8 +635,8 @@ details are load-bearing:
   stringifies as `1`, not `YES`, and a double keeps its own precision.
 - Nothing parses. `@"12"` is not a number and empty data is not a string.
 
-The two remaining selectors live on `NSDictionary` and are the family's only
-methods that explain themselves, because a container can fail two different ways:
+Two more selectors live on `NSDictionary` and are the family's only methods
+that explain themselves, because a container can fail two different ways:
 `dvt_plistArrayForKey:error:` and `dvt_plistDictionaryForKey:error:` distinguish a
 missing key (`Missing NSArray value for key: missing`) from a wrong-typed one
 (`Found NSConstantIntegerNumber value (7), instead of NSArray for key: num`). Both
@@ -647,6 +647,22 @@ success. The value in that message is rendered with **`-debugDescription`, not
 here, so empty data prints as `<>` rather than `{length = 0, bytes = 0x}`, and an
 array as `<NSConstantArray 0x…>(\n    1\n)`. Both were confirmed against Apple's
 binary.
+
+The final three are the decoding side. `dvt_decodePlistObjectForKey:ofClass:error:`
+hands a present value straight to the class's own
+`initWithPropertyListValue:error:` and claims exactly one failure for itself — a
+missing key, reported as
+`Missing plist representation of <class> for key: <key>`, where `<class>` is the
+class that *wanted* a value, not the one that would have held it.
+`dvt_decodePlistArrayForKey:objectsOfClass:error:` chains the lookup into
+`-[NSArray dvt_decodeObjectsOfClass:error:]`, so a bad key reports the lookup's
+message and one undecodable member fails the whole array with that member's
+error. DVTFoundation never *implements* `initWithPropertyListValue:error:` — in
+Apple's binary the selector appears only as a call site, so the implementation
+belongs to whatever class needs it — and `DVTPropertyListValue.h` declares the
+call shape the assembly proves as the `DVTPropertyListValueDecoding` protocol.
+That form (a protocol rather than, say, an `NSObject` category) is the one thing
+a method list cannot tell you.
 
 ### Comparison helpers
 

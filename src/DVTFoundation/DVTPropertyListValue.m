@@ -24,6 +24,7 @@
 //
 
 #import "DVTPropertyListValue.h"
+#import "DVTFoundationClassAdditions.h"
 
 NSString *const DVTPropertyListValueDecodingErrorDomain = @"DVTPropertyListValueDecoding";
 
@@ -52,27 +53,21 @@ static id DVTPlistValueForKey(NSDictionary *dictionary, NSString *key, Class pli
     id value = dictionary[key];
     if (value == nil) {
         if (error) {
-            *error = [NSError errorWithDomain:DVTPropertyListValueDecodingErrorDomain
-                                         code:0
-                                     userInfo:@{
-                                         NSLocalizedDescriptionKey :
-                                             [NSString stringWithFormat:@"Missing %@ value for key: %@",
-                                                                        NSStringFromClass(plistClass), key]
-                                     }];
+            *error = [NSError dvt_errorWithDomain:DVTPropertyListValueDecodingErrorDomain
+                                        errorCode:0
+                                    messageFormat:@"Missing %@ value for key: %@",
+                                                  NSStringFromClass(plistClass), key];
         }
         return nil;
     }
 
     if (![value isKindOfClass:plistClass]) {
         if (error) {
-            *error = [NSError errorWithDomain:DVTPropertyListValueDecodingErrorDomain
-                                         code:0
-                                     userInfo:@{
-                                         NSLocalizedDescriptionKey :
-                                             [NSString stringWithFormat:@"Found %@ value (%@), instead of %@ for key: %@",
-                                                                        NSStringFromClass([value class]), [value debugDescription],
-                                                                        NSStringFromClass(plistClass), key]
-                                     }];
+            *error = [NSError dvt_errorWithDomain:DVTPropertyListValueDecodingErrorDomain
+                                        errorCode:0
+                                    messageFormat:@"Found %@ value (%@), instead of %@ for key: %@",
+                                                  NSStringFromClass([value class]), [value debugDescription],
+                                                  NSStringFromClass(plistClass), key];
         }
         return nil;
     }
@@ -255,6 +250,14 @@ static id DVTPlistValueForKey(NSDictionary *dictionary, NSString *key, Class pli
     return nil;
 }
 
+- (NSArray *)dvt_decodeObjectsOfClass:(Class)klass error:(NSError **)error
+{
+    NSError * __autoreleasing *outError = error;
+    return [self dvt_arrayByApplyingBlockStrictly:^id(id value) {
+        return [[klass alloc] initWithPropertyListValue:value error:outError];
+    }];
+}
+
 @end
 
 @implementation NSDictionary (DVTPropertyListValue)
@@ -297,6 +300,38 @@ static id DVTPlistValueForKey(NSDictionary *dictionary, NSString *key, Class pli
 - (NSDictionary *)dvt_plistDictionaryForKey:(NSString *)key error:(NSError **)error
 {
     return DVTPlistValueForKey(self, key, [NSDictionary class], error);
+}
+
+/*
+  The chain in miniature: everything a missing key has to say, the decoder says;
+  everything a present value has to say, only the decoder can. There is no third
+  failure belonging to this method, which is why the `error` pointer is passed
+  along untouched on the present-value path -- Apple's code never writes to it
+  there, and neither do we.
+*/
+- (id)dvt_decodePlistObjectForKey:(NSString *)key
+                          ofClass:(Class)ofClass
+                            error:(NSError **)error
+{
+    id value = self[key];
+    if (value != nil) {
+        return [[ofClass alloc] initWithPropertyListValue:value error:error];
+    }
+
+    if (error) {
+        *error = [NSError dvt_errorWithDomain:DVTPropertyListValueDecodingErrorDomain
+                                    errorCode:0
+                                messageFormat:@"Missing plist representation of %@ for key: %@",
+                                              NSStringFromClass(ofClass), key];
+    }
+    return nil;
+}
+
+- (NSArray *)dvt_decodePlistArrayForKey:(NSString *)key
+                         objectsOfClass:(Class)klass
+                                  error:(NSError **)error
+{
+    return [[self dvt_plistArrayForKey:key error:error] dvt_decodeObjectsOfClass:klass error:error];
 }
 
 @end
