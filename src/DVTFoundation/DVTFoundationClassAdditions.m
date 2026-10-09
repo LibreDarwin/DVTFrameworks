@@ -2276,6 +2276,227 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 
 @implementation NSDictionary (DVTFoundationClassAdditions)
 
+- (id)dvt_firstKeyPassingTest:(BOOL (^)(id key, id obj))test
+{
+    /* Apple delegates to -keysOfEntriesPassingTest:, whose block is handed a stop
+       pointer the predicate form does not take. The adapter stops on the first
+       passing entry, so the resulting set holds at most one key; -anyObject turns
+       it back into the single key or nil. No nil-test guard is emitted here -- the
+       predicate is passed straight through. */
+    return [[self keysOfEntriesPassingTest:^BOOL(id key, id obj, BOOL *stop) {
+        BOOL passes = test(key, obj);
+        if (passes) {
+            *stop = YES;
+        }
+        return passes;
+    }] anyObject];
+}
+
+- (NSDictionary *)dvt_entriesPassingTest:(BOOL (^)(id key, id obj))test
+{
+    /* The passing entries are staged into two stack buffers and the dictionary is
+       built from them in one pass, which keeps the result ordered to match the
+       receiver's enumeration rather than the order of any later hashing. The
+       buffers cover 256 entries; past that the storage is heap allocated. */
+    DVTAssert(test != nil, @"((test)) != nil", nil, @"%@ should not be nil.", @"(test)");
+    __unsafe_unretained id stackKeys[256];
+    __unsafe_unretained id stackObjects[256];
+    __unsafe_unretained id *keys = stackKeys;
+    __unsafe_unretained id *objects = stackObjects;
+    NSUInteger count = self.count;
+    if (count > 256) {
+        keys = (__unsafe_unretained id *)calloc(count, sizeof(id));
+        objects = (__unsafe_unretained id *)calloc(count, sizeof(id));
+    }
+    __block NSUInteger resultCount = 0;
+    [self enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        if (test(key, obj)) {
+            keys[resultCount] = key;
+            objects[resultCount] = obj;
+            resultCount++;
+        }
+    }];
+    NSDictionary *result = [NSDictionary dictionaryWithObjects:objects
+                                                       forKeys:keys
+                                                         count:resultCount];
+    if (keys != stackKeys) {
+        free(keys);
+    }
+    if (objects != stackObjects) {
+        free(objects);
+    }
+    return result;
+}
+
+- (BOOL)dvt_areAllEntriesPassingTest:(BOOL (^)(id key, id obj))test
+{
+    DVTAssert(test != nil, @"((test)) != nil", nil, @"%@ should not be nil.", @"(test)");
+    __block BOOL allPass = YES;
+    [self enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        if (!test(key, obj)) {
+            allPass = NO;
+            *stop = YES;
+        }
+    }];
+    return allPass;
+}
+
+- (BOOL)dvt_areAnyEntriesPassingTest:(BOOL (^)(id key, id obj))test
+{
+    DVTAssert(test != nil, @"((test)) != nil", nil, @"%@ should not be nil.", @"(test)");
+    __block BOOL anyPass = NO;
+    [self enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        if (test(key, obj)) {
+            anyPass = YES;
+            *stop = YES;
+        }
+    }];
+    return anyPass;
+}
+
+- (NSDictionary *)dvt_dictionaryByApplyingBlock:(id (^)(id key, id obj))block
+{
+    /* A block answering nil drops the entry: the staged count is only advanced for
+       a non-nil mapped value, so the result is smaller than the receiver. The key
+       and the mapped value are staged, not the receiver's value. */
+    DVTAssert(block != nil, @"((block)) != nil", nil, @"%@ should not be nil.", @"(block)");
+    __unsafe_unretained id stackKeys[256];
+    __unsafe_unretained id stackResults[256];
+    __unsafe_unretained id *keys = stackKeys;
+    __unsafe_unretained id *results = stackResults;
+    NSUInteger count = self.count;
+    if (count > 256) {
+        keys = (__unsafe_unretained id *)calloc(count, sizeof(id));
+        results = (__unsafe_unretained id *)calloc(count, sizeof(id));
+    }
+    __block NSUInteger resultCount = 0;
+    [self enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        id mapped = block(key, obj);
+        if (mapped != nil) {
+            keys[resultCount] = key;
+            results[resultCount] = mapped;
+            resultCount++;
+        }
+    }];
+    NSDictionary *dictionary = [NSDictionary dictionaryWithObjects:results
+                                                           forKeys:keys
+                                                             count:resultCount];
+    if (keys != stackKeys) {
+        free(keys);
+    }
+    if (results != stackResults) {
+        free(results);
+    }
+    return dictionary;
+}
+
+- (NSDictionary *)dvt_invertedBijectiveDictionary
+{
+    if (self.count != 0) {
+        return [self dvt_invertedBijectiveDictionaryUsingMutableDictionaryClass:[NSMutableDictionary class]];
+    }
+    return [[self class] dictionary];
+}
+
+- (NSDictionary *)dvt_invertedBijectiveDictionaryUsingMutableDictionaryClass:(Class)mutableDictionaryClass
+{
+    NSMutableDictionary *inverted = [[mutableDictionaryClass alloc] initWithCapacity:self.count];
+    for (id key in self) {
+        id value = [self objectForKey:key];
+        if ([inverted objectForKey:value] != nil) {
+            DVTAssert(![inverted objectForKey:value], @"![inverted objectForKey:value]", nil, @"We can only invert bijective dictionaries.");
+        }
+        [inverted setObject:key forKey:value];
+    }
+    return inverted;
+}
+
+- (NSDictionary *)dvt_invertedDictionaryOfKeysGroupedByValue
+{
+    if (self.count != 0) {
+        return [self dvt_invertedDictionaryOfKeysGroupedByValueUsingMutableDictionaryClass:[NSMutableDictionary class]];
+    }
+    return [[self class] dictionary];
+}
+
+- (NSDictionary *)dvt_invertedDictionaryOfKeysGroupedByValueUsingMutableDictionaryClass:(Class)mutableDictionaryClass
+{
+    NSMutableDictionary *inverted = [[mutableDictionaryClass alloc] initWithCapacity:self.count];
+    for (id key in self) {
+        id value = [self objectForKey:key];
+        [inverted dvt_addObject:key toSetForKey:value];
+    }
+    return inverted;
+}
+
+- (BOOL)dvt_validateKey:(id)key
+          expectedClass:(Class)expectedClass
+              allowNil:(BOOL)allowNil
+                 error:(NSError * __autoreleasing *)error
+{
+    /* Success is tracked independently of the local error, because the failure
+       branch still has to assert that an error was produced. A missing value is
+       only a fault when nil is disallowed; a present value is only a fault when it
+       is not an instance of expectedClass. The out-error is written as an
+       autoreleased reference, and only reached when a caller supplied one. */
+    id value = [self objectForKey:key];
+    BOOL success;
+    NSError *___localError = nil;
+    if (value == nil) {
+        if (allowNil) {
+            success = YES;
+        } else {
+            ___localError = [NSError dvt_errorWithMessage:[NSString stringWithFormat:@"Missing required value for %@", key]];
+            success = NO;
+        }
+    } else if ([value isKindOfClass:expectedClass]) {
+        success = YES;
+    } else {
+        ___localError = [NSError dvt_errorWithMessage:[NSString stringWithFormat:@"Value for %@ should be an instance of %@, not %@ (%@)", key, expectedClass, [value class], value]];
+        success = NO;
+    }
+    if (!success) {
+        DVTAssert(___localError, @"___localError", nil, @"A method claimed to have failed but provided no error!");
+    }
+    if (error != NULL) {
+        *error = success ? nil : ___localError;
+    }
+    return success;
+}
+
+- (BOOL)dvt_validateKey:(id)key
+     expectedArrayOfClass:(Class)elementClass
+               allowNil:(BOOL)allowNil
+                  error:(NSError * __autoreleasing *)error
+{
+    /* The key is first validated as an NSArray, then every member is asked whether
+       it is an instance of elementClass. Each path asserts the opposite of the
+       other's local-error state, which is why both asserts are emitted. */
+    NSError *___localError = nil;
+    BOOL success = [self dvt_validateKey:key
+                           expectedClass:[NSArray class]
+                               allowNil:allowNil
+                                  error:&___localError];
+    if (success) {
+        NSArray *value = [self objectForKey:key];
+        if (value != nil && ![value dvt_allObjectsPassTest:^BOOL(id element) {
+            return [element isKindOfClass:elementClass];
+        }]) {
+            ___localError = [NSError dvt_errorWithMessage:[NSString stringWithFormat:@"Value for %@ should be an array of %@, not: %@", key, elementClass, value]];
+            success = NO;
+        }
+    }
+    if (success) {
+        DVTAssert(!___localError, @"!___localError", nil, @"A method claimed to have succeeded but provided an error! (%@)", ___localError);
+    } else {
+        DVTAssert(___localError, @"___localError", nil, @"A method claimed to have failed but provided no error!");
+    }
+    if (error != NULL) {
+        *error = success ? nil : ___localError;
+    }
+    return success;
+}
+
 - (BOOL)dvt_hasContent
 {
     return self.count != 0;
@@ -2284,6 +2505,177 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 - (BOOL)dvt_isNonEmpty
 {
     return self.count != 0;
+}
+
+@end
+
+@implementation NSMutableDictionary (DVTFoundationClassAdditions)
+
+- (void)dvt_setObject:(id)object forKey:(id)key inDictionaryForKey:(id)dictionaryKey
+{
+    NSMutableDictionary *subdictionary = [self objectForKey:dictionaryKey];
+    if (subdictionary != nil) {
+        [subdictionary setObject:object forKey:key];
+    } else {
+        [self setObject:[NSMutableDictionary dictionaryWithObject:object forKey:key]
+                 forKey:dictionaryKey];
+    }
+}
+
+- (void)dvt_addObject:(id)object toArrayForKey:(id)key
+{
+    [[self dvt_objectForKey:key creatingIfNecessaryFromClass:[NSMutableArray class]] addObject:object];
+}
+
+- (void)dvt_addObject:(id)object toArrayForKey:(id)key inDictionaryForKey:(id)dictionaryKey
+{
+    NSMutableDictionary *subdictionary = [self dvt_objectForKey:dictionaryKey creatingIfNecessaryFromClass:[NSMutableDictionary class]];
+    [subdictionary dvt_addObject:object toArrayForKey:key];
+}
+
+- (void)dvt_addObject:(id)object toSetForKey:(id)key
+{
+    [[self dvt_objectForKey:key creatingIfNecessaryFromClass:[NSMutableSet class]] addObject:object];
+}
+
+- (void)dvt_addObject:(id)object toSetForKey:(id)key inDictionaryForKey:(id)dictionaryKey
+{
+    NSMutableDictionary *subdictionary = [self dvt_objectForKey:dictionaryKey creatingIfNecessaryFromClass:[NSMutableDictionary class]];
+    [subdictionary dvt_addObject:object toSetForKey:key];
+}
+
+- (void)dvt_addObject:(id)object toOrderedSetForKey:(id)key
+{
+    [[self dvt_objectForKey:key creatingIfNecessaryFromClass:[NSMutableOrderedSet class]] addObject:object];
+}
+
+- (void)dvt_removeObject:(id)object fromCollectionForKey:(id)key
+{
+    /* The collection empty after the removal is dropped from the receiver, so the
+       key never survives pointing at an empty collection. A missing key is a
+       no-op. */
+    id collection = [self objectForKey:key];
+    if (collection != nil) {
+        [collection removeObject:object];
+        if ([collection count] == 0) {
+            [self removeObjectForKey:key];
+        }
+    }
+}
+
+- (void)dvt_setInteger:(NSInteger)value forKey:(id)key
+{
+    [self setValue:[NSNumber numberWithInteger:value] forKey:key];
+}
+
+- (void)dvt_setBool:(BOOL)value forKey:(id)key
+{
+    [self setValue:[NSNumber numberWithBool:value] forKey:key];
+}
+
+- (void)dvt_setFloat:(float)value forKey:(id)key
+{
+    [self setValue:[NSNumber numberWithFloat:value] forKey:key];
+}
+
+- (void)dvt_setDouble:(double)value forKey:(id)key
+{
+    [self setValue:[NSNumber numberWithDouble:value] forKey:key];
+}
+
+- (void)dvt_recursivelyRemoveAllObjects
+{
+    /* The helper is the same one the mutable array reaches for; it is handed a
+       fresh visited set and the receiver is its first step. */
+    DVTRemoveAllObjectsRecursively(self, [NSMutableSet set]);
+}
+
+- (id)dvt_extractObjectForKey:(id)key
+{
+    id object = [self objectForKey:key];
+    if (object != nil) {
+        [self removeObjectForKey:key];
+    }
+    return object;
+}
+
+- (id)dvt_objectForKey:(id)key creatingIfNecessaryFromClass:(Class)objectClass
+{
+    return [self dvt_objectForKey:key creatingIfNecessaryWithBlock:^id {
+        return [[objectClass alloc] init];
+    }];
+}
+
+- (id)dvt_objectForKey:(id)key creatingIfNecessaryWithBlock:(id (^)(void))block
+{
+    DVTAssert(key != nil, @"((key)) != nil", nil, @"%@ should not be nil.", @"(key)");
+    id object = [self objectForKey:key];
+    if (object == nil) {
+        object = block();
+        [self setObject:object forKey:key];
+    }
+    return object;
+}
+
+- (void)dvt_setObjectIfNonNil:(id)object forKey:(id)key
+{
+    if (object != nil) {
+        [self setObject:object forKey:key];
+    }
+}
+
+- (void)dvt_setObject:(id)object forKeyIfNonNil:(id)key
+{
+    if (key != nil) {
+        [self setObject:object forKey:key];
+    }
+}
+
+- (void)dvt_intersectKeys:(NSArray *)keys
+{
+    NSArray *allKeys = [self allKeys];
+    for (id key in allKeys) {
+        if (![keys containsObject:key]) {
+            [self removeObjectForKey:key];
+        }
+    }
+}
+
+@end
+
+id DVTObjectForKey(CFDictionaryRef dictionary, const void *key)
+{
+    return (__bridge id)CFDictionaryGetValue(dictionary, key);
+}
+
+void DVTSetObjectForKey(CFMutableDictionaryRef dictionary, const void *value, const void *key)
+{
+    CFDictionarySetValue(dictionary, key, value);
+}
+
+void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const void *key)
+{
+    CFDictionaryRemoveValue(dictionary, key);
+}
+
+@implementation NSDictionary (DVTFoundationClassAdditions_MRR)
+
+- (void)dvt_getStrongObjects:(id __unsafe_unretained *)objects andStrongKeys:(id __unsafe_unretained *)keys
+{
+    /* +1 references on every returned object and key: this category exists for
+       callers that need ownership before ARC, so the retains are explicit and no
+       matching release is emitted. Keys are retained before objects, matching the
+       two parallel walks. */
+    DVTAssert(keys != NULL, @"keys != ((void*)0)", nil, @"");
+    DVTAssert(objects != NULL, @"objects != ((void*)0)", nil, @"");
+    NSUInteger count = self.count;
+    if (count != 0) {
+        [self getObjects:objects andKeys:keys count:count];
+        for (NSUInteger index = 0; index < count; index++) {
+            keys[index] = (__bridge id)CFBridgingRetain(keys[index]);
+            objects[index] = (__bridge id)CFBridgingRetain(objects[index]);
+        }
+    }
 }
 
 @end
@@ -3007,6 +3399,16 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
     NSString *message = [[NSString alloc] initWithFormat:messageFormat arguments:args];
     return [NSError errorWithDomain:domain
                                code:errorCode
+                           userInfo:@{ NSLocalizedDescriptionKey : message }];
+}
+
++ (NSError *)dvt_errorWithMessage:(NSString *)message
+{
+    /* A fixed private domain and code, with the message as the sole entry under
+       NSLocalizedDescriptionKey -- the same one-entry shape the twin builds, just
+       with the domain hardcoded rather than supplied. */
+    return [NSError errorWithDomain:@"com.apple.DVTFoundation"
+                               code:-1
                            userInfo:@{ NSLocalizedDescriptionKey : message }];
 }
 

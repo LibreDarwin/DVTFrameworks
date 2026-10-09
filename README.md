@@ -664,6 +664,65 @@ call shape the assembly proves as the `DVTPropertyListValueDecoding` protocol.
 That form (a protocol rather than, say, an `NSObject` category) is the one thing
 a method list cannot tell you.
 
+### Dictionary additions
+
+A dictionary toolbox in three parts, all in
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` and implemented in
+`src/DVTFoundation/DVTFoundationClassAdditions.m`: the read-only helpers on
+`NSDictionary`, the mutating helpers on `NSMutableDictionary`, and the three C
+entry points and the manual-retain pair Apple keeps beside them.
+
+The `NSDictionary` half is eleven selectors. Five walk or rebuild entries:
+`dvt_firstKeyPassingTest:`, `dvt_entriesPassingTest:`,
+`dvt_areAllEntriesPassingTest:`, `dvt_areAnyEntriesPassingTest:` and
+`dvt_dictionaryByApplyingBlock:`. `dvt_firstKeyPassingTest:` is exactly
+`[[self keysOfEntriesPassingTest:…] anyObject]` and is the one member of the
+family that does **not** assert on a `nil` block — every `nil` check for it would
+have to live in Apple's own `keysOfEntriesPassingTest:`. The other four assert,
+and `dvt_entriesPassingTest:` and `dvt_dictionaryByApplyingBlock:` share the same
+two-buffer build: a stack pair for counts up to 256, a `calloc` pair beyond,
+handed to `+dictionaryWithObjects:forKeys:count:`, so surviving keys arrive in
+enumeration order. An empty receiver is `YES` for `dvt_areAllEntriesPassingTest:`
+and `NO` for `dvt_areAnyEntriesPassingTest:` without calling the block, and a
+`nil` answer from the mapping block drops that key rather than faulting.
+
+The other six invert or validate. `dvt_invertedBijectiveDictionary` exchanges
+keys and values and **asserts on a repeated value**, because two keys would have
+to land on one; `…UsingMutableDictionaryClass:` runs the inversion into an
+instance of the given class, so a subclass that orders or interns its keys keeps
+doing so, and an empty receiver answers an empty dictionary of its *own* class,
+not a mutable one. `dvt_invertedDictionaryOfKeysGroupedByValue` tolerates repeats
+instead, collecting each value's keys into an `NSMutableSet` seeded through
+`dvt_addObject:toSetForKey:`. The two `dvt_validateKey:…` selectors are the
+family's only members that report *how* they failed: a missing value is an error
+unless `allowNil`, a present value of the wrong class always is, and the message
+names the offending value and its class. They build the failure with
+`+[NSError dvt_errorWithMessage:]` (see **Error builders** above), write `error`
+exactly when they answer `NO`, and assert if a built error ever contradicts that.
+
+The `NSMutableDictionary` half is the typed setters (`dvt_setInteger:forKey:`,
+`dvt_setBool:forKey:`, `dvt_setFloat:forKey:`, `dvt_setDouble:forKey:`) — each
+wraps its scalar in the matching `NSNumber` and goes through KVC's
+`setValue:forKey:`, not `setObject:forKey:`; the lazy creators
+`dvt_objectForKey:creatingIfNecessaryFromClass:` and
+`…creatingIfNecessaryWithBlock:`; the nil-tolerant setters and the nested
+`dvt_setObject:forKey:inDictionaryForKey:`, `dvt_addObject:toArrayForKey:`,
+`…toSetForKey:`, `…toOrderedSetForKey:` and `dvt_removeObject:fromCollectionForKey:`
+appenders that create the inner collection on first use. `dvt_intersectKeys:`
+takes an `NSArray` and drops every key not in it, and
+`dvt_recursivelyRemoveAllObjects` empties the receiver and everything reachable
+through it by delegating to the shared `DVTRemoveAllObjectsRecursively` helper
+that the `NSMutableArray` and `NSMutableSet` versions already use. A `nil` key or
+`nil` block faults through `DVTAssert` rather than being guarded.
+
+The last two pieces exist because a C caller and a manual-retain caller each need
+a way the categories do not offer. `DVTObjectForKey`, `DVTSetObjectForKey` and
+`DVTRemoveObjectForKey` are one-line tail calls onto `CFDictionary*` with no DVT
+logic between; `-dvt_getStrongObjects:andStrongKeys:` fills two caller-supplied
+buffers through `-getObjects:andKeys:count:` and retains every entry, so it is the
+one place the categories hand back `+1` references and the only method the
+compiler cannot reason about under ARC.
+
 ### Comparison helpers
 
 Six exported C functions in `src/DVTFoundation/DVTComparison.m`, declared in

@@ -29,6 +29,8 @@
 #import <Foundation/NSOrderedSet.h>
 #import <Foundation/NSIndexSet.h>
 
+#import "DVTDefines.h"
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface NSArray (DVTFoundationClassAdditions)
@@ -1081,6 +1083,260 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) BOOL dvt_hasContent;
 @property (nonatomic, readonly) BOOL dvt_isNonEmpty;
 
+/**
+ The first key whose entry satisfies `test`, in the order `-keysOfEntriesPassingTest:`
+ would hand keys back, or `nil` when none does.
+
+ The predicate sees each entry as its key and its object. `test` may not be `nil`:
+ the binary asserts on it rather than guarding, so a `nil` block faults on a non-empty
+ receiver. This is the one member of the family that does not assert -- its body is
+ exactly `[[self keysOfEntriesPassingTest:...] anyObject]`, so any `nil` check would
+ have to live in `keysOfEntriesPassingTest:`.
+
+ @param test Called with each entry's key and object; returns whether it passes.
+ */
+- (nullable id)dvt_firstKeyPassingTest:(BOOL (^)(id key, id obj))test;
+
+/**
+ A dictionary holding just the entries of the receiver that satisfy `test`.
+
+ Entries are gathered into a pair of buffers -- a stack pair for counts up to 256, a
+ `calloc` pair beyond -- and handed to `+dictionaryWithObjects:forKeys:count:`, so the
+ order `test` sees is enumeration order rather than any insertion order. A `nil` `test`
+ asserts, as on the rest of the family.
+
+ @param test Called with each entry's key and object; returns whether it is kept.
+ */
+- (NSDictionary *)dvt_entriesPassingTest:(BOOL (^)(id key, id obj))test;
+
+/**
+ `YES` when every entry of the receiver satisfies `test`, stopping at the first that
+ does not.
+
+ An empty receiver is `YES` without ever calling `test`. A `nil` `test` asserts.
+ */
+- (BOOL)dvt_areAllEntriesPassingTest:(BOOL (^)(id key, id obj))test;
+
+/**
+ `YES` when some entry of the receiver satisfies `test`, stopping at the first that
+ does.
+
+ An empty receiver is `NO` without ever calling `test`. A `nil` `test` asserts.
+ */
+- (BOOL)dvt_areAnyEntriesPassingTest:(BOOL (^)(id key, id obj))test;
+
+/**
+ A dictionary built by mapping every entry of the receiver through `block`.
+
+ `block` answers the object for an entry's key; a `nil` answer drops that key from the
+ result rather than faulting. The build is the same two-buffer scheme as
+ `dvt_entriesPassingTest:`, so the surviving keys arrive in enumeration order. A `nil`
+ `block` asserts.
+ */
+- (NSDictionary *)dvt_dictionaryByApplyingBlock:(id (^)(id key, id obj))block;
+
+/**
+ The receiver with its values and keys exchanged, which only makes sense when the
+ receiver is bijective.
+
+ Every value must be distinct; a repeated value asserts, because two keys would need
+ to land on one key. An empty receiver answers an empty dictionary of the receiver's
+ own class rather than a mutable one.
+ */
+@property (nonatomic, readonly) NSDictionary *dvt_invertedBijectiveDictionary;
+
+/**
+ `dvt_invertedBijectiveDictionary` built into an instance of the given mutable
+ dictionary class rather than the default.
+
+ The class is used as the backing store while the inversion runs, so a subclass that
+ orders or interns its keys keeps doing so. The bijection requirement is unchanged.
+ */
+- (NSDictionary *)dvt_invertedBijectiveDictionaryUsingMutableDictionaryClass:(Class)mutableDictionaryClass;
+
+/**
+ The receiver with values and keys exchanged, keeping every key that shares a value.
+
+ Unlike the bijective inversion this tolerates repeated values: each distinct value
+ collects the keys that map to it, in enumeration order. An empty receiver answers an
+ empty dictionary of the receiver's own class.
+ */
+@property (nonatomic, readonly) NSDictionary *dvt_invertedDictionaryOfKeysGroupedByValue;
+
+/**
+ `dvt_invertedDictionaryOfKeysGroupedByValue` built into an instance of the given
+ mutable dictionary class rather than the default.
+
+ The keys grouped under one value live in an `NSMutableSet` seeded through
+ `dvt_addObject:toSetForKey:`.
+ */
+- (NSDictionary *)dvt_invertedDictionaryOfKeysGroupedByValueUsingMutableDictionaryClass:(Class)mutableDictionaryClass;
+
+/**
+ Checks that `self[key]` is present (unless `allowNil`) and an instance of
+ `expectedClass`, reporting the first of those that fails through `error`.
+
+ A missing value is an error unless `allowNil`, in which case the key simply need not
+ be there. A present value of the wrong class is always an error, with the offending
+ value and its class named in the message. On success `error` is set to `nil` when the
+ caller asked for it; on failure it is set to the failure the method built. The method
+ always writes an error exactly when it returns `NO`, and asserts if a built error
+ contradicts that.
+
+ @param key The key to validate.
+ @param expectedClass The class `self[key]` must be, when present.
+ @param allowNil Whether a missing value is acceptable.
+ @param error On return, the failure when the answer is `NO`; may be `NULL`.
+ @return `YES` when the entry passed, `NO` with `error` set otherwise.
+ */
+- (BOOL)dvt_validateKey:(id)key
+          expectedClass:(Class)expectedClass
+              allowNil:(BOOL)allowNil
+                 error:(NSError * __autoreleasing _Nullable * _Nullable)error;
+
+/**
+ Checks that `self[key]` is present (unless `allowNil`) and an array whose every member
+ is an instance of `elementClass`.
+
+ The array check is the base `dvt_validateKey:expectedClass:allowNil:error:` against
+ `NSArray` followed by `dvt_allObjectsPassTest:` over the members; the message names
+ the whole array rather than the first offending member. The `error` contract matches
+ the base check.
+
+ @param key The key to validate.
+ @param elementClass The class every member of the array must be.
+ @param allowNil Whether a missing value is acceptable.
+ @param error On return, the failure when the answer is `NO`; may be `NULL`.
+ */
+- (BOOL)dvt_validateKey:(id)key
+    expectedArrayOfClass:(Class)elementClass
+               allowNil:(BOOL)allowNil
+                  error:(NSError * __autoreleasing _Nullable * _Nullable)error;
+
+@end
+
+/*
+ The mutable half of the dictionary additions: the setters that read like a typed
+ accessor, the lazy creators, and the two edits that reach into a nested collection.
+
+ Every setter for a scalar wraps it in the matching `NSNumber` and goes through KVC's
+ `setValue:forKey:`, not `setObject:forKey:`, so the value is retained the same way
+ either way but the call is visible in the binary. The creators build the missing
+ value with `-init` (or with a block) and store it, and the collection appenders create
+ the `NSMutableArray`, `NSMutableSet` or `NSMutableOrderedSet` on first use.
+ */
+@interface NSMutableDictionary (DVTFoundationClassAdditions)
+
+/**
+ Stores `object` at `key` within the sub-dictionary at `dictionaryKey`, creating that
+ sub-dictionary from `NSMutableDictionary` when it is not there.
+ */
+- (void)dvt_setObject:(id)object forKey:(id)key inDictionaryForKey:(id)dictionaryKey;
+
+/** Appends `object` to the `NSMutableArray` at `key`, creating the array if needed. */
+- (void)dvt_addObject:(id)object toArrayForKey:(id)key;
+
+/**
+ Appends `object` to the `NSMutableArray` at `key` of the sub-dictionary at
+ `dictionaryKey`, creating both the dictionary and the array as needed.
+ */
+- (void)dvt_addObject:(id)object toArrayForKey:(id)key inDictionaryForKey:(id)dictionaryKey;
+
+/** Adds `object` to the `NSMutableSet` at `key`, creating the set if needed. */
+- (void)dvt_addObject:(id)object toSetForKey:(id)key;
+
+/**
+ Adds `object` to the `NSMutableSet` at `key` of the sub-dictionary at `dictionaryKey`,
+ creating both the dictionary and the set as needed.
+ */
+- (void)dvt_addObject:(id)object toSetForKey:(id)key inDictionaryForKey:(id)dictionaryKey;
+
+/**
+ Appends `object` to the `NSMutableOrderedSet` at `key`, creating the ordered set if
+ needed.
+ */
+- (void)dvt_addObject:(id)object toOrderedSetForKey:(id)key;
+
+/**
+ Removes `object` from the collection at `key`, and removes `key` itself once the
+ collection is left empty.
+
+ The empty key is dropped so a dictionary being pruned does not keep a husk around; a
+ key that is not present, or a collection that still holds something, is left alone.
+ */
+- (void)dvt_removeObject:(id)object fromCollectionForKey:(id)key;
+
+/** Stores `value` as an `NSNumber` under `key`. */
+- (void)dvt_setInteger:(NSInteger)value forKey:(id)key;
+/** Stores `value` as an `NSNumber` under `key`. */
+- (void)dvt_setBool:(BOOL)value forKey:(id)key;
+/** Stores `value` as an `NSNumber` under `key`. */
+- (void)dvt_setFloat:(float)value forKey:(id)key;
+/** Stores `value` as an `NSNumber` under `key`. */
+- (void)dvt_setDouble:(double)value forKey:(id)key;
+
+/** Empties the receiver and every mutable array, dictionary and set reachable from it. */
+- (void)dvt_recursivelyRemoveAllObjects;
+
+/**
+ Removes and returns the object at `key`, or `nil` when there is none.
+
+ Unlike `dvt_extractObjectForKey:` Apple's own `-objectForKey:` does not remove, so a
+ missing key is distinguishable from a present one without a separate lookup.
+ */
+- (nullable id)dvt_extractObjectForKey:(id)key;
+
+/**
+ The object at `key`, building it with `-init` on the given class and storing it when
+ it is not already there.
+ */
+- (id)dvt_objectForKey:(id)key creatingIfNecessaryFromClass:(Class)cls;
+
+/**
+ The object at `key`, building it with `block` and storing it when it is not already
+ there.
+
+ `block` runs only on the miss; a `nil` `key` asserts.
+ */
+- (id)dvt_objectForKey:(id)key creatingIfNecessaryWithBlock:(id (^)(void))block;
+
+/** Stores `object` at `key` only when `object` is not `nil`. */
+- (void)dvt_setObjectIfNonNil:(id)object forKey:(id)key;
+
+/** Stores `object` at `key` only when `key` is not `nil`. */
+- (void)dvt_setObject:(id)object forKeyIfNonNil:(id)key;
+
+/** Removes every key of the receiver that is not a member of `keys`. */
+- (void)dvt_intersectKeys:(NSArray *)keys;
+
+@end
+
+/*
+ The three C entry points Apple keeps beside the categories, so a C caller can reach
+ the same storage without an Objective-C message send. Each is a one-line tail call
+ onto CoreFoundation -- there is no DVT logic between the call and `CFDictionary*`.
+ */
+DVT_EXTERN id DVTObjectForKey(CFDictionaryRef dictionary, const void *key);
+DVT_EXTERN void DVTSetObjectForKey(CFMutableDictionaryRef dictionary, const void *value, const void *key);
+DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const void *key);
+
+/*
+ The manual-retain half of the family. These answer raw pointers that the caller owns,
+ so they are the one place the categories hand back `+1` references and the only ones
+ the compiler cannot reason about under ARC. Both arrays are filled through
+ `-getObjects:andKeys:count:` and then each entry is retained; both must be non-`NULL`.
+ */
+@interface NSDictionary (DVTFoundationClassAdditions_MRR)
+
+/**
+ Fills `objects` and `keys` with the receiver's entries, retaining every entry so the
+ caller owns a `+1` reference to each.
+
+ The two arrays must each hold at least `self.count` pointers, and neither may be
+ `NULL`.
+ */
+- (void)dvt_getStrongObjects:(id _Nonnull __unsafe_unretained [_Nonnull])objects andStrongKeys:(id _Nonnull __unsafe_unretained [_Nonnull])keys;
+
 @end
 
 /** `YES` when the receiver is longer than zero characters. */
@@ -1442,6 +1698,16 @@ NS_ASSUME_NONNULL_BEGIN
                        errorCode:(NSInteger)errorCode
                     messageFormat:(NSString *)messageFormat
                        arguments:(va_list)args;
+
+/**
+ An `NSError` whose `NSLocalizedDescription` is `message`, in the domain and with the
+ code the binary picks out for it.
+
+ The validators and the other reporting call sites build on this when there is no
+ domain or code to thread through; the domain is the literal `com.apple.DVTFoundation`
+ and the code is `-1`, both as written in the binary rather than through a constant.
+ */
++ (NSError *)dvt_errorWithMessage:(NSString *)message;
 
 @end
 

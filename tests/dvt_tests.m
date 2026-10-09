@@ -4378,6 +4378,334 @@ static void DVTTestClassAdditions(void)
     }
 }
 
+#pragma mark - Dictionary additions
+
+/** The dictionary pair of additions: the read-only operations on NSDictionary,
+    the mutable accessors on NSMutableDictionary, the three C tail calls, and the
+    manual-retain walk. Every case is an observation of the Apple oracle. */
+static void DVTTestDictionaryAdditions(void)
+{
+    fprintf(stdout, "\n== dictionary additions ==\n");
+
+    /* -dvt_firstKeyPassingTest: answers the first key whose entry passes, and nil
+       when none does. It is the one member with no nil-test guard: the predicate
+       is handed straight to -keysOfEntriesPassingTest:. */
+    {
+        NSDictionary *dictionary = @{@"one": @1, @"two": @2, @"three": @3};
+        DVTExpectEqualObjects([dictionary dvt_firstKeyPassingTest:^BOOL(id key, id obj) {
+            return [obj integerValue] == 2;
+        }], @"two", @"dvt_firstKeyPassingTest: finds the key of the matching entry");
+        DVTExpect([dictionary dvt_firstKeyPassingTest:^BOOL(id key, id obj) {
+            return NO;
+        }] == nil, @"dvt_firstKeyPassingTest: answers nil when nothing matches");
+        DVTExpect([@{} dvt_firstKeyPassingTest:^BOOL(id key, id obj) {
+            return YES;
+        }] == nil, @"dvt_firstKeyPassingTest: answers nil for an empty receiver");
+    }
+
+    /* -dvt_entriesPassingTest: keeps just the entries that pass, so a predicate
+       that always accepts reproduces the receiver and one that always rejects
+       gives the empty dictionary. */
+    {
+        NSDictionary *dictionary = @{@"one": @1, @"two": @2, @"three": @3, @"four": @4};
+        DVTExpectEqualObjects([dictionary dvt_entriesPassingTest:^BOOL(id key, id obj) {
+            return [obj integerValue] % 2 == 0;
+        }], (@{@"two": @2, @"four": @4}), @"dvt_entriesPassingTest: keeps the entries that pass");
+        DVTExpect([[dictionary dvt_entriesPassingTest:^BOOL(id key, id obj) {
+            return YES;
+        }] isEqualToDictionary:dictionary],
+            @"dvt_entriesPassingTest: keeping everything reproduces the receiver");
+        DVTExpectEqualObjects([dictionary dvt_entriesPassingTest:^BOOL(id key, id obj) {
+            return NO;
+        }], @{}, @"dvt_entriesPassingTest: keeping nothing is an empty dictionary");
+    }
+
+    /* The all- and any-forms answer the empty receiver's identity without ever
+       calling the predicate. */
+    {
+        NSDictionary *dictionary = @{@"one": @1, @"two": @2};
+        __block NSUInteger calls = 0;
+        BOOL all = [dictionary dvt_areAllEntriesPassingTest:^BOOL(id key, id obj) {
+            calls++;
+            return [obj integerValue] > 0;
+        }];
+        DVTExpect(all, @"dvt_areAllEntriesPassingTest: is YES when every entry passes");
+        DVTExpect(calls == 2, @"dvt_areAllEntriesPassingTest: visited every entry");
+        DVTExpect([dictionary dvt_areAnyEntriesPassingTest:^BOOL(id key, id obj) {
+            return [obj integerValue] == 2;
+        }], @"dvt_areAnyEntriesPassingTest: is YES when some entry passes");
+        DVTExpect(![dictionary dvt_areAnyEntriesPassingTest:^BOOL(id key, id obj) {
+            return [obj integerValue] > 100;
+        }], @"dvt_areAnyEntriesPassingTest: is NO when none passes");
+        DVTExpect([@{} dvt_areAllEntriesPassingTest:^BOOL(id key, id obj) {
+            return NO;
+        }], @"dvt_areAllEntriesPassingTest: is YES for an empty receiver");
+        DVTExpect(![@{} dvt_areAnyEntriesPassingTest:^BOOL(id key, id obj) {
+            return YES;
+        }], @"dvt_areAnyEntriesPassingTest: is NO for an empty receiver");
+    }
+
+    /* -dvt_dictionaryByApplyingBlock: stages the mapped value, and a nil answer
+       drops the entry rather than faulting. */
+    {
+        NSDictionary *dictionary = @{@"a": @1, @"b": @2, @"c": @3};
+        DVTExpectEqualObjects([dictionary dvt_dictionaryByApplyingBlock:^id(id key, id obj) {
+            return [obj integerValue] == 2 ? nil : [NSString stringWithFormat:@"<%@>", key];
+        }], (@{@"a": @"<a>", @"c": @"<c>"}),
+            @"dvt_dictionaryByApplyingBlock: maps each value and drops a nil answer");
+    }
+
+    /* The two inversions: the bijective one exchanges keys and values, the grouped
+       one collects the keys that share a value. An empty receiver answers through
+       its own class rather than a mutable dictionary. */
+    {
+        NSDictionary *dictionary = @{@"a": @1, @"b": @2};
+        DVTExpectEqualObjects([dictionary dvt_invertedBijectiveDictionary], (@{@1: @"a", @2: @"b"}),
+                              @"dvt_invertedBijectiveDictionary exchanges keys and values");
+        DVTExpectEqualObjects([dictionary dvt_invertedBijectiveDictionaryUsingMutableDictionaryClass:[NSMutableDictionary class]],
+                              (@{@1: @"a", @2: @"b"}),
+                              @"dvt_invertedBijectiveDictionaryUsingMutableDictionaryClass: inverts");
+        DVTExpectEqualObjects([@{} dvt_invertedBijectiveDictionary], @{},
+                              @"dvt_invertedBijectiveDictionary of an empty receiver is empty");
+    }
+    {
+        NSDictionary *dictionary = @{@"one": @1, @"two": @2, @"three": @1};
+        NSDictionary *grouped = [dictionary dvt_invertedDictionaryOfKeysGroupedByValue];
+        DVTExpectEqualObjects(grouped[@1], ([NSSet setWithObjects:@"one", @"three", nil]),
+                              @"dvt_invertedDictionaryOfKeysGroupedByValue groups the shared value's keys");
+        DVTExpectEqualObjects(grouped[@2], [NSSet setWithObject:@"two"],
+                              @"dvt_invertedDictionaryOfKeysGroupedByValue groups the single value's key");
+        DVTExpect([[@{} dvt_invertedDictionaryOfKeysGroupedByValue] isEqualToDictionary:@{}],
+                  @"dvt_invertedDictionaryOfKeysGroupedByValue of an empty receiver is empty");
+    }
+
+    /* -dvt_validateKey:expectedClass:allowNil:error: writes an error exactly when
+       it answers NO, names the missing key or the offending class, and leaves the
+       caller's out-error untouched on success. */
+    {
+        NSDictionary *dictionary = @{@"title": @"Alpha", @"count": @2};
+        NSError *error = nil;
+
+        DVTExpect([dictionary dvt_validateKey:@"title" expectedClass:[NSString class] allowNil:NO error:&error],
+                  @"dvt_validateKey: accepts a present value of the expected class");
+        DVTExpect(error == nil, @"dvt_validateKey: leaves the error nil on success");
+
+        DVTExpect(![dictionary dvt_validateKey:@"missing" expectedClass:[NSString class] allowNil:NO error:&error],
+                  @"dvt_validateKey: rejects a missing value when nil is disallowed");
+        DVTExpectEqualObjects(error.localizedDescription, @"Missing required value for missing",
+                              @"dvt_validateKey: names the missing key");
+        DVTExpectEqualObjects(error.domain, @"com.apple.DVTFoundation",
+                              @"dvt_validateKey: uses the fixed private domain");
+        DVTExpect(error.code == -1, @"dvt_validateKey: uses the fixed code");
+
+        DVTExpect([dictionary dvt_validateKey:@"missing" expectedClass:[NSString class] allowNil:YES error:&error],
+                  @"dvt_validateKey: accepts a missing value when nil is allowed");
+        DVTExpect(error == nil, @"dvt_validateKey: the nil-allowed miss leaves the error nil");
+
+        DVTExpect(![dictionary dvt_validateKey:@"count" expectedClass:[NSString class] allowNil:NO error:&error],
+                  @"dvt_validateKey: rejects a present value of the wrong class");
+        NSString *expected = [NSString stringWithFormat:@"Value for count should be an instance of %@, not %@ (%@)",
+                                                        [NSString class], [@2 class], @2];
+        DVTExpectEqualObjects(error.localizedDescription, expected,
+                              @"dvt_validateKey: names the key, the wanted class and the value");
+
+        DVTExpect([dictionary dvt_validateKey:@"missing" expectedClass:[NSString class] allowNil:YES error:NULL],
+                  @"dvt_validateKey: a NULL out-error is accepted on the nil-allowed path");
+        DVTExpect(![dictionary dvt_validateKey:@"missing" expectedClass:[NSString class] allowNil:NO error:NULL],
+                  @"dvt_validateKey: a NULL out-error is accepted on the failing path");
+    }
+
+    /* -dvt_validateKey:expectedArrayOfClass:allowNil:error: is the base check
+       against NSArray followed by a member check, and it names the whole array. */
+    {
+        NSDictionary *dictionary = @{@"tags": @[@"a", @"b"], @"mixed": @[@"a", @2]};
+        NSError *error = nil;
+        DVTExpect([dictionary dvt_validateKey:@"tags" expectedArrayOfClass:[NSString class] allowNil:NO error:&error],
+                  @"dvt_validateKey:expectedArrayOfClass: accepts an array of the expected class");
+        DVTExpect(error == nil, @"dvt_validateKey:expectedArrayOfClass: leaves the error nil on success");
+        DVTExpect(![dictionary dvt_validateKey:@"mixed" expectedArrayOfClass:[NSString class] allowNil:NO error:&error],
+                  @"dvt_validateKey:expectedArrayOfClass: rejects a member of the wrong class");
+        NSString *expected = [NSString stringWithFormat:@"Value for mixed should be an array of %@, not: %@",
+                                                        [NSString class], @[@"a", @2]];
+        DVTExpectEqualObjects(error.localizedDescription, expected,
+                              @"dvt_validateKey:expectedArrayOfClass: names the whole array");
+        DVTExpect([dictionary dvt_validateKey:@"missing" expectedArrayOfClass:[NSString class] allowNil:YES error:&error],
+                  @"dvt_validateKey:expectedArrayOfClass: allows a missing value when nil is allowed");
+    }
+
+    /* The scalar setters wrap the value in an NSNumber through KVC. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_setInteger:7 forKey:@"i"];
+        [dictionary dvt_setBool:YES forKey:@"b"];
+        [dictionary dvt_setFloat:1.5f forKey:@"f"];
+        [dictionary dvt_setDouble:2.5 forKey:@"d"];
+        DVTExpectEqualObjects(dictionary[@"i"], @7, @"dvt_setInteger:forKey: stores the integer");
+        DVTExpectEqualObjects(dictionary[@"b"], @YES, @"dvt_setBool:forKey: stores the boolean");
+        DVTExpectEqualObjects(dictionary[@"f"], @1.5f, @"dvt_setFloat:forKey: stores the float");
+        DVTExpectEqualObjects(dictionary[@"d"], @2.5, @"dvt_setDouble:forKey: stores the double");
+    }
+
+    /* The nested-collection accessors create the missing storage on first use and
+       reach into the enclosing dictionary when one is named. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_addObject:@"x" toArrayForKey:@"array"];
+        [dictionary dvt_addObject:@"y" toArrayForKey:@"array"];
+        DVTExpectEqualObjects(dictionary[@"array"], (@[@"x", @"y"]),
+                              @"dvt_addObject:toArrayForKey: creates and appends");
+        [dictionary dvt_addObject:@"s" toSetForKey:@"set"];
+        DVTExpect([dictionary[@"set"] isKindOfClass:[NSMutableSet class]],
+                  @"dvt_addObject:toSetForKey: creates the set");
+        DVTExpectEqualObjects(dictionary[@"set"], [NSSet setWithObject:@"s"],
+                              @"dvt_addObject:toSetForKey: appends to the set");
+        [dictionary dvt_addObject:@"o" toOrderedSetForKey:@"ordered"];
+        DVTExpectEqualObjects(dictionary[@"ordered"], [NSOrderedSet orderedSetWithObject:@"o"],
+                              @"dvt_addObject:toOrderedSetForKey: creates and appends");
+    }
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_addObject:@"x" toArrayForKey:@"inner" inDictionaryForKey:@"outer"];
+        [dictionary dvt_addObject:@"s" toSetForKey:@"inner" inDictionaryForKey:@"outer2"];
+        DVTExpectEqualObjects(dictionary[@"outer"][@"inner"], (@[@"x"]),
+                              @"dvt_addObject:toArrayForKey:inDictionaryForKey: creates the nested array");
+        DVTExpectEqualObjects(dictionary[@"outer2"][@"inner"], [NSSet setWithObject:@"s"],
+                              @"dvt_addObject:toSetForKey:inDictionaryForKey: creates the nested set");
+    }
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_setObject:@"value" forKey:@"key" inDictionaryForKey:@"section"];
+        DVTExpectEqualObjects(dictionary[@"section"], (@{@"key": @"value"}),
+                              @"dvt_setObject:forKey:inDictionaryForKey: creates the nested dictionary");
+        [dictionary dvt_setObject:@"second" forKey:@"other" inDictionaryForKey:@"section"];
+        DVTExpectEqualObjects(dictionary[@"section"], (@{@"key": @"value", @"other": @"second"}),
+                              @"dvt_setObject:forKey:inDictionaryForKey: reuses the existing dictionary");
+    }
+
+    /* -dvt_removeObject:fromCollectionForKey: drops the key once the collection is
+       empty, and is a no-op for a missing key. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_addObject:@"only" toArrayForKey:@"array"];
+        [dictionary dvt_removeObject:@"only" fromCollectionForKey:@"array"];
+        DVTExpectEqualObjects(dictionary, @{}, @"dvt_removeObject:fromCollectionForKey: drops an emptied key");
+        [dictionary dvt_addObject:@"a" toArrayForKey:@"array"];
+        [dictionary dvt_addObject:@"b" toArrayForKey:@"array"];
+        [dictionary dvt_removeObject:@"a" fromCollectionForKey:@"array"];
+        DVTExpectEqualObjects(dictionary[@"array"], @[@"b"],
+                              @"dvt_removeObject:fromCollectionForKey: keeps a non-empty collection");
+        [dictionary dvt_removeObject:@"a" fromCollectionForKey:@"absent"];
+        DVTExpectEqualObjects(dictionary[@"array"], @[@"b"],
+                              @"dvt_removeObject:fromCollectionForKey: ignores a missing key");
+    }
+
+    /* The lazy creators store the object on the miss and return the same object on
+       a hit, with the block running only once. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        id first = [dictionary dvt_objectForKey:@"array" creatingIfNecessaryFromClass:[NSMutableArray class]];
+        DVTExpect([first isKindOfClass:[NSMutableArray class]],
+                  @"dvt_objectForKey:creatingIfNecessaryFromClass: builds the class");
+        DVTExpect(dictionary[@"array"] == first,
+                  @"dvt_objectForKey:creatingIfNecessaryFromClass: stores the built object");
+        DVTExpect([dictionary dvt_objectForKey:@"array" creatingIfNecessaryFromClass:[NSMutableArray class]] == first,
+                  @"dvt_objectForKey:creatingIfNecessaryFromClass: returns the existing object");
+    }
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        __block NSUInteger calls = 0;
+        id first = [dictionary dvt_objectForKey:@"value" creatingIfNecessaryWithBlock:^id {
+            calls++;
+            return @"built";
+        }];
+        DVTExpectEqualObjects(first, @"built", @"dvt_objectForKey:creatingIfNecessaryWithBlock: returns the built object");
+        DVTExpect(calls == 1, @"dvt_objectForKey:creatingIfNecessaryWithBlock: runs the block on the miss");
+        id second = [dictionary dvt_objectForKey:@"value" creatingIfNecessaryWithBlock:^id {
+            calls++;
+            return @"other";
+        }];
+        DVTExpectEqualObjects(second, @"built", @"dvt_objectForKey:creatingIfNecessaryWithBlock: returns the stored object");
+        DVTExpect(calls == 1, @"dvt_objectForKey:creatingIfNecessaryWithBlock: does not run the block on a hit");
+    }
+
+    /* -dvt_extractObjectForKey: removes and returns; the two conditional setters
+       guard on the value and on the key respectively. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        dictionary[@"k"] = @"v";
+        DVTExpectEqualObjects([dictionary dvt_extractObjectForKey:@"k"], @"v",
+                              @"dvt_extractObjectForKey: returns the removed object");
+        DVTExpect(dictionary[@"k"] == nil, @"dvt_extractObjectForKey: removes the key");
+        DVTExpect([dictionary dvt_extractObjectForKey:@"absent"] == nil,
+                  @"dvt_extractObjectForKey: answers nil for a missing key");
+    }
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        [dictionary dvt_setObjectIfNonNil:nil forKey:@"k"];
+        DVTExpect(dictionary[@"k"] == nil, @"dvt_setObjectIfNonNil:forKey: ignores a nil object");
+        [dictionary dvt_setObjectIfNonNil:@"v" forKey:@"k"];
+        DVTExpectEqualObjects(dictionary[@"k"], @"v", @"dvt_setObjectIfNonNil:forKey: stores a non-nil object");
+        [dictionary dvt_setObject:@"w" forKeyIfNonNil:nil];
+        DVTExpectEqualObjects(dictionary[@"k"], @"v", @"dvt_setObject:forKeyIfNonNil: ignores a nil key");
+        [dictionary dvt_setObject:@"w" forKeyIfNonNil:@"k"];
+        DVTExpectEqualObjects(dictionary[@"k"], @"w", @"dvt_setObject:forKeyIfNonNil: stores for a non-nil key");
+    }
+
+    /* -dvt_intersectKeys: keeps only the listed keys. */
+    {
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+                                           @"1", @"a", @"2", @"b", @"3", @"c", nil];
+        [dictionary dvt_intersectKeys:@[@"a", @"c"]];
+        DVTExpectEqualObjects(dictionary, (@{@"a": @"1", @"c": @"3"}),
+                              @"dvt_intersectKeys: removes the keys not listed");
+    }
+
+    /* The dictionary's own recursive removal empties it through the same helper
+       the array uses, descending into its values. */
+    {
+        NSMutableArray *value = [NSMutableArray arrayWithObject:@"v"];
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        dictionary[@"k"] = value;
+        [dictionary dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(dictionary, @{}, @"dvt_recursivelyRemoveAllObjects empties the dictionary receiver");
+        DVTExpectEqualObjects(value, @[], @"dvt_recursivelyRemoveAllObjects empties a value collection");
+    }
+
+    /* The three C entry points reach the same storage through CoreFoundation. */
+    {
+        CFMutableDictionaryRef dictionary = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+                                                                      &kCFTypeDictionaryKeyCallBacks,
+                                                                      &kCFTypeDictionaryValueCallBacks);
+        NSString *value = @"value";
+        NSString *key = @"key";
+        DVTSetObjectForKey(dictionary, (__bridge const void *)value, (__bridge const void *)key);
+        DVTExpectEqualObjects(DVTObjectForKey(dictionary, (__bridge const void *)key), value,
+                              @"DVTSetObjectForKey / DVTObjectForKey round-trip through CoreFoundation");
+        DVTRemoveObjectForKey(dictionary, (__bridge const void *)key);
+        DVTExpect(DVTObjectForKey(dictionary, (__bridge const void *)key) == NULL,
+                  @"DVTRemoveObjectForKey removes the value");
+        CFRelease(dictionary);
+    }
+
+    /* The manual-retain walk hands back an owned reference to each object and key;
+       CFBridgingRelease consumes that reference, so the rebuilt dictionary also
+       proves the pairs run parallel. */
+    {
+        NSDictionary *dictionary = @{@"a": @1, @"b": @2};
+        __unsafe_unretained id objects[2];
+        __unsafe_unretained id keys[2];
+        [dictionary dvt_getStrongObjects:objects andStrongKeys:keys];
+        NSMutableDictionary *rebuilt = [NSMutableDictionary dictionary];
+        for (NSUInteger index = 0; index < dictionary.count; index++) {
+            id key = CFBridgingRelease((__bridge CFTypeRef)keys[index]);
+            id object = CFBridgingRelease((__bridge CFTypeRef)objects[index]);
+            rebuilt[key] = object;
+        }
+        DVTExpectEqualObjects(rebuilt, dictionary,
+                              @"dvt_getStrongObjects:andStrongKeys: returns matching owned pairs");
+    }
+}
+
 #pragma mark - Observing convenience
 
 /** Records the two KVO bracket notifications in order, so the shape of a change
@@ -7062,6 +7390,7 @@ int main(int argc, const char *argv[])
         DVTTestPersistableParameterOmission();
         DVTTestMachO();
         DVTTestClassAdditions();
+        DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
         DVTTestPropertyListValue();
