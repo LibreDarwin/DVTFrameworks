@@ -1779,7 +1779,151 @@ DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const v
  */
 + (NSError *)dvt_errorWithMessage:(NSString *)message;
 
+/**
+  An `NSError` in the `com.apple.DVTFoundation` domain (code `-1`) whose
+  `NSLocalizedDescription` is `format` rendered with the following variadic
+  arguments. The `dvt_errorWithMessage:` domainless spelling.
+  */
++ (NSError *)dvt_errorWithFormat:(NSString *)format, ...;
+
+/**
+  An `NSError` in `NSPOSIXErrorDomain` with code `errorCode`, whose
+  `NSLocalizedDescription` is `messageFormat` rendered with the following
+  variadic arguments and whose `NSLocalizedFailureReason` is
+  `strerror(errorCode)`.
+
+  The description is the caller's text; the failure reason is not, so callers can
+  present both a human message and the system's own wording for the same code.
+  */
++ (NSError *)dvt_errorWithPOSIXErrorCode:(int)errorCode messageFormat:(NSString *)messageFormat, ...;
+
+/** As `dvt_errorWithPOSIXErrorCode:messageFormat:` but with `strerror(errorCode)`
+    standing in for both the description and the failure reason. */
++ (NSError *)dvt_errorWithPOSIXErrorCode:(int)errorCode;
+
+/**
+  An `NSError` in `domain` with code `errorCode`, a `NSLocalizedDescription` of
+  `message` and a `NSLocalizedRecoverySuggestion` of `recoverySuggestion`.
+
+  A forwarder onto `…recoverySuggestion:underlyingError:` with no underlying error.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(NSString *)recoverySuggestion;
+
+/**
+  An `NSError` in `domain` with code `errorCode`, a `NSLocalizedDescription` of
+  `message` and a `NSLocalizedFailureReason` of `failureReason`.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+                   failureReason:(NSString *)failureReason;
+
+/**
+  An `NSError` in `domain` with code `errorCode` and the given description,
+  recovery suggestion and underlying error. A nil `underlyingError` simply omits
+  the `NSUnderlyingErrorKey` entry.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(nullable NSString *)recoverySuggestion
+                 underlyingError:(nullable NSError *)underlyingError;
+
+/**
+  The full four-key builder: description, failure reason, recovery suggestion and
+  underlying error, any of which may be nil (its key is then omitted).
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(nullable NSString *)recoverySuggestion
+                   failureReason:(nullable NSString *)failureReason
+                 underlyingError:(nullable NSError *)underlyingError;
+
+/**
+  The domainless spelling of `…recoverySuggestion:underlyingError:`: the message,
+  recovery suggestion and underlying error with the fixed
+  `com.apple.DVTFoundation` domain and code `-1`.
+  */
++ (NSError *)dvt_errorWithMessage:(NSString *)message
+               recoverySuggestion:(nullable NSString *)recoverySuggestion
+                  underlyingError:(nullable NSError *)underlyingError;
+
+/**
+  An `NSError` that can actually recover. In addition to the description and
+  recovery suggestion, the `userInfo` carries `recoveryOptions` under
+  `NSLocalizedRecoveryOptionsErrorKey`, a copy of `recoveryBlock` under
+  `DVTRecoveryBlockKey`, and a private recovery attempter under
+  `NSRecoveryAttempterErrorKey` that invokes the block when the user picks an
+  option (see `_DVTErrorRecoveryHandler`).
+
+  @param recoveryBlock Invoked as `recoveryBlock(error, optionIndex)`; its result
+  is returned as the `BOOL` recovery answer.
+  */
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(nullable NSString *)recoverySuggestion
+                 recoveryOptions:(nullable NSArray *)recoveryOptions
+                andRecoveryBlock:(BOOL (^)(NSError *error, NSInteger optionIndex))recoveryBlock;
+
+/** The instance twin of the builder above: merges the recovery options, block and
+    attempter into this error's `userInfo`, preserving its other entries. */
+- (NSError *)dvt_errorBySettingRecoveryOptions:(nullable NSArray *)recoveryOptions
+                              andRecoveryBlock:(BOOL (^)(NSError *error, NSInteger optionIndex))recoveryBlock;
+
+/** A copy of this error whose `userInfo` has `object` set under `key`. */
+- (NSError *)dvt_errorByInjectingUserInfoObject:(nullable id)object forKey:(id)key;
+
+/** A copy of this error whose `userInfo` has every entry of `objects` merged in,
+    the newer entries winning. */
+- (NSError *)dvt_errorByInjectingUserInfoObjects:(NSDictionary *)objects;
+
+/** `YES` when the domain equals `domain` and the code equals `errorCode`. */
+- (BOOL)dvt_hasDomain:(NSString *)domain errorCode:(NSInteger)errorCode;
+
+/** `YES` for the file-not-found errors: `NSFileReadNoSuchFileError`,
+    `NSFileNoSuchFileError` and `ENOENT`. */
+- (BOOL)dvt_isNoSuchFileError;
+
+/** `YES` for `NSFileWriteFileExistsError`. */
+- (BOOL)dvt_isFileExistsError;
+
+/** The canonical `NSUserCancelledError` in `NSCocoaErrorDomain`, with no
+    `userInfo`. */
++ (NSError *)dvt_userCancelledError;
+
+/** `YES` for `NSUserCancelledError` in `NSCocoaErrorDomain`. */
+- (BOOL)dvt_isUserCancelledError;
+
+/** A property-list-safe dictionary of `domain`, `code`, `description` and (when
+    present) `recoverySuggestion`, the inverse of `+dvt_errorFromPropertyList:`. */
+- (NSDictionary *)dvt_propertyListDictionary;
+
+/** Rebuilds an error from a `-dvt_propertyListDictionary` value. Missing string
+    fields default to the empty string and a missing code to `0`. */
++ (NSError *)dvt_errorFromPropertyList:(NSDictionary *)propertyList;
+
+/** `self.userInfo[key]`, or the same lookup on each underlying error in turn. */
+- (nullable id)dvt_recursivelyRetrieveObjectForUserInfoKey:(id)key;
+
+/** `YES` when `block` returns `YES` for this error or any of its underlying
+    errors. */
+- (BOOL)dvt_selfOrUnderlyingErrorMatchesBlock:(BOOL (^)(NSError *error))block;
+
 @end
+
+/**
+ The `userInfo` key under which the recovery block supplied to
+ `+dvt_errorWithDomain:errorCode:message:recoverySuggestion:recoveryOptions:andRecoveryBlock:`
+ and `-dvt_errorBySettingRecoveryOptions:andRecoveryBlock:` is stored. The binary
+ exports it as `_DVTRecoveryBlockKey`; the private recovery attempter reads it
+ when a recovery attempt is made.
+ */
+DVT_EXTERN NSString *const DVTRecoveryBlockKey;
 
 /* The older spelling of the two collection tests. Apple keeps them in categories
    of their own, all three named the same thing, and in the binary each one is a

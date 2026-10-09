@@ -5066,6 +5066,258 @@ static void DVTTestErrorBuilders(void)
 }
 
 /**
+ A stand-in for the private recovery attempter stored under
+ NSRecoveryAttempterErrorKey. Declared locally so the test can drive the
+ recovery protocol without the class's private implementation.
+ */
+@interface _DVTErrorRecoveryHandler : NSObject
+
+- (BOOL)attemptRecoveryFromError:(NSError *)error optionIndex:(NSUInteger)optionIndex;
+- (void)attemptRecoveryFromError:(NSError *)error
+                     optionIndex:(NSUInteger)optionIndex
+                        delegate:(id)delegate
+              didRecoverSelector:(SEL)didRecoverSelector
+                     contextInfo:(void *)contextInfo;
+
+@end
+
+/** Records the delegate callback the recovery handler makes after recovering. */
+@interface DVTTestRecoveryDelegate : NSObject
+@property (nonatomic, assign) BOOL called;
+@property (nonatomic, assign) BOOL recovered;
+@property (nonatomic, assign) void *contextInfo;
+@end
+
+@implementation DVTTestRecoveryDelegate
+- (void)dvt_didRecover:(BOOL)recovered contextInfo:(void *)contextInfo
+{
+    self.called = YES;
+    self.recovered = recovered;
+    self.contextInfo = contextInfo;
+}
+@end
+
+/**
+ The rest of the NSError family: the format and POSIX builders, the recovery
+ suggestion / failure reason / underlying error combinations, the injectors, the
+ domain/code predicates, the user-cancelled and file-error helpers, and the
+ property-list round trip.
+ */
+static void DVTTestErrorAdditions(void)
+{
+    fprintf(stdout, "\n== error additions ==\n");
+
+    /* dvt_errorWithFormat: is dvt_errorWithMessage: with the format rendered
+       for us -- the fixed domain and code, one description entry. */
+    NSError *error = [NSError dvt_errorWithFormat:@"made %@ (%d)", @"x", 3];
+    DVTExpectEqualObjects(error.domain, @"com.apple.DVTFoundation", @"the format builder uses the private domain");
+    DVTExpect(error.code == -1, @"the format builder uses the private code");
+    DVTExpectEqualObjects(error.localizedDescription, @"made x (3)", @"the format is rendered");
+    DVTExpect(error.userInfo.count == 1, @"the format builder carries only a description");
+
+    /* The POSIX builder names strerror's text as the reason and the caller's
+       format as the description. */
+    error = [NSError dvt_errorWithPOSIXErrorCode:ENOENT messageFormat:@"missing %@", @"f"];
+    DVTExpectEqualObjects(error.domain, NSPOSIXErrorDomain, @"the POSIX builder uses NSPOSIXErrorDomain");
+    DVTExpect(error.code == ENOENT, @"the POSIX code is the caller's");
+    DVTExpectEqualObjects(error.localizedDescription, @"missing f", @"the message is the rendered format");
+    DVTExpectEqualCStrings(error.localizedFailureReason.UTF8String, strerror(ENOENT),
+                           @"the failure reason is strerror's text");
+    DVTExpectEqualCStrings(error.localizedFailureReason.UTF8String, "No such file or directory",
+                           @"ENOENT reads as strerror spells it");
+
+    /* With no message, strerror's text is both the description and the reason. */
+    error = [NSError dvt_errorWithPOSIXErrorCode:EACCES];
+    DVTExpect(error.code == EACCES, @"the bare POSIX builder keeps the code");
+    DVTExpectEqualObjects(error.localizedDescription, error.localizedFailureReason,
+                          @"with no message the description and reason coincide");
+
+    /* Description alone. */
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:5 message:@"m" recoverySuggestion:@"fix it"];
+    DVTExpectEqualObjects(error.domain, @"D", @"the domain passes through");
+    DVTExpect(error.code == 5, @"the code passes through");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedDescriptionKey], @"m", @"the description is stored");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedRecoverySuggestionErrorKey], @"fix it",
+                          @"the recovery suggestion is stored");
+    DVTExpect(error.userInfo[NSLocalizedFailureReasonErrorKey] == nil,
+              @"no failure reason key is invented");
+
+    /* Description and failure reason. */
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:6 message:@"m" failureReason:@"r"];
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedDescriptionKey], @"m", @"the description is stored");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedFailureReasonErrorKey], @"r", @"the failure reason is stored");
+    DVTExpect(error.userInfo[NSLocalizedRecoverySuggestionErrorKey] == nil,
+              @"no recovery suggestion key is invented");
+
+    /* Description, recovery suggestion and an underlying error. */
+    NSError *underlying = [NSError dvt_errorWithMessage:@"inner"];
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:7 message:@"m"
+                       recoverySuggestion:@"fix" underlyingError:underlying];
+    DVTExpect(error.userInfo[NSUnderlyingErrorKey] == underlying, @"the underlying error is stored");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedRecoverySuggestionErrorKey], @"fix",
+                          @"the recovery suggestion survives the underlying error");
+
+    /* A nil underlying error leaves the key out rather than storing NSNull. */
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:8 message:@"m"
+                       recoverySuggestion:@"fix" underlyingError:nil];
+    DVTExpect(error.userInfo[NSUnderlyingErrorKey] == nil, @"a nil underlying error is not stored");
+
+    /* The four-key builder. */
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:9 message:@"m"
+                       recoverySuggestion:@"fix" failureReason:@"why" underlyingError:underlying];
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedDescriptionKey], @"m", @"description is stored");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedFailureReasonErrorKey], @"why", @"failure reason is stored");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedRecoverySuggestionErrorKey], @"fix", @"suggestion is stored");
+    DVTExpect(error.userInfo[NSUnderlyingErrorKey] == underlying, @"underlying error is stored");
+
+    /* dvt_errorWithMessage:recoverySuggestion:underlyingError: is the domainless
+       spelling of the above. */
+    error = [NSError dvt_errorWithMessage:@"m" recoverySuggestion:@"fix" underlyingError:underlying];
+    DVTExpectEqualObjects(error.domain, @"com.apple.DVTFoundation", @"the message builder uses the private domain");
+    DVTExpect(error.code == -1, @"the message builder uses the private code");
+    DVTExpectEqualObjects(error.userInfo[NSLocalizedRecoverySuggestionErrorKey], @"fix", @"the suggestion is stored");
+    DVTExpect(error.userInfo[NSUnderlyingErrorKey] == underlying, @"the underlying error is stored");
+
+    /* The recovery-capable builder stores the options, the block and a handler. */
+    __block NSInteger seenOption = NSNotFound;
+    __block NSError *seenError = nil;
+    error = [NSError dvt_errorWithDomain:@"D" errorCode:10 message:@"m" recoverySuggestion:@"fix"
+                          recoveryOptions:@[ @"Retry", @"Cancel" ]
+                         andRecoveryBlock:^BOOL(NSError *theError, NSInteger optionIndex) {
+                             seenError = theError;
+                             seenOption = optionIndex;
+                             return YES;
+                         }];
+    DVTExpect(error.userInfo[NSLocalizedRecoveryOptionsErrorKey] != nil, @"the recovery options are stored");
+    DVTExpect(error.userInfo[DVTRecoveryBlockKey] != nil, @"the recovery block is stored under the exported key");
+    id attempter = error.userInfo[NSRecoveryAttempterErrorKey];
+    DVTExpect(attempter != nil, @"a recovery attempter is installed");
+    DVTExpect([attempter isKindOfClass:[_DVTErrorRecoveryHandler class]],
+              @"the attempter is the private recovery handler");
+
+    BOOL recovered = [( _DVTErrorRecoveryHandler *)attempter attemptRecoveryFromError:error optionIndex:1];
+    DVTExpect(recovered, @"the block's answer is the recovery answer");
+    DVTExpect(seenError == error, @"the block receives the error it is attached to");
+    DVTExpect(seenOption == 1, @"the block receives the chosen option index");
+
+    /* The instance twin merges the same three entries into an existing error. */
+    NSError *base = [NSError dvt_errorWithDomain:@"D" errorCode:11 message:@"base" recoverySuggestion:nil];
+    NSError *merged = [base dvt_errorBySettingRecoveryOptions:@[ @"Retry" ]
+                                             andRecoveryBlock:^BOOL(NSError *theError, NSInteger optionIndex) {
+                                                 return NO;
+                                             }];
+    DVTExpect(merged != base, @"setting recovery options produces a new error");
+    DVTExpectEqualObjects(merged.domain, base.domain, @"the domain is preserved");
+    DVTExpect(merged.code == base.code, @"the code is preserved");
+    DVTExpectEqualObjects(merged.userInfo[NSLocalizedDescriptionKey], @"base",
+                          @"the existing description survives the merge");
+    DVTExpect(merged.userInfo[DVTRecoveryBlockKey] != nil, @"the merge adds the recovery block");
+
+    /* The merge's attempter can report back through the delegate protocol. */
+    DVTTestRecoveryDelegate *delegate = [[DVTTestRecoveryDelegate alloc] init];
+    void *contextInfo = (void *)0x1234;
+    [( _DVTErrorRecoveryHandler *)merged.userInfo[NSRecoveryAttempterErrorKey]
+        attemptRecoveryFromError:merged optionIndex:0
+                       delegate:delegate didRecoverSelector:@selector(dvt_didRecover:contextInfo:)
+                    contextInfo:contextInfo];
+    DVTExpect(delegate.called, @"the delegate is messaged after recovery");
+    DVTExpect(!delegate.recovered, @"the delegate learns the block declined recovery");
+    DVTExpect(delegate.contextInfo == contextInfo, @"the delegate receives the context pointer");
+
+    /* Injecting a single user-info entry keeps the rest. */
+    NSError *injected = [base dvt_errorByInjectingUserInfoObject:@"v" forKey:@"k"];
+    DVTExpect(injected != base, @"injecting an entry produces a new error");
+    DVTExpectEqualObjects(injected.userInfo[@"k"], @"v", @"the injected entry is present");
+    DVTExpectEqualObjects(injected.userInfo[NSLocalizedDescriptionKey], @"base", @"the old entries survive");
+
+    /* Injecting a dictionary merges every entry. */
+    NSError *mergedInfo = [base dvt_errorByInjectingUserInfoObjects:@{ @"a" : @1, @"b" : @2 }];
+    DVTExpectEqualObjects(mergedInfo.userInfo[@"a"], @1, @"the first injected entry is present");
+    DVTExpectEqualObjects(mergedInfo.userInfo[@"b"], @2, @"the second injected entry is present");
+    DVTExpectEqualObjects(mergedInfo.userInfo[NSLocalizedDescriptionKey], @"base", @"the old entries survive");
+
+    /* dvt_hasDomain:errorCode: compares both fields. */
+    DVTExpect([base dvt_hasDomain:@"D" errorCode:11], @"a matching domain and code pass");
+    DVTExpect(![base dvt_hasDomain:@"E" errorCode:11], @"a mismatched domain fails");
+    DVTExpect(![base dvt_hasDomain:@"D" errorCode:12], @"a mismatched code fails");
+
+    /* The file-not-found family spans two domains and three codes. */
+    DVTExpect([[NSError errorWithDomain:NSCocoaErrorDomain code:260 userInfo:nil] dvt_isNoSuchFileError],
+              @"NSFileReadNoSuchFileError is a no-such-file error");
+    DVTExpect([[NSError errorWithDomain:NSCocoaErrorDomain code:4 userInfo:nil] dvt_isNoSuchFileError],
+              @"NSFileNoSuchFileError is a no-such-file error");
+    DVTExpect([[NSError errorWithDomain:NSPOSIXErrorDomain code:ENOENT userInfo:nil] dvt_isNoSuchFileError],
+              @"ENOENT is a no-such-file error");
+    DVTExpect(![base dvt_isNoSuchFileError], @"an unrelated error is not a no-such-file error");
+
+    DVTExpect([[NSError errorWithDomain:NSCocoaErrorDomain code:516 userInfo:nil] dvt_isFileExistsError],
+              @"NSFileWriteFileExistsError is a file-exists error");
+    DVTExpect(![base dvt_isFileExistsError], @"an unrelated error is not a file-exists error");
+
+    /* The user-cancelled helper and its predicate. */
+    NSError *cancelled = [NSError dvt_userCancelledError];
+    DVTExpectEqualObjects(cancelled.domain, NSCocoaErrorDomain, @"the cancelled error uses NSCocoaErrorDomain");
+    DVTExpect(cancelled.code == 3072, @"the cancelled error uses NSUserCancelledError");
+    DVTExpect(cancelled.userInfo.count == 0, @"the cancelled error carries no user info");
+    DVTExpect([cancelled dvt_isUserCancelledError], @"the predicate recognises the cancelled error");
+    DVTExpect(![base dvt_isUserCancelledError], @"the predicate rejects other errors");
+
+    /* The property-list round trip. */
+    NSError *rich = [NSError dvt_errorWithDomain:@"D" errorCode:42 message:@"m" recoverySuggestion:@"fix"];
+    NSDictionary *plist = [rich dvt_propertyListDictionary];
+    DVTExpectEqualObjects(plist[@"domain"], @"D", @"the property list records the domain");
+    DVTExpectEqualObjects(plist[@"code"], @42, @"the property list records the code as a number");
+    DVTExpectEqualObjects(plist[@"description"], @"m", @"the property list records the description");
+    DVTExpectEqualObjects(plist[@"recoverySuggestion"], @"fix", @"the property list records the suggestion");
+
+    NSError *restored = [NSError dvt_errorFromPropertyList:plist];
+    DVTExpectEqualObjects(restored.domain, rich.domain, @"the round trip keeps the domain");
+    DVTExpect(restored.code == rich.code, @"the round trip keeps the code");
+    DVTExpectEqualObjects(restored.localizedDescription, rich.localizedDescription,
+                          @"the round trip keeps the description");
+    DVTExpectEqualObjects(rich.localizedRecoverySuggestion, @"fix", @"the suggestion survives the round trip");
+
+    /* An error with no recovery suggestion leaves that key out of the plist. */
+    NSError *plain = [NSError dvt_errorWithDomain:@"D" errorCode:1 message:@"m" recoverySuggestion:nil];
+    DVTExpect([plain dvt_propertyListDictionary][@"recoverySuggestion"] == nil,
+              @"a missing recovery suggestion is not written to the property list");
+
+    /* A sparse property list defaults the strings to empty and the code to zero. */
+    NSError *sparse = [NSError dvt_errorFromPropertyList:@{ @"domain" : @"Only" }];
+    DVTExpectEqualObjects(sparse.domain, @"Only", @"the recorded domain is restored");
+    DVTExpect(sparse.code == 0, @"a missing code reads as zero");
+    DVTExpectEqualObjects(sparse.localizedDescription, @"", @"a missing description is empty");
+    DVTExpect(sparse.localizedRecoverySuggestion == nil || [sparse.localizedRecoverySuggestion isEqualToString:@""],
+              @"a missing recovery suggestion comes back empty");
+
+    /* Recursive lookup walks the underlying chain. */
+    NSError *inner = [NSError dvt_errorWithDomain:@"Inner" errorCode:1 message:@"inner" recoverySuggestion:nil];
+    NSError *outer = [NSError dvt_errorWithDomain:@"Outer" errorCode:2 message:@"outer"
+                               recoverySuggestion:nil underlyingError:inner];
+    DVTExpect([outer dvt_recursivelyRetrieveObjectForUserInfoKey:NSLocalizedDescriptionKey] ==
+              outer.userInfo[NSLocalizedDescriptionKey],
+              @"a key on the error itself is found first");
+    DVTExpect([outer dvt_recursivelyRetrieveObjectForUserInfoKey:NSLocalizedFailureReasonErrorKey] == nil,
+              @"a key nowhere in the chain is nil");
+    NSError *tagged = [inner dvt_errorByInjectingUserInfoObject:@"tag" forKey:@"Tag"];
+    NSError *wrapped = [NSError dvt_errorWithDomain:@"Outer" errorCode:3 message:@"outer"
+                                  recoverySuggestion:nil underlyingError:tagged];
+    DVTExpectEqualObjects([wrapped dvt_recursivelyRetrieveObjectForUserInfoKey:@"Tag"], @"tag",
+                          @"a key on the underlying error is found by recursion");
+
+    /* dvt_selfOrUnderlyingErrorMatchesBlock: tests the error, then its chain. */
+    DVTExpect([outer dvt_selfOrUnderlyingErrorMatchesBlock:^BOOL(NSError *theError) {
+        return theError.code == 2;
+    }], @"the block matches the error itself");
+    DVTExpect([outer dvt_selfOrUnderlyingErrorMatchesBlock:^BOOL(NSError *theError) {
+        return theError.code == 1;
+    }], @"the block matches an underlying error");
+    DVTExpect(![outer dvt_selfOrUnderlyingErrorMatchesBlock:^BOOL(NSError *theError) {
+        return theError.code == 99;
+    }], @"the block matches nothing in the chain");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -7481,6 +7733,7 @@ int main(int argc, const char *argv[])
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
+        DVTTestErrorAdditions();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();

@@ -3489,6 +3489,65 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
 
 @end
 
+/* The key under which the recovery block supplied to
+   +dvt_errorWithDomain:errorCode:message:recoverySuggestion:recoveryOptions:
+   andRecoveryBlock: (and its instance twin, -dvt_errorBySettingRecoveryOptions:
+   andRecoveryBlock:) is stored. Apple's binary exports the symbol
+   (_DVTRecoveryBlockKey), so it is declared in the header and defined here
+   rather than hidden away as a translation-unit literal. */
+NSString *const DVTRecoveryBlockKey = @"DVTRecoveryBlockKey";
+
+/* The recovery attempter installed under NSRecoveryAttempterErrorKey whenever an
+   error carries a recovery block. Apple names it, but privately: it appears in
+   the binary only as _OBJC_CLASS_$__DVTErrorRecoveryHandler with these two
+   methods, so it is declared and implemented here instead of in the header. */
+@interface _DVTErrorRecoveryHandler : NSObject
+
+- (BOOL)attemptRecoveryFromError:(NSError *)error optionIndex:(NSUInteger)optionIndex;
+- (void)attemptRecoveryFromError:(NSError *)error
+                     optionIndex:(NSUInteger)optionIndex
+                        delegate:(nullable id)delegate
+              didRecoverSelector:(nullable SEL)didRecoverSelector
+                     contextInfo:(nullable void *)contextInfo;
+
+@end
+
+@implementation _DVTErrorRecoveryHandler
+
+- (BOOL)attemptRecoveryFromError:(NSError *)error optionIndex:(NSUInteger)optionIndex
+{
+    /* The whole contract: look up the stored block under DVTRecoveryBlockKey and
+       invoke it with the error and the chosen option. The block's answer is the
+       answer. */
+    BOOL (^block)(NSError *, NSUInteger) = error.userInfo[DVTRecoveryBlockKey];
+    return block(error, optionIndex);
+}
+
+- (void)attemptRecoveryFromError:(NSError *)error
+                     optionIndex:(NSUInteger)optionIndex
+                        delegate:(id)delegate
+              didRecoverSelector:(SEL)didRecoverSelector
+                     contextInfo:(void *)contextInfo
+{
+    /* Recover first, then report. A nil delegate is the ordinary "nobody is
+       listening" case and returns quietly; a NULL or unhandled selector is a
+       programming error and asserts, at lines 42 and 43 of Apple's
+       DVTNSErrorAdditions.m. The delegate callback is a raw message send because
+       the selector is supplied by the caller. */
+    BOOL recovered = [self attemptRecoveryFromError:error optionIndex:optionIndex];
+    if (delegate == nil) {
+        return;
+    }
+    DVTAssert(didRecoverSelector != NULL, @"((didRecoverSelector)) != nil", nil, @"%@ should not be nil.",
+              @"(didRecoverSelector)");
+    DVTAssert([delegate respondsToSelector:didRecoverSelector],
+              @"[delegate respondsToSelector:didRecoverSelector]", nil,
+              @"Delegate must respond to provided selector %@", NSStringFromSelector(didRecoverSelector));
+    ((void (*)(id, SEL, BOOL, void *))objc_msgSend)(delegate, didRecoverSelector, recovered, contextInfo);
+}
+
+@end
+
 @implementation NSError (DVTFoundationClassAdditions)
 
 + (NSError *)dvt_errorWithDomain:(NSString *)domain
@@ -3532,6 +3591,272 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
     return [NSError errorWithDomain:@"com.apple.DVTFoundation"
                                code:-1
                            userInfo:@{ NSLocalizedDescriptionKey : message }];
+}
+
++ (NSError *)dvt_errorWithFormat:(NSString *)format, ...
+{
+    /* Render the format with a fresh va_list and hand the string to
+       dvt_errorWithMessage:; the binary routes through a one-entry
+       -initWithFormat:arguments: and nothing else. */
+    va_list args;
+    va_start(args, format);
+    NSError *error = [NSError dvt_errorWithMessage:[[NSString alloc] initWithFormat:format arguments:args]];
+    va_end(args);
+    return error;
+}
+
++ (NSError *)dvt_errorWithPOSIXErrorCode:(int)errorCode messageFormat:(NSString *)messageFormat, ...
+{
+    /* The description is the caller's formatted message; the failure reason is
+       strerror(errorCode) for the same code. The binary builds both strings, a
+       two-entry dictionaryWithObjects:forKeys:count:, and an NSError in
+       NSPOSIXErrorDomain. */
+    va_list args;
+    va_start(args, messageFormat);
+    NSString *message = [[NSString alloc] initWithFormat:messageFormat arguments:args];
+    va_end(args);
+    NSString *reason = [[NSString alloc] initWithUTF8String:strerror(errorCode)];
+    return [NSError errorWithDomain:NSPOSIXErrorDomain
+                               code:errorCode
+                           userInfo:@{ NSLocalizedDescriptionKey : message,
+                                       NSLocalizedFailureReasonErrorKey : reason }];
+}
+
++ (NSError *)dvt_errorWithPOSIXErrorCode:(int)errorCode
+{
+    /* No message is supplied, so strerror's text stands in for both the
+       description and the failure reason -- the same string under both keys. */
+    NSString *reason = [[NSString alloc] initWithUTF8String:strerror(errorCode)];
+    return [NSError errorWithDomain:NSPOSIXErrorDomain
+                               code:errorCode
+                           userInfo:@{ NSLocalizedDescriptionKey : reason,
+                                       NSLocalizedFailureReasonErrorKey : reason }];
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(NSString *)recoverySuggestion
+{
+    /* A forwarder onto the underlyingError: twin with no underlying error; the
+       binary tail-calls it with a nil sixth argument. */
+    return [NSError dvt_errorWithDomain:domain
+                              errorCode:errorCode
+                                message:message
+                     recoverySuggestion:recoverySuggestion
+                        underlyingError:nil];
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+                   failureReason:(NSString *)failureReason
+{
+    /* Description and failure reason only. The binary assembles them through
+       dvt_dictionaryWithKeysAndValues: and hangs the result off
+       +errorWithDomain:code:userInfo:. */
+    return [NSError errorWithDomain:domain
+                               code:errorCode
+                           userInfo:[NSDictionary dvt_dictionaryWithKeysAndValues:
+                                     NSLocalizedDescriptionKey, message,
+                                     NSLocalizedFailureReasonErrorKey, failureReason, nil]];
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(NSString *)recoverySuggestion
+                 underlyingError:(nullable NSError *)underlyingError
+{
+    /* Description, recovery suggestion and the wrapped error, in that key order,
+       through dvt_dictionaryWithKeysAndValues: (which drops any nil pair, so a
+       nil underlying error simply leaves the key out). */
+    return [NSError errorWithDomain:domain
+                               code:errorCode
+                           userInfo:[NSDictionary dvt_dictionaryWithKeysAndValues:
+                                     NSLocalizedDescriptionKey, message,
+                                     NSLocalizedRecoverySuggestionErrorKey, recoverySuggestion,
+                                     NSUnderlyingErrorKey, underlyingError, nil]];
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(NSString *)recoverySuggestion
+                   failureReason:(NSString *)failureReason
+                 underlyingError:(NSError *)underlyingError
+{
+    /* The full four-key userInfo: description, failure reason, recovery
+       suggestion and underlying error, in that order, through
+       dvt_dictionaryWithKeysAndValues: (a nil value simply drops its pair). */
+    return [NSError errorWithDomain:domain
+                               code:errorCode
+                           userInfo:[NSDictionary dvt_dictionaryWithKeysAndValues:
+                                     NSLocalizedDescriptionKey, message,
+                                     NSLocalizedFailureReasonErrorKey, failureReason,
+                                     NSLocalizedRecoverySuggestionErrorKey, recoverySuggestion,
+                                     NSUnderlyingErrorKey, underlyingError, nil]];
+}
+
++ (NSError *)dvt_errorWithMessage:(NSString *)message
+               recoverySuggestion:(NSString *)recoverySuggestion
+                  underlyingError:(NSError *)underlyingError
+{
+    /* The domainless spelling: the fixed com.apple.DVTFoundation -1 of
+       dvt_errorWithMessage:, plus the recovery suggestion and underlying error. */
+    return [NSError dvt_errorWithDomain:@"com.apple.DVTFoundation"
+                              errorCode:-1
+                                message:message
+                     recoverySuggestion:recoverySuggestion
+                        underlyingError:underlyingError];
+}
+
++ (NSError *)dvt_errorWithDomain:(NSString *)domain
+                       errorCode:(NSInteger)errorCode
+                         message:(NSString *)message
+              recoverySuggestion:(NSString *)recoverySuggestion
+                 recoveryOptions:(NSArray *)recoveryOptions
+                andRecoveryBlock:(BOOL (^)(NSError *error, NSInteger optionIndex))recoveryBlock
+{
+    /* The recovery-capable builder: alongside the description and suggestion it
+       stores the options under NSLocalizedRecoveryOptionsErrorKey, a copy of the
+       block under DVTRecoveryBlockKey, and a fresh _DVTErrorRecoveryHandler under
+       NSRecoveryAttempterErrorKey so AppKit has something to message when the
+       user picks an option. The binary allocates and initializes the handler
+       inline. */
+    NSDictionary *userInfo = [NSDictionary dvt_dictionaryWithKeysAndValues:
+        NSLocalizedDescriptionKey, message,
+        NSLocalizedRecoverySuggestionErrorKey, recoverySuggestion,
+        NSLocalizedRecoveryOptionsErrorKey, recoveryOptions,
+        DVTRecoveryBlockKey, [recoveryBlock copy],
+        NSRecoveryAttempterErrorKey, [[_DVTErrorRecoveryHandler alloc] init],
+        nil];
+    return [NSError errorWithDomain:domain code:errorCode userInfo:userInfo];
+}
+
+- (NSError *)dvt_errorBySettingRecoveryOptions:(NSArray *)recoveryOptions
+                              andRecoveryBlock:(BOOL (^)(NSError *error, NSInteger optionIndex))recoveryBlock
+{
+    /* The instance twin of the builder above: wrap the options, a copied block
+       and a handler in a three-entry dictionary and merge it into this error's
+       userInfo (the merge, not a rebuild, is why existing entries survive). */
+    id objects[] = { [recoveryBlock copy], recoveryOptions, [[_DVTErrorRecoveryHandler alloc] init] };
+    id<NSCopying> keys[] = { DVTRecoveryBlockKey, NSLocalizedRecoveryOptionsErrorKey, NSRecoveryAttempterErrorKey };
+    NSDictionary *userInfo = [NSDictionary dictionaryWithObjects:objects forKeys:keys count:3];
+    return [self dvt_errorByInjectingUserInfoObjects:userInfo];
+}
+
+- (NSError *)dvt_errorByInjectingUserInfoObject:(id)object forKey:(id)key
+{
+    /* Copy with one userInfo entry added (or replaced), preserving domain and
+       code. */
+    NSDictionary *userInfo = [self.userInfo dvt_dictionaryBySettingObject:object forKey:key];
+    return [NSError errorWithDomain:self.domain code:self.code userInfo:userInfo];
+}
+
+- (NSError *)dvt_errorByInjectingUserInfoObjects:(NSDictionary *)objects
+{
+    /* Copy with a whole dictionary merged into the userInfo, the newer entries
+       winning. */
+    NSDictionary *userInfo = [self.userInfo dvt_dictionaryByAddingEntriesFromDictionary:objects];
+    return [NSError errorWithDomain:self.domain code:self.code userInfo:userInfo];
+}
+
+- (BOOL)dvt_hasDomain:(NSString *)domain errorCode:(NSInteger)errorCode
+{
+    /* Domain and code must both match; a nil domain can never be equal to a
+       string, so a nil-domain error simply fails the test. */
+    return [self.domain isEqualToString:domain] && self.code == errorCode;
+}
+
+- (BOOL)dvt_isNoSuchFileError
+{
+    /* The file-not-found family: NSFileReadNoSuchFileError (260) and
+       NSFileNoSuchFileError (4) in NSCocoaErrorDomain, plus ENOENT (2) in
+       NSPOSIXErrorDomain. The code is tried as a domain/code pair because the
+       same number means different things per domain. */
+    if ([self dvt_hasDomain:NSCocoaErrorDomain errorCode:260]) {
+        return YES;
+    }
+    if ([self dvt_hasDomain:NSCocoaErrorDomain errorCode:4]) {
+        return YES;
+    }
+    return [self dvt_hasDomain:NSPOSIXErrorDomain errorCode:2];
+}
+
+- (BOOL)dvt_isFileExistsError
+{
+    /* NSFileWriteFileExistsError (516) is the only spelling the binary accepts
+       here. */
+    return [self dvt_hasDomain:NSCocoaErrorDomain errorCode:516];
+}
+
++ (NSError *)dvt_userCancelledError
+{
+    /* The canonical user-cancelled error: NSCocoaErrorDomain, NSUserCancelledError
+       (3072), no userInfo. */
+    return [NSError errorWithDomain:NSCocoaErrorDomain code:3072 userInfo:nil];
+}
+
+- (BOOL)dvt_isUserCancelledError
+{
+    return [self dvt_hasDomain:NSCocoaErrorDomain errorCode:3072];
+}
+
+- (NSDictionary *)dvt_propertyListDictionary
+{
+    /* A plist-safe projection of the four fields that round-trip through
+       dvt_errorFromPropertyList:. The first three are always present; the
+       recovery suggestion is only written when non-nil, and the result is
+       returned immutable via -copy. */
+    id objects[] = { self.domain, @(self.code), self.localizedDescription };
+    id<NSCopying> keys[] = { @"domain", @"code", @"description" };
+    NSMutableDictionary *dictionary = [NSMutableDictionary dictionaryWithDictionary:
+        [NSDictionary dictionaryWithObjects:objects forKeys:keys count:3]];
+    [dictionary dvt_setObjectIfNonNil:self.localizedRecoverySuggestion forKey:@"recoverySuggestion"];
+    return [dictionary copy];
+}
+
++ (NSError *)dvt_errorFromPropertyList:(NSDictionary *)propertyList
+{
+    /* The inverse of -dvt_propertyListDictionary. Missing string fields default
+       to the empty string rather than nil, and a missing code reads as 0 via the
+       nil-tolerant dvt_numberOrNilForKey:. */
+    NSString *domain = [propertyList dvt_stringOrNilForKey:@"domain"] ?: @"";
+    NSInteger code = [[propertyList dvt_numberOrNilForKey:@"code"] integerValue];
+    NSString *message = [propertyList dvt_stringOrNilForKey:@"description"] ?: @"";
+    NSString *recoverySuggestion = [propertyList dvt_stringOrNilForKey:@"recoverySuggestion"] ?: @"";
+    return [NSError dvt_errorWithDomain:domain
+                              errorCode:code
+                                message:message
+                     recoverySuggestion:recoverySuggestion];
+}
+
+- (id)dvt_recursivelyRetrieveObjectForUserInfoKey:(id)key
+{
+    /* Walk this error's userInfo and then, if the key is absent, every
+       underlying error's userInfo in turn. The first hit wins; a missing key
+       with no underlying error yields nil. */
+    id object = self.userInfo[key];
+    if (object) {
+        return object;
+    }
+    id underlyingError = self.userInfo[NSUnderlyingErrorKey];
+    return [underlyingError dvt_recursivelyRetrieveObjectForUserInfoKey:key];
+}
+
+- (BOOL)dvt_selfOrUnderlyingErrorMatchesBlock:(BOOL (^)(NSError *error))block
+{
+    /* Test this error, then each underlying error, until one matches. The block
+       is applied to the error object itself, not to any particular field. */
+    if (block(self)) {
+        return YES;
+    }
+    id underlyingError = self.userInfo[NSUnderlyingErrorKey];
+    if (underlyingError) {
+        return [underlyingError dvt_selfOrUnderlyingErrorMatchesBlock:block];
+    }
+    return NO;
 }
 
 @end
