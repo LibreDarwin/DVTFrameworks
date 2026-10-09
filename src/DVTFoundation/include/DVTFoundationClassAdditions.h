@@ -1213,6 +1213,76 @@ NS_ASSUME_NONNULL_BEGIN
                allowNil:(BOOL)allowNil
                   error:(NSError * __autoreleasing _Nullable * _Nullable)error;
 
+/*
+ The typed lookups and the immutable builders the error-reporting selectors lean on.
+
+ The `*OrNilForKey:` accessors answer the stored value only when it is an instance of
+ the named class, and `nil` otherwise -- a missing key, a value of another class, and a
+ stored `NSNull` all answer `nil` alike. Apple keeps the whole set (string, data,
+ dictionary, array, date and number) in this same category, so they land together.
+
+ The three builders are value-semantic: none mutates its receiver. The variadic
+ `+dvt_dictionaryWithKeysAndValues:` is the odd one -- a nil object drops its pair and
+ the next argument is read as a key, so only a nil key ends the run. The two instance
+ builders reproduce the binary's copy shortcuts, which is why a receiver's own class
+ and mutability are preserved when nothing actually changes.
+ */
+
+/**
+ Returns a dictionary built from the variadic `key, value` pairs, terminated by a nil
+ key.
+
+ The pairs go into stack storage of 256 entries; beyond that the storage moves to the
+ heap and grows by doubling, seeded with a `calloc` and then `realloc`ed. A nil object
+ is dropped along with its key and the walk reads the following argument as the next
+ key, so a stray nil value does not end the run -- only a nil key does. A nil
+ `firstKey` answers an empty dictionary.
+
+ @param firstKey The first key, or nil for an empty dictionary.
+ */
++ (NSDictionary *)dvt_dictionaryWithKeysAndValues:(id)firstKey, ...;
+
+/**
+ Returns a copy of the receiver with `object` stored at `key`.
+
+ Both arguments are asserted non-nil. When the receiver already holds `object` at
+ `key` the receiver is copied verbatim; otherwise a mutable copy is made and `object`
+ is set on it, so the answer is mutable in that case.
+
+ @param object The value to store; must not be nil.
+ @param key The key to store it under; must not be nil.
+ */
+- (NSDictionary *)dvt_dictionaryBySettingObject:(id)object forKey:(id)key;
+
+/**
+ Returns a copy of the receiver with every entry of `dictionary` added.
+
+ An empty receiver answers a copy of `dictionary` and an empty `dictionary` answers a
+ copy of the receiver; otherwise the answer is a mutable copy of the receiver with the
+ entries added, so it is mutable in that case. The receiver is left unchanged.
+
+ @param dictionary The entries to add; must not be nil.
+ */
+- (NSDictionary *)dvt_dictionaryByAddingEntriesFromDictionary:(NSDictionary *)dictionary;
+
+/** `self[key]` when it is an `NSString`, otherwise `nil`. */
+- (nullable NSString *)dvt_stringOrNilForKey:(id)key;
+
+/** `self[key]` when it is an `NSData`, otherwise `nil`. */
+- (nullable NSData *)dvt_dataOrNilForKey:(id)key;
+
+/** `self[key]` when it is an `NSDictionary`, otherwise `nil`. */
+- (nullable NSDictionary *)dvt_dictionaryOrNilForKey:(id)key;
+
+/** `self[key]` when it is an `NSArray`, otherwise `nil`. */
+- (nullable NSArray *)dvt_arrayOrNilForKey:(id)key;
+
+/** `self[key]` when it is an `NSDate`, otherwise `nil`. */
+- (nullable NSDate *)dvt_dateOrNilForKey:(id)key;
+
+/** `self[key]` when it is an `NSNumber`, otherwise `nil`. */
+- (nullable NSNumber *)dvt_numberOrNilForKey:(id)key;
+
 @end
 
 /*

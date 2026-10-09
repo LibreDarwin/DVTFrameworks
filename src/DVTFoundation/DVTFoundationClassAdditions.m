@@ -31,6 +31,7 @@
 #import <Foundation/NSNull.h>
 #import <objc/message.h>
 #import <stdlib.h>
+#import <string.h>
 
 /*
  PureDarwin's Foundation is a subset of Apple's: -firstObject, -indexOfObject:,
@@ -2505,6 +2506,127 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 - (BOOL)dvt_isNonEmpty
 {
     return self.count != 0;
+}
+
++ (NSDictionary *)dvt_dictionaryWithKeysAndValues:(id)firstKey, ...
+{
+    /* The variadic pairs are staged into two stack buffers of 256 entries; past that
+       the storage moves to the heap and grows by doubling, seeded with calloc and then
+       realloc'ed. A nil value drops its pair and the walk reads the next argument as a
+       key, so only a nil key ends the run; a nil first key answers an empty dictionary
+       through the receiver's own class. */
+    if (firstKey == nil) {
+        return [self dictionary];
+    }
+    __unsafe_unretained id stackKeys[256];
+    __unsafe_unretained id stackObjects[256];
+    __unsafe_unretained id *keys = stackKeys;
+    __unsafe_unretained id *objects = stackObjects;
+    NSUInteger capacity = 256;
+    NSUInteger count = 0;
+    va_list arguments;
+    va_start(arguments, firstKey);
+    id key = firstKey;
+    while (key != nil) {
+        id object = va_arg(arguments, id);
+        if (object == nil) {
+            key = va_arg(arguments, id);
+            continue;
+        }
+        if (count == capacity) {
+            capacity *= 2;
+            if (keys == stackKeys) {
+                keys = (__unsafe_unretained id *)calloc(capacity, sizeof(id));
+                objects = (__unsafe_unretained id *)calloc(capacity, sizeof(id));
+                memcpy(keys, stackKeys, count * sizeof(id));
+                memcpy(objects, stackObjects, count * sizeof(id));
+            } else {
+                keys = (__unsafe_unretained id *)realloc(keys, capacity * sizeof(id));
+                objects = (__unsafe_unretained id *)realloc(objects, capacity * sizeof(id));
+            }
+        }
+        keys[count] = key;
+        objects[count] = object;
+        count++;
+        key = va_arg(arguments, id);
+    }
+    va_end(arguments);
+    NSDictionary *result = [self dictionaryWithObjects:objects forKeys:keys count:count];
+    if (keys != stackKeys) {
+        free(keys);
+        free(objects);
+    }
+    return result;
+}
+
+- (NSDictionary *)dvt_dictionaryBySettingObject:(id)object forKey:(id)key
+{
+    /* The key is asserted before the value, matching the binary. Setting the value the
+       receiver already holds at the key is a copy of the receiver itself; anything
+       else is a mutable copy with the one entry set, which is why that path answers a
+       mutable dictionary and the unchanged path does not. */
+    DVTAssert(key != nil, @"((key)) != nil", nil, @"%@ should not be nil.", @"(key)");
+    DVTAssert(object != nil, @"((obj)) != nil", nil, @"%@ should not be nil.", @"(obj)");
+    if ([self objectForKey:key] == object) {
+        return [self copy];
+    }
+    NSMutableDictionary *dictionary = [self mutableCopy];
+    [dictionary setObject:object forKey:key];
+    return dictionary;
+}
+
+- (NSDictionary *)dvt_dictionaryByAddingEntriesFromDictionary:(NSDictionary *)dictionary
+{
+    /* Either empty side short-circuits to a copy of the other so no mutable dictionary
+       is allocated; only when both carry entries is a mutable copy grown with the
+       additions. The receiver is never touched. */
+    if ([self count] == 0) {
+        return [dictionary copy];
+    }
+    if ([dictionary count] == 0) {
+        return [self copy];
+    }
+    NSMutableDictionary *result = [self mutableCopy];
+    [result addEntriesFromDictionary:dictionary];
+    return result;
+}
+
+- (NSString *)dvt_stringOrNilForKey:(id)key
+{
+    /* The class check is the whole of the method: the value is asked whether it is an
+       instance of the stated class, and answered as-is or replaced with nil. */
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+- (NSData *)dvt_dataOrNilForKey:(id)key
+{
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSData class]] ? value : nil;
+}
+
+- (NSDictionary *)dvt_dictionaryOrNilForKey:(id)key
+{
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+- (NSArray *)dvt_arrayOrNilForKey:(id)key
+{
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSArray class]] ? value : nil;
+}
+
+- (NSDate *)dvt_dateOrNilForKey:(id)key
+{
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSDate class]] ? value : nil;
+}
+
+- (NSNumber *)dvt_numberOrNilForKey:(id)key
+{
+    id value = [self objectForKey:key];
+    return [value isKindOfClass:[NSNumber class]] ? value : nil;
 }
 
 @end

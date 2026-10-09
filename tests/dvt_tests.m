@@ -4704,6 +4704,94 @@ static void DVTTestDictionaryAdditions(void)
         DVTExpectEqualObjects(rebuilt, dictionary,
                               @"dvt_getStrongObjects:andStrongKeys: returns matching owned pairs");
     }
+
+    /* The variadic builder walks key/value pairs until a nil key. A nil value drops
+       its pair rather than ending the run, and a nil first key is an empty dictionary
+       built through the receiver's own class. */
+    {
+        DVTExpectEqualObjects([NSDictionary dvt_dictionaryWithKeysAndValues:@"a", @1, @"b", @2, nil],
+                              (@{@"a": @1, @"b": @2}),
+                              @"dvt_dictionaryWithKeysAndValues: builds the pairs");
+        DVTExpectEqualObjects([NSDictionary dvt_dictionaryWithKeysAndValues:@"a", @1, @"b", nil, @"c", @3, nil],
+                              (@{@"a": @1, @"c": @3}),
+                              @"dvt_dictionaryWithKeysAndValues: drops a nil value and its key");
+        DVTExpectEqualObjects([NSDictionary dvt_dictionaryWithKeysAndValues:nil], @{},
+                              @"dvt_dictionaryWithKeysAndValues: a nil first key is empty");
+    }
+
+    /* -dvt_dictionaryBySettingObject:forKey: copies the receiver when the value is
+       unchanged and answers a mutable copy otherwise, never touching the receiver. */
+    {
+        NSDictionary *dictionary = @{@"a": @1};
+        NSNumber *one = dictionary[@"a"];
+        DVTExpectEqualObjects([dictionary dvt_dictionaryBySettingObject:one forKey:@"a"], dictionary,
+                              @"dvt_dictionaryBySettingObject:forKey: reproduces the receiver when unchanged");
+        NSDictionary *extended = [dictionary dvt_dictionaryBySettingObject:@2 forKey:@"b"];
+        DVTExpectEqualObjects(extended, (@{@"a": @1, @"b": @2}),
+                              @"dvt_dictionaryBySettingObject:forKey: adds the new entry");
+        DVTExpect([extended isKindOfClass:[NSMutableDictionary class]],
+                  @"dvt_dictionaryBySettingObject:forKey: the changed answer is mutable");
+        DVTExpectEqualObjects(dictionary, @{@"a": @1},
+                              @"dvt_dictionaryBySettingObject:forKey: leaves the receiver unchanged");
+    }
+
+    /* -dvt_dictionaryByAddingEntriesFromDictionary: short-circuits an empty side to a
+       copy of the other and merges only when both carry entries. */
+    {
+        NSDictionary *dictionary = @{@"a": @1};
+        DVTExpectEqualObjects([dictionary dvt_dictionaryByAddingEntriesFromDictionary:@{@"b": @2}],
+                              (@{@"a": @1, @"b": @2}),
+                              @"dvt_dictionaryByAddingEntriesFromDictionary: merges the entries");
+        DVTExpectEqualObjects([@{} dvt_dictionaryByAddingEntriesFromDictionary:dictionary], dictionary,
+                              @"dvt_dictionaryByAddingEntriesFromDictionary: an empty receiver copies the argument");
+        NSDictionary *copied = [dictionary dvt_dictionaryByAddingEntriesFromDictionary:@{}];
+        DVTExpectEqualObjects(copied, dictionary,
+                              @"dvt_dictionaryByAddingEntriesFromDictionary: an empty argument copies the receiver");
+        DVTExpectEqualObjects(dictionary, @{@"a": @1},
+                              @"dvt_dictionaryByAddingEntriesFromDictionary: leaves the receiver unchanged");
+    }
+
+    /* The typed readers answer the stored object only when it is of the stated class,
+       and nil for a missing key, a value of another class, or an NSNull. */
+    {
+        NSData *data = [@"bytes" dataUsingEncoding:NSUTF8StringEncoding];
+        NSDate *date = [NSDate dateWithTimeIntervalSince1970:0];
+        NSDictionary *dictionary = @{@"string": @"value",
+                                     @"data": data,
+                                     @"dict": @{@"k": @"v"},
+                                     @"array": @[@"a"],
+                                     @"date": date,
+                                     @"number": @7,
+                                     @"null": [NSNull null]};
+        DVTExpect([dictionary dvt_stringOrNilForKey:@"string"] == dictionary[@"string"],
+                  @"dvt_stringOrNilForKey: returns the stored string");
+        DVTExpect([dictionary dvt_stringOrNilForKey:@"missing"] == nil,
+                  @"dvt_stringOrNilForKey: a missing key is nil");
+        DVTExpect([dictionary dvt_stringOrNilForKey:@"number"] == nil,
+                  @"dvt_stringOrNilForKey: a value of another class is nil");
+        DVTExpect([dictionary dvt_stringOrNilForKey:@"null"] == nil,
+                  @"dvt_stringOrNilForKey: an NSNull is nil");
+        DVTExpect([dictionary dvt_dataOrNilForKey:@"data"] == data,
+                  @"dvt_dataOrNilForKey: returns the stored data");
+        DVTExpect([dictionary dvt_dataOrNilForKey:@"string"] == nil,
+                  @"dvt_dataOrNilForKey: a value of another class is nil");
+        DVTExpect([dictionary dvt_dictionaryOrNilForKey:@"dict"] == dictionary[@"dict"],
+                  @"dvt_dictionaryOrNilForKey: returns the stored dictionary");
+        DVTExpect([dictionary dvt_dictionaryOrNilForKey:@"array"] == nil,
+                  @"dvt_dictionaryOrNilForKey: a value of another class is nil");
+        DVTExpect([dictionary dvt_arrayOrNilForKey:@"array"] == dictionary[@"array"],
+                  @"dvt_arrayOrNilForKey: returns the stored array");
+        DVTExpect([dictionary dvt_arrayOrNilForKey:@"dict"] == nil,
+                  @"dvt_arrayOrNilForKey: a value of another class is nil");
+        DVTExpect([dictionary dvt_dateOrNilForKey:@"date"] == date,
+                  @"dvt_dateOrNilForKey: returns the stored date");
+        DVTExpect([dictionary dvt_dateOrNilForKey:@"data"] == nil,
+                  @"dvt_dateOrNilForKey: a value of another class is nil");
+        DVTExpect([dictionary dvt_numberOrNilForKey:@"number"] == dictionary[@"number"],
+                  @"dvt_numberOrNilForKey: returns the stored number");
+        DVTExpect([dictionary dvt_numberOrNilForKey:@"string"] == nil,
+                  @"dvt_numberOrNilForKey: a value of another class is nil");
+    }
 }
 
 #pragma mark - Observing convenience
