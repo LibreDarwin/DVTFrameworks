@@ -1117,6 +1117,11 @@ payloads and signed zeroes have to agree too: 1,210 cases on a structured grid
 plus 200,000 randomised rects covering subnormals, ±1e300, mixed signs and zero
 dimensions. Zero mismatches.
 
+`NSValue (DVTGeometryAdditions)` is the storage side of the same family. Its
+single `dvt_insetValue` boxes an `NSEdgeInsets`: the method reads the struct back
+out with `getValue:`, and the ABI returns it in the four floating-point registers
+as-is.
+
 ### Text extras
 
 The string and fragment helpers in `DVTTextExtras` were recovered from Apple's

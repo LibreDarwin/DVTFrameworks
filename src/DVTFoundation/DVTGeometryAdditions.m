@@ -24,6 +24,7 @@
 //
 
 #import "DVTGeometryAdditions.h"
+#import "NSValue+DVTGeometryAdditions.h"
 
 /* CoreGraphics' CGRectGetMinX and friends are real exported functions, not
    inline arithmetic, and Apple calls them directly. They are *geometric*: for a
@@ -245,3 +246,17 @@ CGRect DVTPlaceRectInsideRect(CGRect rect, CGRect container)
 
     return CGRectMake(x, y, width, height);
 }
+
+@implementation NSValue (DVTGeometryAdditions)
+
+- (NSEdgeInsets)dvt_insetValue
+{
+    /* The value is stored as an edge insets struct; reading it back is just a
+       getValue: into a local, which the ABI then returns in the four
+       floating-point registers. */
+    NSEdgeInsets insets = { 0, 0, 0, 0 };
+    [self getValue:&insets];
+    return insets;
+}
+
+@end

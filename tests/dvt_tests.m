@@ -615,6 +615,15 @@ static void DVTTestGeometry(void)
     CGRect oversized = DVTPlaceRectInsideRect(CGRectMake(0, 0, 200, 200), CGRectMake(0, 0, 100, 100));
     DVTExpectEqualRects(oversized, CGRectMake(-100, -100, 200, 200),
                         @"an oversized rect keeps its size and spills out of the container");
+
+    /* NSValue stores the same edge insets struct; reading it back through the
+       category is a field-for-field round-trip. */
+    NSEdgeInsets insets = { 1, 2, 3, 4 };
+    NSValue *insetsValue = [NSValue valueWithBytes:&insets objCType:@encode(NSEdgeInsets)];
+    NSEdgeInsets insetsBack = insetsValue.dvt_insetValue;
+    DVTExpect(insetsBack.top == 1 && insetsBack.left == 2 &&
+              insetsBack.bottom == 3 && insetsBack.right == 4,
+              @"dvt_insetValue returns the stored edge insets");
 }
 
 static void DVTTestEnvironmentSnapshot(void)
