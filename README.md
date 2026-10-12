@@ -227,7 +227,7 @@ contiguous-run search, the array and set extremes by `compare:` or by a
 comparison block, grouping by a block key or by key path, joining with a
 final-component separator, a command-line renderer, and an `NSHashTable`
 addition. See
-`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 131 methods
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h` for the 133 methods
 implemented here.
 
 The `NSMutableArray` `dvt` methods are complete: every one Apple installs on
@@ -592,6 +592,72 @@ replacement character as usual. Note that this is the opposite of the `U+FFFF`
 behaviour above, which truncates in the extended profile's absence rather than in
 its presence.
 
+### Class categories beside the array and dictionary families
+
+Five more categories under the `DVTFoundationClassAdditions` name share nothing
+but the header they live in (`src/DVTFoundation/DVTFoundationClassAdditions.m`):
+`NSDate`, `NSInputStream`, `NSOutputStream`, `NSMutableString` and
+`NSXMLElement`. Each was decoded from the assembly and reproduced in full.
+
+**Dates.** `dvt_isInThePast` is `-timeIntervalSinceNow < 0`, so a receiver
+compared a microsecond after it was built is already "in the past"; the helper
+below is the one that makes today's date answer as such.
+`dvt_mostSignificantDateComponentStringRelativeToToday` asks
+`NSCalendar isDateInYesterday:` / `isDateInTomorrow:` first — a date one day out
+is "Yesterday"/"Tomorrow" regardless of its time — and otherwise takes the
+largest non-zero component in the order year, month, week-of-year, day, feeding
+it to a shared `@"%ld %@ ago"` / `@"In %ld %@"` formatter that pluralizes on the
+count. `dvt_dateStringRelativeToTodayWithDateStyle:timeStyle:…` brackets today's
+and yesterday's midnight from `[NSCalendar currentCalendar]`, renders the day
+with the two supplied styles, and joins the time with `@" at %@"` or, when asked,
+`@", %@"`; `capitalizeFirstLetter:` only uppercases that leading word.
+
+**LEB128 streams.** `NSInputStream` gains `dvt_readUnsignedLEB128Integer` and
+`dvt_readSignedLEB128Integer`; `NSOutputStream` the matching writers. The
+unsigned decoder accumulates seven bits per byte and stops at the last byte whose
+high bit is clear; the signed one additionally sign-extends when the final byte's
+`0x40` bit is set. The encoders are canonical — the signed writer keeps emitting
+while the sign bit of the last group does not match the remaining value — so
+`-1` is the single byte `0x7F` and `-65` is `0xBF 0x7F`. Round-trips cover the
+extremes of both widths.
+
+**Mutable strings.** `dvt_replaceCharactersFromSet:inRange:withString:` walks
+`rangeOfCharacterFromSet:` over the range and, on each hit, replaces it and
+advances **past the inserted string**, so a replacement that itself contains a
+matched character is not replaced again (`@x@` → `@@x@@` when replacing `@` with
+`@@`). An empty range is the only early-out.
+`dvt_trimCharactesFromSet:preservingRange:` delegates to the `NSString`
+interior-range helper below and then deletes the tail before the head. A
+`preservingRange` whose location is `NSNotFound` trims the whole string; any
+other range is *protected*, so characters outside it are what gets trimmed.
+
+The second `NSString` helper,
+`dvt_interiorRangeAfterTrimmingCharactesFromSet:preservingRange:`, trims leading
+members only as far as `range.location` and trailing members only down to
+`NSMaxRange(range)`; it asserts `NSMaxRange(preservedRange) <= length` and then
+`start <= end`, and answers `{start, end - start}` (the empty range when the
+whole string trims away). The one-argument form trims both ends of the receiver.
+
+`dvt_standardizeWithLineEnding:range:` raises `NSRangeException` when the range
+runs past the receiver and otherwise walks line by line with
+`getLineStart:end:contentsEnd:forRange:`, replacing only a line's terminator and
+only when it does not already match the target case-insensitively; the running
+length absorbs any change in terminator width. The ending is `1` for a line feed,
+`2` for a carriage return and `3` for a carriage return followed by a line feed;
+anything else, `0` included, is a no-op. The one-argument form covers the whole
+string.
+
+**XML.** `+dvt_elementWithXMLStringByPreservingWhitespace:error:` parses with
+`NSXMLNodePreserveWhitespace`, detaches the root element from its document, and
+returns it (or `nil` with the parser's error).
+`dvt_isApplicableForCurrentRuntimeOSVersion` reads a lone
+`minimumRequiredRuntimeOSVersion` attribute: absent, or parsing to `0`, always
+applies, and otherwise the value is an availability form compared against
+`[[DVTVersion currentSystemVersion] availabilityFormIncludingUpdate:YES]`. The
+two `dvt_elementsApplicableForCurrentRuntimeOSVersion…` selectors filter the
+element's children (all of them, or just those of a given name) through that test
+with `dvt_objectsPassingTest:`.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and
@@ -662,7 +728,11 @@ Apple's binary the selector appears only as a call site, so the implementation
 belongs to whatever class needs it — and `DVTPropertyListValue.h` declares the
 call shape the assembly proves as the `DVTPropertyListValueDecoding` protocol.
 That form (a protocol rather than, say, an `NSObject` category) is the one thing
-a method list cannot tell you.
+a method list cannot tell you. Apple's own headers also carry a second protocol,
+`DVTPropertyListValue` (`<NSObject, NSSecureCoding, NSCopying>`, the six
+`dvt_plist*Value` getters), which every plist category conforms to; it is
+declared here too and is what the `NSDate (DVTFoundationClassAdditions)`
+category's `<DVTPropertyListValue>` conformance resolves against.
 
 ### Dictionary additions
 

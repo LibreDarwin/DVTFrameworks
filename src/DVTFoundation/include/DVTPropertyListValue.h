@@ -83,6 +83,30 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+/**
+ The contract a class answers when it *is* a property list value: the six
+ questions above, gathered into a single protocol so a container can require
+ them of its members. Every plist type adopted it — the categories below supply
+ the answers, each returning the receiver for its own type and `nil` for the
+ rest.
+ */
+@protocol DVTPropertyListValue <NSObject, NSSecureCoding, NSCopying>
+
+/** The receiver when it is a string, else `nil`. */
+@property (readonly) NSString *dvt_plistStringValue;
+/** The receiver when it is data, else `nil`. */
+@property (readonly) NSData *dvt_plistDataValue;
+/** The receiver when it is a number, else `nil`. */
+@property (readonly) NSNumber *dvt_plistNumberValue;
+/** The receiver when it is a date, else `nil`. */
+@property (readonly) NSDate *dvt_plistDateValue;
+/** The receiver when it is an array, else `nil`. */
+@property (readonly) NSArray *dvt_plistArrayValue;
+/** The receiver when it is a dictionary, else `nil`. */
+@property (readonly) NSDictionary *dvt_plistDictionaryValue;
+
+@end
+
 @interface NSString (DVTPropertyListValue)
 
 /** The receiver. A string is already a plist string, whatever it contains. */

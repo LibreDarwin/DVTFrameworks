@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -7701,6 +7703,222 @@ static void DVTTestPersistableParameterOmission(void)
                           @"a timestamp of zero is recorded rather than treated as absent");
 }
 
+/** Encodes `value` as an unsigned LEB128 through an `NSOutputStream`. */
+static NSData *DVTLeb128EncodeUnsigned(unsigned long long value)
+{
+    NSOutputStream *output = [NSOutputStream outputStreamToMemory];
+    [output open];
+    [output dvt_writeUnsignedLEB128Integer:value];
+    [output close];
+    return [output propertyForKey:NSStreamDataWrittenToMemoryStreamKey];
+}
+
+/** Decodes an unsigned LEB128 from `data` through an `NSInputStream`. */
+static unsigned long long DVTLeb128DecodeUnsigned(NSData *data)
+{
+    NSInputStream *input = [NSInputStream inputStreamWithData:data];
+    [input open];
+    unsigned long long value = [input dvt_readUnsignedLEB128Integer];
+    [input close];
+    return value;
+}
+
+/** Encodes `value` as a signed LEB128 through an `NSOutputStream`. */
+static NSData *DVTLeb128EncodeSigned(long long value)
+{
+    NSOutputStream *output = [NSOutputStream outputStreamToMemory];
+    [output open];
+    [output dvt_writeSignedLEB128Integer:value];
+    [output close];
+    return [output propertyForKey:NSStreamDataWrittenToMemoryStreamKey];
+}
+
+/** Decodes a signed LEB128 from `data` through an `NSInputStream`. */
+static long long DVTLeb128DecodeSigned(NSData *data)
+{
+    NSInputStream *input = [NSInputStream inputStreamWithData:data];
+    [input open];
+    long long value = [input dvt_readSignedLEB128Integer];
+    [input close];
+    return value;
+}
+
+static void DVTTestClassCategoryRemainder(void)
+{
+    fprintf(stdout, "\n== class categories (NSMutableString/NSStream/NSDate/NSXMLElement) ==\n");
+
+    NSCharacterSet *dots = [NSCharacterSet characterSetWithCharactersInString:@"."];
+
+    /* Every matched character is replaced, and the walk skips over the inserted string so a
+       replacement that itself contains the searched-for character is not replaced again. */
+    NSMutableString *replaced = [NSMutableString stringWithString:@"a.b..c"];
+    [replaced dvt_replaceCharactersFromSet:dots inRange:NSMakeRange(0, replaced.length) withString:@"X"];
+    DVTExpectEqualObjects(replaced, @"aXbXXc", @"every matched character is replaced in range");
+
+    NSMutableString *partial = [NSMutableString stringWithString:@"a.b.c"];
+    [partial dvt_replaceCharactersFromSet:dots inRange:NSMakeRange(0, 3) withString:@"-"];
+    DVTExpectEqualObjects(partial, @"a-b.c", @"only the requested range is replaced");
+
+    NSMutableString *selfFeeding = [NSMutableString stringWithString:@"@x@"];
+    [selfFeeding dvt_replaceCharactersFromSet:[NSCharacterSet characterSetWithCharactersInString:@"@"]
+                                      inRange:NSMakeRange(0, selfFeeding.length)
+                                   withString:@"@@"];
+    DVTExpectEqualObjects(selfFeeding, @"@@x@@", @"an inserted string is not replaced again");
+
+    NSMutableString *untouched = [NSMutableString stringWithString:@"ab"];
+    [untouched dvt_replaceCharactersFromSet:dots inRange:NSMakeRange(1, 0) withString:@"X"];
+    DVTExpectEqualObjects(untouched, @"ab", @"an empty range is a no-op");
+
+    NSCharacterSet *whitespace = [NSCharacterSet whitespaceCharacterSet];
+
+    /* The `preservingRange` location decides how far the leading trim may run; `NSNotFound` trims
+       the whole receiver, matching the plain interior-range query. */
+    NSMutableString *trimmed = [NSMutableString stringWithString:@"  hi  "];
+    [trimmed dvt_trimCharactesFromSet:whitespace preservingRange:NSMakeRange(NSNotFound, 0)];
+    DVTExpectEqualObjects(trimmed, @"hi", @"a not-found range trims both ends");
+
+    NSCharacterSet *dashes = [NSCharacterSet characterSetWithCharactersInString:@"-"];
+    NSMutableString *preserved = [NSMutableString stringWithString:@"--a--b--"];
+    [preserved dvt_trimCharactesFromSet:dashes preservingRange:NSMakeRange(2, 3)];
+    DVTExpectEqualObjects(preserved, @"a--b", @"characters outside the preserved range are trimmed");
+
+    DVTExpectEqualRanges([@"  hi  " dvt_interiorRangeAfterTrimmingCharactesFromSet:whitespace],
+                         NSMakeRange(2, 2), @"interior range drops both whitespace runs");
+    DVTExpectEqualRanges([@"    " dvt_interiorRangeAfterTrimmingCharactesFromSet:whitespace],
+                         NSMakeRange(0, 0), @"an all-trimmed string answers the empty range");
+    DVTExpectEqualRanges([@"" dvt_interiorRangeAfterTrimmingCharactesFromSet:whitespace],
+                         NSMakeRange(0, 0), @"an empty string answers the empty range");
+    DVTExpectEqualRanges([@"hi" dvt_interiorRangeAfterTrimmingCharactesFromSet:whitespace],
+                         NSMakeRange(0, 2), @"a string with no matches is returned whole");
+    DVTExpectEqualRanges([@"--a--" dvt_interiorRangeAfterTrimmingCharactesFromSet:dashes
+                                                          preservingRange:NSMakeRange(0, 0)],
+                         NSMakeRange(0, 3), @"a zero-length preserved range still trims the tail");
+
+    /* Standardizing rewrites each line's terminator: 1 is LF, 2 is CR, 3 is CRLF, and 0 is a no-op. */
+    NSMutableString *lf = [NSMutableString stringWithString:@"a\rb\rc"];
+    [lf dvt_standardizeWithLineEnding:1];
+    DVTExpectEqualObjects(lf, @"a\nb\nc", @"CR endings are standardized to LF");
+
+    NSMutableString *crlf = [NSMutableString stringWithString:@"a\r\nb\nc"];
+    [crlf dvt_standardizeWithLineEnding:3];
+    DVTExpectEqualObjects(crlf, @"a\r\nb\r\nc", @"mixed endings are standardized to CRLF");
+
+    NSMutableString *cr = [NSMutableString stringWithString:@"a\nb"];
+    [cr dvt_standardizeWithLineEnding:2];
+    DVTExpectEqualObjects(cr, @"a\rb", @"LF endings are standardized to CR");
+
+    NSMutableString *noEnding = [NSMutableString stringWithString:@"a\rb"];
+    [noEnding dvt_standardizeWithLineEnding:0];
+    DVTExpectEqualObjects(noEnding, @"a\rb", @"an unknown line ending leaves the string alone");
+
+    BOOL threwRange = NO;
+    @try {
+        NSMutableString *tooShort = [NSMutableString stringWithString:@"ab"];
+        [tooShort dvt_standardizeWithLineEnding:1 range:NSMakeRange(0, 5)];
+    } @catch (NSException *exception) {
+        threwRange = [[exception name] isEqualToString:NSRangeException];
+    }
+    DVTExpect(threwRange, @"an out-of-bounds range raises NSRangeException");
+
+    /* LEB128 round-trips: canonical byte strings decode to the value and re-encode identically. */
+    struct { const uint8_t *bytes; NSUInteger length; unsigned long long value; } unsignedCases[] = {
+        { (const uint8_t[]){ 0x00 }, 1, 0 },
+        { (const uint8_t[]){ 0x7F }, 1, 127 },
+        { (const uint8_t[]){ 0x80, 0x01 }, 2, 128 },
+        { (const uint8_t[]){ 0xAC, 0x02 }, 2, 300 },
+        { (const uint8_t[]){ 0xE5, 0x8E, 0x26 }, 3, 624485 },
+    };
+    for (size_t i = 0; i < sizeof(unsignedCases) / sizeof(unsignedCases[0]); i++) {
+        NSData *encoded = [NSData dataWithBytes:unsignedCases[i].bytes length:unsignedCases[i].length];
+        NSInputStream *input = [NSInputStream inputStreamWithData:encoded];
+        [input open];
+        unsigned long long decoded = [input dvt_readUnsignedLEB128Integer];
+        [input close];
+        DVTExpect(decoded == unsignedCases[i].value,
+                  [NSString stringWithFormat:@"unsigned LEB128 decodes [case %zu]", i]);
+
+        NSOutputStream *output = [NSOutputStream outputStreamToMemory];
+        [output open];
+        [output dvt_writeUnsignedLEB128Integer:unsignedCases[i].value];
+        [output close];
+        DVTExpectEqualObjects([output propertyForKey:NSStreamDataWrittenToMemoryStreamKey], encoded,
+                              [NSString stringWithFormat:@"unsigned LEB128 re-encodes [case %zu]", i]);
+    }
+
+    struct { const uint8_t *bytes; NSUInteger length; long long value; } signedCases[] = {
+        { (const uint8_t[]){ 0x00 }, 1, 0 },
+        { (const uint8_t[]){ 0x3F }, 1, 63 },
+        { (const uint8_t[]){ 0x40 }, 1, -64 },
+        { (const uint8_t[]){ 0x7F }, 1, -1 },
+        { (const uint8_t[]){ 0xC0, 0x00 }, 2, 64 },
+        { (const uint8_t[]){ 0xBF, 0x7F }, 2, -65 },
+    };
+    for (size_t i = 0; i < sizeof(signedCases) / sizeof(signedCases[0]); i++) {
+        NSData *encoded = [NSData dataWithBytes:signedCases[i].bytes length:signedCases[i].length];
+        NSInputStream *input = [NSInputStream inputStreamWithData:encoded];
+        [input open];
+        long long decoded = [input dvt_readSignedLEB128Integer];
+        [input close];
+        DVTExpect(decoded == signedCases[i].value,
+                  [NSString stringWithFormat:@"signed LEB128 decodes [case %zu]", i]);
+
+        NSOutputStream *output = [NSOutputStream outputStreamToMemory];
+        [output open];
+        [output dvt_writeSignedLEB128Integer:signedCases[i].value];
+        [output close];
+        DVTExpectEqualObjects([output propertyForKey:NSStreamDataWrittenToMemoryStreamKey], encoded,
+                              [NSString stringWithFormat:@"signed LEB128 re-encodes [case %zu]", i]);
+    }
+
+    /* Encode/decode identity across the whole width, including the extremes. */
+    unsigned long long unsignedExtremes[] = { 0, 1, 127, 128, 1ULL << 32, ULLONG_MAX };
+    for (size_t i = 0; i < sizeof(unsignedExtremes) / sizeof(unsignedExtremes[0]); i++) {
+        DVTExpect(DVTLeb128DecodeUnsigned(DVTLeb128EncodeUnsigned(unsignedExtremes[i])) == unsignedExtremes[i],
+                  [NSString stringWithFormat:@"unsigned LEB128 round-trips %llu", unsignedExtremes[i]]);
+    }
+    long long signedExtremes[] = { 0, 1, -1, 63, -64, 64, -65, (long long)INT64_MIN, (long long)INT64_MAX };
+    for (size_t i = 0; i < sizeof(signedExtremes) / sizeof(signedExtremes[0]); i++) {
+        DVTExpect(DVTLeb128DecodeSigned(DVTLeb128EncodeSigned(signedExtremes[i])) == signedExtremes[i],
+                  [NSString stringWithFormat:@"signed LEB128 round-trips %lld", signedExtremes[i]]);
+    }
+
+    /* Dates: only the past flag and the relative-to-today wording are stable enough to assert. */
+    NSDate *now = [NSDate date];
+    DVTExpect(![[NSDate dateWithTimeIntervalSinceNow:3600] dvt_isInThePast],
+              @"an hour ahead is not in the past");
+    DVTExpect([[NSDate dateWithTimeIntervalSinceNow:-3600] dvt_isInThePast], @"an hour ago is in the past");
+    DVTExpectEqualObjects([now dvt_mostSignificantDateComponentStringRelativeToToday], @"Today",
+                          @"the present renders as Today");
+    NSDateComponents *yearComponents = [[NSCalendar currentCalendar] components:NSCalendarUnitYear fromDate:now];
+    DVTExpectEqualObjects([now dvt_descriptionWithDateFormat:@"yyyy"],
+                          [NSString stringWithFormat:@"%ld", (long)yearComponents.year],
+                          @"a custom date format is honored");
+
+    /* XML elements carry a runtime-availability gate on their children. */
+    NSError *parseError = nil;
+    NSXMLElement *root = [NSXMLElement dvt_elementWithXMLStringByPreservingWhitespace:@"<root><a/><b/><a/></root>"
+                                                                               error:&parseError];
+    DVTExpect(root != nil && parseError == nil, @"a valid document parses");
+    DVTExpectEqualObjects([root name], @"root", @"the root element is returned");
+    DVTExpect([[root dvt_elementsApplicableForCurrentRuntimeOSVersion] count] == 3,
+              @"all applicable children are returned");
+    DVTExpect([[root dvt_elementsApplicableForCurrentRuntimeOSVersionForName:@"a"] count] == 2,
+              @"named applicable children are filtered");
+
+    NSXMLElement *gated = [NSXMLElement dvt_elementWithXMLStringByPreservingWhitespace:
+                               @"<root><old minimumRequiredRuntimeOSVersion=\"0\"/><new minimumRequiredRuntimeOSVersion=\"999999999\"/></root>"
+                                                                                            error:NULL];
+    NSArray *children = [gated children];
+    DVTExpect([(NSXMLElement *)children[0] dvt_isApplicableForCurrentRuntimeOSVersion],
+              @"a zero version requirement always applies");
+    DVTExpect(![(NSXMLElement *)children[1] dvt_isApplicableForCurrentRuntimeOSVersion],
+              @"a future version requirement does not apply");
+
+    NSError *badError = nil;
+    NSXMLElement *bad = [NSXMLElement dvt_elementWithXMLStringByPreservingWhitespace:@"<root>" error:&badError];
+    DVTExpect(bad == nil && badError != nil, @"malformed XML yields nil and an error");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -7730,6 +7948,7 @@ int main(int argc, const char *argv[])
         DVTTestPersistableParameterOmission();
         DVTTestMachO();
         DVTTestClassAdditions();
+        DVTTestClassCategoryRemainder();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

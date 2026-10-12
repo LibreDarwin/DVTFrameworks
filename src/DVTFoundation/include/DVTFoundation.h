@@ -50,7 +50,13 @@
 #import "DVTLineOffsetAwareStringWrapper.h"
 #import "DVTLineOffsetTableTextExtras.h"
 #import "DVTTextUTF8Correspondence.h"
-#import "DVTFoundationClassAdditions.h"
 #import "DVTPropertyListValue.h"
+#import "DVTFoundationClassAdditions.h"
+#import "NSDate+DVTFoundationClassAdditions.h"
+#import "NSInputStream+DVTFoundationClassAdditions.h"
+#import "NSOutputStream+DVTFoundationClassAdditions.h"
+#import "NSMutableString+DVTFoundationClassAdditions.h"
+#import "NSXMLElement+DVTFoundationClassAdditions.h"
+#import "NSMutableData+DVTNSDataStdIO.h"
 
 #endif /* DVT_FOUNDATION_H */

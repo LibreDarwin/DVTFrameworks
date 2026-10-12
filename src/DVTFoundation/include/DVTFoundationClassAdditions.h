@@ -1494,6 +1494,23 @@ DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const v
  */
 - (NSString *)dvt_stringByManglingToLegalIdentifierOfType:(NSInteger)identifierType;
 
+/**
+ The range of the receiver after dropping leading and trailing characters that belong to `set`.
+
+ When everything is trimmed away the answer is `{0, 0}` rather than the fully-consumed range.
+ */
+- (NSRange)dvt_interiorRangeAfterTrimmingCharactesFromSet:(NSCharacterSet *)set;
+
+/**
+ The range of the receiver after dropping characters from `set` that fall outside `preservedRange`.
+
+ Only characters before `preservedRange.location` and after its end are dropped; the preserved range
+ itself is never trimmed into. A `preservedRange` whose location is `NSNotFound` falls back to
+ `dvt_interiorRangeAfterTrimmingCharactesFromSet:`. Asserts that `preservedRange` lies inside the
+ receiver and that the resulting start does not pass its end.
+ */
+- (NSRange)dvt_interiorRangeAfterTrimmingCharactesFromSet:(NSCharacterSet *)set preservingRange:(NSRange)preservedRange;
+
 @end
 
 /** `YES` when the receiver has at least one entry. */

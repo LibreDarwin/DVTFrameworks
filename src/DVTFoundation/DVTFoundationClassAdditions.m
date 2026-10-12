@@ -26,6 +26,7 @@
 #import "DVTFoundationClassAdditions.h"
 
 #import "DVTAssertions.h"
+#import "DVTVersion.h"
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
@@ -3433,6 +3434,51 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
     }
 }
 
+- (NSRange)dvt_interiorRangeAfterTrimmingCharactesFromSet:(NSCharacterSet *)set
+{
+    NSUInteger length = self.length;
+    if (length == 0) {
+        return NSMakeRange(0, 0);
+    }
+    NSUInteger start = 0;
+    while (start < length && [set characterIsMember:[self characterAtIndex:start]]) {
+        start++;
+    }
+    NSUInteger end = length;
+    while (end > start && [set characterIsMember:[self characterAtIndex:end - 1]]) {
+        end--;
+    }
+    // Trimming everything answers the empty range at the start rather than the fully-trimmed one.
+    NSUInteger trimmedLength = end - start;
+    return trimmedLength == 0 ? NSMakeRange(0, 0) : NSMakeRange(start, trimmedLength);
+}
+
+- (NSRange)dvt_interiorRangeAfterTrimmingCharactesFromSet:(NSCharacterSet *)set preservingRange:(NSRange)preservedRange
+{
+    if (preservedRange.location == NSNotFound) {
+        return [self dvt_interiorRangeAfterTrimmingCharactesFromSet:set];
+    }
+    NSUInteger length = self.length;
+    DVTAssert(NSMaxRange(preservedRange) <= length, @"DVTMaxRange(preservedRange) <= length", nil,
+              @"%lu <= %lu", (unsigned long)NSMaxRange(preservedRange), (unsigned long)length);
+    if (length == 0) {
+        return NSMakeRange(0, 0);
+    }
+    // Only characters outside `preservedRange` are dropped: leading characters up to its location,
+    // trailing characters after its end. The range itself is never trimmed into.
+    NSUInteger start = 0;
+    while (start < preservedRange.location && [set characterIsMember:[self characterAtIndex:start]]) {
+        start++;
+    }
+    NSUInteger end = length;
+    NSUInteger preservedEnd = NSMaxRange(preservedRange);
+    while (end > preservedEnd && [set characterIsMember:[self characterAtIndex:end - 1]]) {
+        end--;
+    }
+    DVTAssert(start <= end, @"start <= end", nil, @"%lu <= %lu", (unsigned long)start, (unsigned long)end);
+    return NSMakeRange(start, end - start);
+}
+
 @end
 
 @implementation NSObject (DVTObservingConvenience)
@@ -3857,6 +3903,374 @@ NSString *const DVTRecoveryBlockKey = @"DVTRecoveryBlockKey";
         return [underlyingError dvt_selfOrUnderlyingErrorMatchesBlock:block];
     }
     return NO;
+}
+
+@end
+
+/** Renders one calendar-component difference for
+    -dvt_mostSignificantDateComponentStringRelativeToToday. A positive value is
+    in the past ("N <unit> ago"); a negative one is in the future ("In N
+    <unit>"), spelled with the magnitude. `singular` is used when the magnitude
+    is exactly one. */
+static NSString *DVTDateComponentString(NSInteger value, NSString *singular, NSString *plural)
+{
+    NSString *unit = (value == 1 || value == -1) ? singular : plural;
+    if (value >= 1) {
+        return [NSString stringWithFormat:@"%ld %@ ago", (long)value, unit];
+    }
+    return [NSString stringWithFormat:@"In %ld %@", (long)(-value), unit];
+}
+
+@implementation NSDate (DVTFoundationClassAdditions)
+
+- (NSString *)dvt_dateStringRelativeToTodayWithDateStyle:(NSDateFormatterStyle)style timeStyle:(NSDateFormatterStyle)timeStyle
+{
+    /* Defaults: capitalize the relative word, and join with " at ". */
+    return [self dvt_dateStringRelativeToTodayWithDateStyle:style
+                                                  timeStyle:timeStyle
+                                      capitalizeFirstLetter:YES];
+}
+
+- (NSString *)dvt_dateStringRelativeToTodayWithDateStyle:(NSDateFormatterStyle)style timeStyle:(NSDateFormatterStyle)timeStyle capitalizeFirstLetter:(BOOL)capitalizeFirstLetter
+{
+    /* Defaults: the " at " join rather than the comma. */
+    return [self dvt_dateStringRelativeToTodayWithDateStyle:style
+                                                  timeStyle:timeStyle
+                                      capitalizeFirstLetter:capitalizeFirstLetter
+                                           seperateWithComma:NO];
+}
+
+- (NSString *)dvt_dateStringRelativeToTodayWithDateStyle:(NSDateFormatterStyle)style timeStyle:(NSDateFormatterStyle)timeStyle capitalizeFirstLetter:(BOOL)capitalizeFirstLetter seperateWithComma:(BOOL)seperateWithComma
+{
+    /* Round "now" down to midnight and bracket it by the previous and next
+       midnight. A date inside the current day renders as "today", one inside the
+       previous day as "yesterday"; both honour the desired capitalization. Any
+       other date falls back to the supplied date style. The time is always the
+       supplied time style, joined either with a comma or with " at ". */
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    NSDate *now = [NSDate date];
+    NSDateComponents *nowComponents = [calendar components:(NSCalendarUnitDay | NSCalendarUnitMonth | NSCalendarUnitYear)
+                                                 fromDate:now];
+    NSDate *todayMidnight = [calendar dateFromComponents:nowComponents];
+    NSTimeInterval todayMidnightInterval = [todayMidnight timeIntervalSinceReferenceDate];
+
+    NSDateComponents *offset = [[NSDateComponents alloc] init];
+    [offset setDay:-1];
+    NSDate *yesterdayMidnight = [calendar dateByAddingComponents:offset toDate:todayMidnight options:0];
+    NSTimeInterval yesterdayMidnightInterval = [yesterdayMidnight timeIntervalSinceReferenceDate];
+
+    [offset setDay:2];
+    NSDate *tomorrowMidnight = [calendar dateByAddingComponents:offset toDate:yesterdayMidnight options:0];
+    NSTimeInterval tomorrowMidnightInterval = [tomorrowMidnight timeIntervalSinceReferenceDate];
+
+    NSTimeInterval selfInterval = [self timeIntervalSinceReferenceDate];
+
+    NSString *dateString;
+    if (selfInterval >= todayMidnightInterval && selfInterval < tomorrowMidnightInterval) {
+        dateString = capitalizeFirstLetter ? @"Today" : @"today";
+    } else if (selfInterval >= yesterdayMidnightInterval && selfInterval < todayMidnightInterval) {
+        dateString = capitalizeFirstLetter ? @"Yesterday" : @"yesterday";
+    } else {
+        NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
+        [dateFormatter setDateStyle:style];
+        dateString = [dateFormatter stringFromDate:self];
+    }
+
+    NSDateFormatter *timeFormatter = [[NSDateFormatter alloc] init];
+    [timeFormatter setTimeStyle:timeStyle];
+    NSString *timeString = [timeFormatter stringFromDate:self];
+
+    return [dateString stringByAppendingFormat:(seperateWithComma ? @", %@" : @" at %@"), timeString];
+}
+
+- (NSString *)dvt_descriptionWithDateFormat:(NSString *)format
+{
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:format];
+    return [formatter stringFromDate:self];
+}
+
+- (NSString *)dvt_mostSignificantDateComponentStringRelativeToToday
+{
+    /* Today/yesterday/tomorrow are named directly. Otherwise the date is reduced
+       to a single calendar component -- year, else month, else week, else day --
+       measured between this date and now, and rendered as "N <unit> ago" for a
+       past date or "In N <unit>" for a future one. The unit is singular only for
+       a magnitude of exactly one; a zero-length difference reads as "Today". */
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    NSDate *now = [NSDate date];
+
+    if ([calendar isDateInYesterday:self]) {
+        return @"Yesterday";
+    }
+    if ([calendar isDateInTomorrow:self]) {
+        return @"Tomorrow";
+    }
+    if ([calendar isDateInToday:self]) {
+        return @"Today";
+    }
+
+    NSDateComponents *components = [calendar components:(NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitWeekOfYear | NSCalendarUnitDay)
+                                               fromDate:self
+                                                 toDate:now
+                                                options:0];
+
+    if (components.year != 0) {
+        return DVTDateComponentString(components.year, @"year", @"years");
+    }
+    if (components.month != 0) {
+        return DVTDateComponentString(components.month, @"month", @"months");
+    }
+    if (components.weekOfYear != 0) {
+        return DVTDateComponentString(components.weekOfYear, @"week", @"weeks");
+    }
+    if (components.day != 0) {
+        return DVTDateComponentString(components.day, @"day", @"days");
+    }
+    return @"Today";
+}
+
+- (BOOL)dvt_isInThePast
+{
+    return [self timeIntervalSinceNow] < 0.0;
+}
+
+@end
+
+@implementation NSInputStream (DVTFoundationClassAdditions)
+
+- (unsigned long long)dvt_readUnsignedLEB128Integer
+{
+    unsigned long long result = 0;
+    unsigned int shift = 0;
+    uint8_t byte;
+    while (shift < 64) {
+        if ([self read:(uint8_t *)&byte maxLength:1] != 1) {
+            break;
+        }
+        result |= ((unsigned long long)(byte & 0x7F)) << shift;
+        if ((byte & 0x80) == 0) {
+            return result;
+        }
+        shift += 7;
+    }
+    return result;
+}
+
+- (long long)dvt_readSignedLEB128Integer
+{
+    long long result = 0;
+    unsigned int shift = 0;
+    uint8_t byte;
+    while (shift < 64) {
+        if ([self read:(uint8_t *)&byte maxLength:1] != 1) {
+            break;
+        }
+        result |= ((long long)(byte & 0x7F)) << shift;
+        if ((byte & 0x80) == 0) {
+            if ((byte & 0x40) != 0 && shift < 63) {
+                result |= (~0LL) << (shift + 7);
+            }
+            return result;
+        }
+        shift += 7;
+    }
+    return result;
+}
+
+@end
+
+@implementation NSOutputStream (DVTFoundationClassAdditions)
+
+- (void)dvt_writeUnsignedLEB128Integer:(unsigned long long)value
+{
+    uint8_t byte;
+    do {
+        byte = value & 0x7F;
+        value >>= 7;
+        if (value != 0) {
+            byte |= 0x80;
+        }
+        NSUInteger written = [self write:&byte maxLength:1];
+        if (written != 1) {
+            DVTAssert(NO, @"failed to write LEB128 byte", nil, @"Failed to write a byte for LEB128 encoding");
+            break;
+        }
+    } while (value != 0);
+}
+
+- (void)dvt_writeSignedLEB128Integer:(long long)value
+{
+    BOOL more;
+    do {
+        uint8_t byte = value & 0x7F;
+        value >>= 7;
+        more = !((value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0));
+        if (more) {
+            byte |= 0x80;
+        }
+        NSUInteger written = [self write:&byte maxLength:1];
+        if (written != 1) {
+            DVTAssert(NO, @"failed to write LEB128 byte", nil, @"Failed to write a byte for LEB128 encoding");
+            break;
+        }
+    } while (more);
+}
+
+@end
+
+@implementation NSMutableString (DVTFoundationClassAdditions)
+
+- (void)dvt_replaceCharactersFromSet:(NSCharacterSet *)set inRange:(NSRange)range withString:(NSString *)string
+{
+    if (range.length == 0) {
+        return;
+    }
+    // Repeatedly replace the next run of characters from `set`, advancing past each inserted string
+    // so a replacement that itself contains those characters is not replaced again.
+    NSUInteger location = range.location;
+    NSUInteger end = NSMaxRange(range);
+    for (;;) {
+        NSRange found = [self rangeOfCharacterFromSet:set options:0 range:NSMakeRange(location, end - location)];
+        if (found.location == NSNotFound) {
+            break;
+        }
+        [self replaceCharactersInRange:found withString:string];
+        location = found.location + string.length;
+        end += string.length - found.length;
+        if (location == end) {
+            break;
+        }
+    }
+}
+
+- (void)dvt_trimCharactesFromSet:(NSCharacterSet *)set preservingRange:(NSRange)range
+{
+    NSRange interior = [self dvt_interiorRangeAfterTrimmingCharactesFromSet:set preservingRange:range];
+    NSUInteger interiorEnd = NSMaxRange(interior);
+    [self deleteCharactersInRange:NSMakeRange(interiorEnd, self.length - interiorEnd)];
+    [self deleteCharactersInRange:NSMakeRange(0, interior.location)];
+}
+
+/**
+ Standardizes the line endings of `self` in `range` to `ending`: `1` is a line feed, `2` a carriage
+ return, and `3` a carriage return followed by a line feed; anything else is a no-op.
+ */
+static void DVTStandardizeLineEnding(NSMutableString *self, unsigned long long ending, NSUInteger location, NSUInteger length)
+{
+    NSString *replacement = nil;
+    switch (ending) {
+        case 1:
+            replacement = @"\n";
+            break;
+        case 2:
+            replacement = @"\r";
+            break;
+        case 3:
+            replacement = @"\r\n";
+            break;
+        default:
+            return;
+    }
+    NSUInteger end = location + length;
+    if (location >= end) {
+        return;
+    }
+    // Walk one line at a time. Only a line's terminator is compared and replaced, and only when it
+    // does not already match `ending` case-insensitively. The running `length` absorbs any change in
+    // terminator width so the walk stays aligned.
+    NSUInteger replacementLength = replacement.length;
+    NSUInteger cursor = location;
+    do {
+        NSUInteger lineStart = 0;
+        NSUInteger lineEnd = 0;
+        NSUInteger contentsEnd = 0;
+        [self getLineStart:&lineStart end:&lineEnd contentsEnd:&contentsEnd forRange:NSMakeRange(cursor, 1)];
+        NSUInteger terminatorLength = lineEnd - contentsEnd;
+        if (terminatorLength != 0 &&
+            [self compare:replacement options:NSCaseInsensitiveSearch range:NSMakeRange(contentsEnd, terminatorLength) locale:nil] != NSOrderedSame) {
+            [self replaceCharactersInRange:NSMakeRange(contentsEnd, terminatorLength) withString:replacement];
+            NSUInteger delta = replacementLength - terminatorLength;
+            if (delta != 0) {
+                lineEnd += delta;
+                length += delta;
+            }
+        }
+        cursor = lineEnd;
+        end = location + length;
+    } while (cursor < end);
+}
+
+- (void)dvt_standardizeWithLineEnding:(unsigned long long)ending range:(NSRange)range
+{
+    if (NSMaxRange(range) > self.length) {
+        NSString *proem = [NSString stringWithFormat:@"-[%@ %@]", [self class], NSStringFromSelector(_cmd)];
+        [NSException raise:NSRangeException format:@"%@: Range or index out of bounds", proem];
+    }
+    DVTStandardizeLineEnding(self, ending, range.location, range.length);
+}
+
+- (void)dvt_standardizeWithLineEnding:(unsigned long long)ending
+{
+    [self dvt_standardizeWithLineEnding:ending range:NSMakeRange(0, self.length)];
+}
+
+@end
+
+@implementation NSXMLElement (DVTFoundationClassAdditions)
+
++ (NSXMLElement *)dvt_elementWithXMLStringByPreservingWhitespace:(NSString *)xmlString error:(NSError **)error
+{
+    /* Parse with NSXMLNodePreserveWhitespace so the document keeps the source
+       formatting, then hand back the root element detached from its document.
+       A parse failure propagates through `error` and yields nil. */
+    NSXMLDocument *document = [[NSXMLDocument alloc] initWithXMLString:xmlString
+                                                              options:NSXMLNodePreserveWhitespace
+                                                                error:error];
+    if (document == nil) {
+        return nil;
+    }
+    NSXMLElement *root = [document rootElement];
+    [root detach];
+    return root;
+}
+
+- (NSArray *)dvt_elementsApplicableForCurrentRuntimeOSVersion
+{
+    /* Filter the direct children down to elements (kind 2) whose
+       minimumRequiredRuntimeOSVersion attribute the running OS satisfies. */
+    return [[self children] dvt_objectsPassingTest:^BOOL(NSXMLElement *element) {
+        if ([element kind] != NSXMLElementKind) {
+            return NO;
+        }
+        return [element dvt_isApplicableForCurrentRuntimeOSVersion];
+    }];
+}
+
+- (NSArray *)dvt_elementsApplicableForCurrentRuntimeOSVersionForName:(NSString *)name
+{
+    /* Same test as above, but restricted to the named children. */
+    return [[self elementsForName:name] dvt_objectsPassingTest:^BOOL(NSXMLElement *element) {
+        return [element dvt_isApplicableForCurrentRuntimeOSVersion];
+    }];
+}
+
+- (BOOL)dvt_isApplicableForCurrentRuntimeOSVersion
+{
+    /* A lone minimumRequiredRuntimeOSVersion attribute gates applicability: an
+       absent attribute, or one whose value parses to 0, means "always". Otherwise
+       the value is an availability form integer and the element applies when it is
+       not newer than the running system's form. The availability form is the
+       DVTVersion encoding used elsewhere for exactly this comparison. */
+    NSXMLNode *attribute = [self attributeForName:@"minimumRequiredRuntimeOSVersion"];
+    if (attribute == nil) {
+        return YES;
+    }
+    NSInteger minimumRequired = [[attribute stringValue] integerValue];
+    if (minimumRequired == 0) {
+        return YES;
+    }
+    return (NSUInteger)minimumRequired <= [[DVTVersion currentSystemVersion] availabilityFormIncludingUpdate:YES];
 }
 
 @end
