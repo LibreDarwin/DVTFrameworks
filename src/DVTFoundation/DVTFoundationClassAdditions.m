@@ -29,6 +29,7 @@
 #import "DVTVersion.h"
 #import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
+#import "NSUndoManager+DVTNSUndoManagerAdditions.h"
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
@@ -4499,6 +4500,24 @@ static int DVTNSDataClose(void *cookie)
     context->file = funopen(context, NULL, DVTNSMutableDataWrite, DVTNSDataSeek, DVTNSDataClose);
     context->offset = 0;
     return context->file;
+}
+
+@end
+
+@implementation NSUndoManager (DVTNSUndoManagerAdditions)
+
+- (void)dvt_registerUndoBlock:(void (^)(void))block
+{
+    /* The block is registered against the class, not the instance, so the undo
+       fires the class method below and invokes the stored copy. */
+    [self registerUndoWithTarget:[self class]
+                        selector:@selector(dvt_applyUndoBlock:)
+                          object:[block copy]];
+}
+
++ (void)dvt_applyUndoBlock:(void (^)(void))block
+{
+    block();
 }
 
 @end

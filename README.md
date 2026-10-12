@@ -685,6 +685,15 @@ implement it, in `src/DVTFoundation/DVTFoundationClassAdditions.m`:
   `SEEK_SET`/`SEEK_END` position must land strictly inside it, so seeking exactly
   to the end is not allowed.
 
+### Undo blocks
+
+`NSUndoManager (DVTNSUndoManagerAdditions)` registers a block to be run on undo
+without any target/selector bookkeeping. `-dvt_registerUndoBlock:` copies the
+block and files it against the undo manager's *class* with
+`-registerUndoWithTarget:selector:object:` pointing at the `+dvt_applyUndoBlock:`
+class method, which just invokes the block. The copy is stored as the target's
+object, which is what keeps it alive until the undo fires.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

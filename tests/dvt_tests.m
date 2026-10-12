@@ -7978,6 +7978,27 @@ static void DVTTestNSDataStdIO(void)
     fclose(writer);
 }
 
+static void DVTTestUndoBlockAdditions(void)
+{
+    fprintf(stdout, "\n== NSUndoManager undo blocks ==\n");
+
+    /* The class method is simply the block invoker the undo mechanism targets. */
+    __block NSUInteger applied = 0;
+    [NSUndoManager dvt_applyUndoBlock:^{
+        applied++;
+    }];
+    DVTExpect(applied == 1, @"dvt_applyUndoBlock invokes the block");
+
+    /* Registering queues the block without running it; undoing runs it once. */
+    NSUndoManager *manager = [[NSUndoManager alloc] init];
+    [manager dvt_registerUndoBlock:^{
+        applied++;
+    }];
+    DVTExpect(applied == 1, @"registering an undo block does not run it");
+    [manager undo];
+    DVTExpect(applied == 2, @"undo invokes the registered block");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8009,6 +8030,7 @@ int main(int argc, const char *argv[])
         DVTTestClassAdditions();
         DVTTestClassCategoryRemainder();
         DVTTestNSDataStdIO();
+        DVTTestUndoBlockAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

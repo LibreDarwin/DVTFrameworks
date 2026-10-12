@@ -60,5 +60,6 @@
 #import "NSXMLElement+DVTFoundationClassAdditions.h"
 #import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
+#import "NSUndoManager+DVTNSUndoManagerAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */
