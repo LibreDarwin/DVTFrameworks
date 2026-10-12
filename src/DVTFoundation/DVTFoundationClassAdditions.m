@@ -27,10 +27,15 @@
 
 #import "DVTAssertions.h"
 #import "DVTVersion.h"
+#import "NSData+DVTNSDataStdIO.h"
+#import "NSMutableData+DVTNSDataStdIO.h"
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
+#import <errno.h>
+#import <limits.h>
 #import <objc/message.h>
+#import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
 
@@ -4271,6 +4276,229 @@ static void DVTStandardizeLineEnding(NSMutableString *self, unsigned long long e
         return YES;
     }
     return (NSUInteger)minimumRequired <= [[DVTVersion currentSystemVersion] availabilityFormIncludingUpdate:YES];
+}
+
+@end
+
+/*
+ NSData and NSMutableData can be handed to C code that speaks stdio. Each stream
+ is a funopen(3) handle whose cookie is the reader/writer context below: the data
+ (owned for the stream's lifetime), a cursor, and the `FILE *` itself. Reading an
+ immutable NSData points the FILE's buffer straight at the data's own bytes so no
+ copying happens; reading a mutable NSData copies out of it, and writing grows the
+ data as needed.
+ */
+
+typedef struct DVTNSDataStdIOContext {
+    FILE *file;
+    __unsafe_unretained NSData *data;
+    fpos_t offset;
+} DVTNSDataStdIOContext;
+
+/**
+ Validates `context` and its invariants, mirroring the checks the callbacks make
+ on entry: a null cookie reports `EBADF`, while a context that is missing its FILE
+ or data is a programming error and fails an assertion.
+ */
+static BOOL DVTNSDataStdIOContextIsValid(DVTNSDataStdIOContext *context)
+{
+    if (context == NULL) {
+        errno = EBADF;
+        return NO;
+    }
+    DVTAssert(context->file != NULL, @"context->file != ((void*)0)", nil, @"");
+    DVTAssert(context->data != nil, @"context->data != nil", nil, @"");
+    return YES;
+}
+
+/**
+ `funopen` read callback for an immutable NSData. The immutable bytes need no
+ copying: the data is exposed to the stream by pointing the FILE's buffer at the
+ not-yet-consumed span, so the stdio layer serves reads directly from it.
+ */
+static int DVTNSDataRead(void *cookie, char *buffer, int size)
+{
+    DVTNSDataStdIOContext *context = cookie;
+    if (!DVTNSDataStdIOContextIsValid(context)) {
+        return -1;
+    }
+    /* `buffer` and `size` are deliberately unused: the data itself becomes the
+       stream's buffer, which is why the size is capped rather than the read
+       being copied into the caller's buffer. */
+    NSUInteger length = context->data.length;
+    DVTAssert((NSUInteger)context->offset <= length, @"offset <= length", nil, @"");
+    NSUInteger remaining = length - (NSUInteger)context->offset;
+    if (remaining == 0) {
+        return 0;
+    }
+    if (remaining > INT_MAX) {
+        remaining = INT_MAX;
+    }
+    int available = (int)remaining;
+    if (setvbuf(context->file, (char *)context->data.bytes + context->offset, _IOFBF, remaining) != 0) {
+        return -1;
+    }
+    context->offset += available;
+    DVTAssert((NSUInteger)context->offset <= length, @"offset <= length", nil, @"");
+    return available;
+}
+
+/**
+ `funopen` read callback for a mutable NSData, which copies out of the backing
+ store into the caller's buffer because its bytes may move as it grows.
+ */
+static int DVTNSMutableDataRead(void *cookie, char *buffer, int size)
+{
+    DVTNSDataStdIOContext *context = cookie;
+    if (!DVTNSDataStdIOContextIsValid(context)) {
+        return -1;
+    }
+    NSUInteger length = context->data.length;
+    NSUInteger offset = (NSUInteger)context->offset;
+    DVTAssert(offset <= length, @"offset <= length", nil, @"");
+    NSUInteger remaining = length - offset;
+    if (remaining == 0) {
+        return 0;
+    }
+    NSUInteger count = (NSUInteger)size;
+    if (offset + count > length) {
+        count = remaining > INT_MAX ? INT_MAX : remaining;
+    }
+    [context->data getBytes:buffer range:NSMakeRange(offset, count)];
+    context->offset = (fpos_t)(offset + count);
+    DVTAssert((NSUInteger)context->offset <= length, @"offset <= length", nil, @"");
+    return (int)count;
+}
+
+/**
+ `funopen` write callback for a mutable NSData. The data is grown when the write
+ lands past its end, then the bytes replace the range at the cursor.
+ */
+static int DVTNSMutableDataWrite(void *cookie, const char *buffer, int size)
+{
+    DVTNSDataStdIOContext *context = cookie;
+    if (!DVTNSDataStdIOContextIsValid(context)) {
+        return -1;
+    }
+    if (size == 0) {
+        return 0;
+    }
+    NSMutableData *data = (NSMutableData *)context->data;
+    NSUInteger length = data.length;
+    NSUInteger offset = (NSUInteger)context->offset;
+    NSUInteger end = offset + (NSUInteger)size;
+    NSUInteger limit = length;
+    if (end > length) {
+        [data setLength:end];
+        DVTAssert(data.length == end, @"data.length == end", nil, @"");
+        limit = end;
+    }
+    DVTAssert(end <= limit, @"end <= limit", nil, @"");
+    [data replaceBytesInRange:NSMakeRange(offset, (NSUInteger)size) withBytes:buffer length:(NSUInteger)size];
+    context->offset = (fpos_t)end;
+    DVTAssert((NSUInteger)context->offset <= limit, @"offset <= limit", nil, @"");
+    return size;
+}
+
+/**
+ `funopen` seek callback shared by both streams. A seek is refused with `EINVAL`
+ when it would move the cursor outside the data; `SEEK_SET` and `SEEK_END` only
+ accept positions strictly inside it.
+ */
+static fpos_t DVTNSDataSeek(void *cookie, fpos_t offset, int whence)
+{
+    DVTNSDataStdIOContext *context = cookie;
+    if (!DVTNSDataStdIOContextIsValid(context)) {
+        return -1;
+    }
+    NSUInteger length = context->data.length;
+    NSUInteger current = (NSUInteger)context->offset;
+    DVTAssert(current <= length, @"current <= length", nil, @"");
+    NSUInteger position;
+    switch (whence) {
+        case SEEK_SET:
+            if (offset < 0 || (NSUInteger)offset >= length) {
+                errno = EINVAL;
+                return -1;
+            }
+            position = (NSUInteger)offset;
+            break;
+        case SEEK_CUR:
+            if (offset > 0) {
+                if ((NSUInteger)offset > length - current) {
+                    errno = EINVAL;
+                    return -1;
+                }
+            } else if ((NSUInteger)(-offset) > current) {
+                errno = EINVAL;
+                return -1;
+            }
+            position = current + (NSUInteger)offset;
+            break;
+        case SEEK_END:
+            if (offset >= 0 || (NSUInteger)(-offset) > length) {
+                errno = EINVAL;
+                return -1;
+            }
+            position = length + (NSUInteger)offset;
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+    context->offset = (fpos_t)position;
+    return (fpos_t)position;
+}
+
+/**
+ `funopen` close callback. It releases the data the stream retained and frees the
+ context; the `FILE *` itself is owned by the caller and closed separately.
+ */
+static int DVTNSDataClose(void *cookie)
+{
+    DVTNSDataStdIOContext *context = cookie;
+    if (context == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    DVTAssert(context->file != NULL, @"context->file != ((void*)0)", nil, @"");
+    DVTAssert(context->data != nil, @"context->data != nil", nil, @"");
+    CFRelease((__bridge CFTypeRef)context->data);
+    free(context);
+    return 0;
+}
+
+@implementation NSData (DVTNSDataStdIO)
+
+- (FILE *)dvt_openForReading
+{
+    DVTNSDataStdIOContext *context = calloc(1, sizeof(DVTNSDataStdIOContext));
+    context->data = (__bridge NSData *)CFBridgingRetain(self);
+    context->file = funopen(context, DVTNSDataRead, NULL, DVTNSDataSeek, DVTNSDataClose);
+    context->offset = 0;
+    return context->file;
+}
+
+@end
+
+@implementation NSMutableData (DVTNSDataStdIO)
+
+- (FILE *)dvt_openForReading
+{
+    DVTNSDataStdIOContext *context = calloc(1, sizeof(DVTNSDataStdIOContext));
+    context->data = (__bridge NSData *)CFBridgingRetain(self);
+    context->file = funopen(context, DVTNSMutableDataRead, NULL, DVTNSDataSeek, DVTNSDataClose);
+    context->offset = 0;
+    return context->file;
+}
+
+- (FILE *)dvt_openForWriting
+{
+    DVTNSDataStdIOContext *context = calloc(1, sizeof(DVTNSDataStdIOContext));
+    context->data = (__bridge NSData *)CFBridgingRetain(self);
+    context->file = funopen(context, NULL, DVTNSMutableDataWrite, DVTNSDataSeek, DVTNSDataClose);
+    context->offset = 0;
+    return context->file;
 }
 
 @end

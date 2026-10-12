@@ -57,6 +57,7 @@
 #import "NSOutputStream+DVTFoundationClassAdditions.h"
 #import "NSMutableString+DVTFoundationClassAdditions.h"
 #import "NSXMLElement+DVTFoundationClassAdditions.h"
+#import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
 
 #endif /* DVT_FOUNDATION_H */

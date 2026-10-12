@@ -658,6 +658,33 @@ two `dvt_elementsApplicableForCurrentRuntimeOSVersion…` selectors filter the
 element's children (all of them, or just those of a given name) through that test
 with `dvt_objectsPassingTest:`.
 
+### stdio streams over data
+
+`NSData (DVTNSDataStdIO)` and `NSMutableData (DVTNSDataStdIO)` hand their bytes
+to C code that speaks stdio: each gets `dvt_openForReading`, and `NSMutableData`
+also gets `dvt_openForWriting`. Each selector builds a `funopen(3)` handle and
+returns its `FILE *`, so a data object can be read and written with
+`fread`/`fwrite`/`fseek` exactly as a file would be. See
+`src/DVTFoundation/include/NSData+DVTNSDataStdIO.h` and
+`NSMutableData+DVTNSDataStdIO.h`.
+
+The cookie behind the stream is a three-field context — the `FILE *`, the data
+(which the stream retains and releases on close), and a cursor. Four callbacks
+implement it, in `src/DVTFoundation/DVTFoundationClassAdditions.m`:
+
+- **Reading an immutable `NSData` copies nothing.** Its read callback points the
+  `FILE`'s own buffer at the data's not-yet-consumed bytes with
+  `setvbuf(…, _IOFBF, …)` and reports that many bytes as read, so the stdio layer
+  serves directly out of the data.
+- **Reading a mutable `NSData` copies out** with `getBytes:range:`, because its
+  bytes may move as it grows.
+- **Writing** replaces the range at the cursor with `replaceBytesInRange:…`,
+  first calling `setLength:` when the write lands past the end — which is how a
+  write-only stream appended to from zero grows the data.
+- **Seeking** is shared and refuses (with `EINVAL`) any move outside the data; a
+  `SEEK_SET`/`SEEK_END` position must land strictly inside it, so seeking exactly
+  to the end is not allowed.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

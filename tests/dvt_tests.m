@@ -7919,6 +7919,56 @@ static void DVTTestClassCategoryRemainder(void)
     DVTExpect(bad == nil && badError != nil, @"malformed XML yields nil and an error");
 }
 
+static void DVTTestNSDataStdIO(void)
+{
+    fprintf(stdout, "\n== NSData/NSMutableData stdio streams ==\n");
+
+    /* Reading an immutable NSData exposes its bytes through a funopen(3) stream. */
+    NSData *data = [@"hello" dataUsingEncoding:NSUTF8StringEncoding];
+    FILE *reader = [data dvt_openForReading];
+    DVTExpect(reader != NULL, @"an immutable data stream opens for reading");
+    char buffer[16] = {0};
+    size_t read = fread(buffer, 1, 5, reader);
+    DVTExpect(read == 5 && memcmp(buffer, "hello", 5) == 0, @"the immutable bytes are read back");
+
+    DVTExpect(fseek(reader, 1, SEEK_SET) == 0, @"a seek inside the data succeeds");
+    DVTExpect(fgetc(reader) == 'e', @"reading after a seek resumes at the new offset");
+    DVTExpect(fseek(reader, -1, SEEK_END) == 0, @"seeking relative to the end succeeds");
+    DVTExpect(fgetc(reader) == 'o', @"the last byte is read after seeking from the end");
+    DVTExpect(fseek(reader, 5, SEEK_SET) != 0, @"seeking to the end position itself is refused");
+    DVTExpect(fseek(reader, 0, SEEK_END) != 0, @"seeking from the end with a zero offset is refused");
+    fclose(reader);
+
+    /* Reading a mutable NSData copies out of its backing store. */
+    NSMutableData *mutableRead = [NSMutableData dataWithData:data];
+    FILE *mutableReader = [mutableRead dvt_openForReading];
+    char mutableBuffer[16] = {0};
+    size_t mutableCount = fread(mutableBuffer, 1, 5, mutableReader);
+    DVTExpect(mutableCount == 5 && memcmp(mutableBuffer, "hello", 5) == 0, @"mutable bytes are read back");
+    fclose(mutableReader);
+
+    /* Writing grows the mutable data, then replaces bytes in place. */
+    NSMutableData *written = [NSMutableData data];
+    FILE *writer = [written dvt_openForWriting];
+    DVTExpect(writer != NULL, @"a mutable data stream opens for writing");
+    DVTExpect(fwrite("hello", 1, 5, writer) == 5, @"the first write succeeds");
+    fflush(writer);
+    DVTExpectEqualObjects(written, [@"hello" dataUsingEncoding:NSUTF8StringEncoding],
+                          @"the data grows to the written bytes");
+
+    DVTExpect(fwrite(" world", 1, 6, writer) == 6, @"a second write succeeds");
+    fflush(writer);
+    DVTExpectEqualObjects(written, [@"hello world" dataUsingEncoding:NSUTF8StringEncoding],
+                          @"appending extends the data past its previous end");
+
+    DVTExpect(fseek(writer, 0, SEEK_SET) == 0, @"a writer seeks back to the start");
+    DVTExpect(fwrite("HE", 1, 2, writer) == 2, @"an overwriting write succeeds");
+    fflush(writer);
+    DVTExpectEqualObjects(written, [@"HEllo world" dataUsingEncoding:NSUTF8StringEncoding],
+                          @"writing at a seek replaces bytes in place");
+    fclose(writer);
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -7949,6 +7999,7 @@ int main(int argc, const char *argv[])
         DVTTestMachO();
         DVTTestClassAdditions();
         DVTTestClassCategoryRemainder();
+        DVTTestNSDataStdIO();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
