@@ -3489,6 +3489,26 @@ static NSString *DVTMangledIdentifier(NSString *string, DVTIdentifierManglingPro
     return NSMakeRange(start, end - start);
 }
 
+- (NSRange)dvt_fullRange
+{
+    return NSMakeRange(0, self.length);
+}
+
+- (NSRange)dvt_prefixRangeOfLength:(NSInteger)length
+{
+    return NSMakeRange(0, length);
+}
+
+- (NSRange)dvt_suffixRangeOfLength:(NSInteger)length
+{
+    return NSMakeRange(self.length - length, length);
+}
+
+- (NSRange)dvt_suffixRangeFromIndex:(NSInteger)index
+{
+    return NSMakeRange(index, self.length - index);
+}
+
 @end
 
 @implementation NSObject (DVTObservingConvenience)
@@ -4656,6 +4676,139 @@ static int DVTNSDataClose(void *cookie)
         return matched1 ? NSOrderedAscending : NSOrderedDescending;
     };
     return [NSSortDescriptor sortDescriptorWithKey:@"self" ascending:YES comparator:comparator];
+}
+
+@end
+
+@implementation NSIndexSet (DVTNSIndexSetAdditions)
+
++ (id)dvt_indexSetWithIndexes:(id)indexes
+{
+    /* The indexes come as an array of numbers, so the array variant does the work. */
+    return [self dvt_indexSetWithIndexArray:indexes];
+}
+
++ (id)dvt_indexSetWithIndexArray:(NSArray<NSNumber *> *)array
+{
+    NSMutableIndexSet *indexes = [NSMutableIndexSet indexSet];
+    for (NSNumber *number in array) {
+        [indexes addIndex:number.unsignedIntegerValue];
+    }
+    return [indexes copy];
+}
+
+- (NSArray *)dvt_allIndexes
+{
+    return [self dvt_indexArray];
+}
+
+- (NSArray *)dvt_indexArray
+{
+    /* Walks the set with firstIndex/indexGreaterThanIndex: and boxes each index
+       into an immutable snapshot. */
+    NSMutableArray *indexes = [NSMutableArray arrayWithCapacity:self.count];
+    for (NSInteger index = self.firstIndex; index != NSNotFound; index = [self indexGreaterThanIndex:index]) {
+        [indexes addObject:[NSNumber numberWithInteger:index]];
+    }
+    return [indexes copy];
+}
+
+- (NSArray *)dvt_arrayByApplyingBlock:(id (^)(NSUInteger index))block
+{
+    NSUInteger count = self.count;
+    if (count == 0) {
+        return @[];
+    }
+
+    /* A nil result contributes no element, so the array can be shorter than the
+       set. The oracle keeps up to 256 results on the stack and spills to the
+       heap past that. */
+    __strong id stackElements[256] = { nil };
+    __strong id *elements = stackElements;
+    if (count >= 257) {
+        elements = (__strong id *)calloc(count, sizeof(id));
+    }
+
+    NSUInteger used = 0;
+    for (NSUInteger index = self.firstIndex; index != NSNotFound; index = [self indexGreaterThanIndex:index]) {
+        id value = block(index);
+        if (value) {
+            elements[used++] = value;
+        }
+    }
+
+    NSArray *result = [NSArray arrayWithObjects:elements count:used];
+
+    if (elements != stackElements) {
+        for (NSUInteger i = 0; i < used; i++) {
+            elements[i] = nil;
+        }
+        free(elements);
+    }
+    return result;
+}
+
+- (NSIndexSet *)dvt_indexesInRange:(NSRange)range
+{
+    /* Fast path: a set that already lies entirely inside the range answers its
+       own copy. Otherwise the intersecting ranges are collected. */
+    if (self.count != 0 &&
+        (self.firstIndex < range.location || self.lastIndex >= NSMaxRange(range))) {
+        NSMutableIndexSet *indexes = [NSMutableIndexSet indexSet];
+        [self enumerateRangesInRange:range options:0 usingBlock:^(NSRange subrange, BOOL *stop) {
+            [indexes addIndexesInRange:subrange];
+        }];
+        return [indexes copy];
+    }
+    return [self copy];
+}
+
+- (NSIndexSet *)dvt_indexesPassingTest:(BOOL (^)(NSUInteger index))test
+{
+    NSMutableIndexSet *indexes = [NSMutableIndexSet indexSet];
+    for (NSUInteger index = self.firstIndex; index != NSNotFound; index = [self indexGreaterThanIndex:index]) {
+        if (test(index)) {
+            [indexes addIndex:index];
+        }
+    }
+    return [indexes copy];
+}
+
+@end
+
+@implementation NSMutableIndexSet (DVTNSMutableIndexSetAdditions)
+
+- (void)dvt_addIndex:(long long)index shiftingLaterIndexes:(BOOL)shifting
+{
+    /* Inserting into the middle pushes every later index up by one first. */
+    if (shifting) {
+        [self shiftIndexesStartingAtIndex:(NSUInteger)index by:1];
+    }
+    [self addIndex:(NSUInteger)index];
+}
+
+@end
+
+@implementation NSRegularExpression (DVTNSRegularExpressionAdditions)
+
+- (NSArray *)dvt_matchesInString:(NSString *)string options:(unsigned long long)options
+{
+    /* The whole string is searched, so the range is always the string's full range. */
+    return [self matchesInString:string options:(NSMatchingOptions)options range:string.dvt_fullRange];
+}
+
+@end
+
+@implementation NSTextCheckingResult (DVTNSTextCheckingResultAdditions)
+
+- (NSString *)dvt_matchingSubstringInString:(NSString *)string
+{
+    return [string substringWithRange:self.range];
+}
+
+- (NSString *)dvt_matchingSubstringInString:(NSString *)string forCaptureCaptureGroup:(NSString *)group
+{
+    return [string substringWithRange:[self rangeWithName:group]];
 }
 
 @end

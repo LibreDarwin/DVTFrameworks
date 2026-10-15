@@ -1511,6 +1511,18 @@ DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const v
  */
 - (NSRange)dvt_interiorRangeAfterTrimmingCharactesFromSet:(NSCharacterSet *)set preservingRange:(NSRange)preservedRange;
 
+/** The full range of the receiver, i.e. `{0, length}`. */
+@property (nonatomic, readonly) NSRange dvt_fullRange;
+
+/** The range of the receiver's first `length` characters, i.e. `{0, length}`. */
+- (NSRange)dvt_prefixRangeOfLength:(NSInteger)length;
+
+/** The range of the receiver's last `length` characters. */
+- (NSRange)dvt_suffixRangeOfLength:(NSInteger)length;
+
+/** The range running from `index` to the end of the receiver. */
+- (NSRange)dvt_suffixRangeFromIndex:(NSInteger)index;
+
 @end
 
 /** `YES` when the receiver has at least one entry. */

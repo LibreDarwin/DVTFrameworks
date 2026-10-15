@@ -67,5 +67,9 @@
 #import "NSCache+DVTNSCacheAdditions.h"
 #import "NSScanner+DVTNSScannerAdditions.h"
 #import "NSSortDescriptor+DVTNSSortDescriptorAdditions.h"
+#import "NSIndexSet+DVTNSIndexSetAdditions.h"
+#import "NSMutableIndexSet+DVTNSMutableIndexSetAdditions.h"
+#import "NSRegularExpression+DVTNSRegularExpressionAdditions.h"
+#import "NSTextCheckingResult+DVTNSTextCheckingResultAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

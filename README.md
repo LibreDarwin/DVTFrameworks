@@ -731,6 +731,43 @@ wrapper over `-scanUnsignedLongLong:` that reads into a local and only copies th
 result out when the scan succeeded — a failed scan leaves the caller's storage
 untouched.
 
+### Index sets, regular expressions and text checking
+
+`NSIndexSet (DVTNSIndexSetAdditions)` is DVTFoundation's collection layer over
+index sets. `+dvt_indexSetWithIndexes:` is a forwarder to
+`+dvt_indexSetWithIndexArray:`, which walks an array of numbers and builds a
+mutable set from `unsignedIntegerValue` before copying it. `-dvt_indexArray`
+collects the members in ascending order by stepping `firstIndex` /
+`indexGreaterThanIndex:` and boxing each one, and `-dvt_allIndexes` is that same
+array under an alias. `-dvt_arrayByApplyingBlock:` maps every index through a
+block, but a nil result contributes no element, so the answer can be shorter than
+the set; up to 256 results live on the stack and larger sets spill to the heap.
+`-dvt_indexesInRange:` returns the set's own copy when it already lies wholly
+inside the range and otherwise gathers the intersecting ranges with
+`enumerateRangesInRange:options:usingBlock:`. `-dvt_indexesPassingTest:` keeps the
+indexes a block accepts.
+
+`NSMutableIndexSet (DVTNSMutableIndexSetAdditions)` adds a single insert helper,
+`-dvt_addIndex:shiftingLaterIndexes:`. With shifting on it first pushes every
+later index up by one (`shiftIndexesStartingAtIndex:by:`) and then inserts, so an
+index can be spliced into the middle of a run; with shifting off the insert is
+plain `addIndex:`.
+
+`NSRegularExpression (DVTNSRegularExpressionAdditions)` adds
+`-dvt_matchesInString:options:`, which always searches the receiver string's
+`dvt_fullRange` and forwards to the full `matchesInString:options:range:`.
+
+`NSTextCheckingResult (DVTNSTextCheckingResultAdditions)` turns a match back into
+text: `-dvt_matchingSubstringInString:` cuts the whole match (`self.range`) out of
+the source string, and `-dvt_matchingSubstringInString:forCaptureCaptureGroup:`
+does the same for a named capture via `rangeWithName:`.
+
+The string range helpers `-dvt_fullRange`, `-dvt_prefixRangeOfLength:`,
+`-dvt_suffixRangeOfLength:` and `-dvt_suffixRangeFromIndex:` join
+`NSString (DVTFoundationClassAdditions)`. Each is a one-line `NSMakeRange` — the
+whole string, its first or last `length` characters, or the tail from `index` —
+and `dvt_fullRange` is what the regular-expression helper above searches.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

@@ -8100,6 +8100,90 @@ static void DVTTestScannerAndSortDescriptorAdditions(void)
               @"objects rejected by the predicate sort last");
 }
 
+static void DVTTestIndexSetAdditions(void)
+{
+    fprintf(stdout, "\n== NSIndexSet, NSMutableIndexSet, regex and text checking additions ==\n");
+
+    NSIndexSet *set = [NSIndexSet dvt_indexSetWithIndexes:@[ @1, @5, @3 ]];
+    DVTExpect(set.count == 3, @"an index-set built from numbers keeps every distinct index");
+    DVTExpect([set containsIndex:1] && [set containsIndex:3] && [set containsIndex:5],
+              @"the numbers become the set's members");
+
+    NSIndexSet *fromArray = [NSIndexSet dvt_indexSetWithIndexArray:@[ @2, @4, @2 ]];
+    DVTExpect(fromArray.count == 2, @"a repeated index collapses into one");
+    DVTExpectEqualObjects([fromArray dvt_indexArray], (@[ @2, @4 ]),
+                          @"the index array comes back ascending");
+
+    DVTExpectEqualObjects([set dvt_indexArray], (@[ @1, @3, @5 ]),
+                          @"dvt_indexArray boxes each index in order");
+    DVTExpectEqualObjects([set dvt_allIndexes], (@[ @1, @3, @5 ]),
+                          @"dvt_allIndexes is the index array");
+
+    NSArray *mapped = [set dvt_arrayByApplyingBlock:^id (NSUInteger index) {
+        return @(index * 2);
+    }];
+    DVTExpectEqualObjects(mapped, (@[ @2, @6, @10 ]),
+                          @"applying a block maps every index");
+
+    NSArray *dropped = [set dvt_arrayByApplyingBlock:^id (NSUInteger index) {
+        return index <= 3 ? @(index) : nil;
+    }];
+    DVTExpectEqualObjects(dropped, (@[ @1, @3 ]),
+                          @"a nil block result contributes no element");
+
+    DVTExpectEqualObjects([(NSIndexSet *)[NSIndexSet indexSet] dvt_arrayByApplyingBlock:^id (NSUInteger index) {
+        return @(index);
+    }], (@[]), @"an empty set maps to an empty array");
+
+    NSIndexSet *ten = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 10)];
+    NSIndexSet *intersect = [ten dvt_indexesInRange:NSMakeRange(3, 4)];
+    DVTExpectEqualObjects([intersect dvt_indexArray], (@[ @3, @4, @5, @6 ]),
+                          @"interior indexes are intersected with the range");
+
+    NSIndexSet *inside = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(4, 2)];
+    NSIndexSet *same = [inside dvt_indexesInRange:NSMakeRange(0, 10)];
+    DVTExpect([same isEqualToIndexSet:inside],
+              @"a set wholly inside the range is returned unchanged");
+
+    NSIndexSet *evens = [ten dvt_indexesPassingTest:^BOOL (NSUInteger index) {
+        return index % 2 == 0;
+    }];
+    DVTExpectEqualObjects([evens dvt_indexArray], (@[ @0, @2, @4, @6, @8 ]),
+                          @"only the indexes passing the test are kept");
+
+    NSMutableIndexSet *mutable = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 3)];
+    [mutable dvt_addIndex:1 shiftingLaterIndexes:YES];
+    DVTExpectEqualObjects([mutable dvt_indexArray], (@[ @0, @1, @2, @3 ]),
+                          @"inserting with shifting pushes later indexes up");
+
+    NSMutableIndexSet *plain = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 3)];
+    [plain dvt_addIndex:5 shiftingLaterIndexes:NO];
+    DVTExpectEqualObjects([plain dvt_indexArray], (@[ @0, @1, @2, @5 ]),
+                          @"inserting without shifting leaves later indexes alone");
+
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"(?<digits>\\d+)"
+                                                                          options:0
+                                                                            error:NULL];
+    NSArray *matches = [regex dvt_matchesInString:@"a1b22c333" options:0];
+    DVTExpect(matches.count == 3, @"the whole string is searched for matches");
+    NSTextCheckingResult *firstMatch = matches.firstObject;
+    DVTExpectEqualObjects([firstMatch dvt_matchingSubstringInString:@"a1b22c333"], @"1",
+                          @"the matched substring is cut out of the source string");
+    DVTExpectEqualObjects([firstMatch dvt_matchingSubstringInString:@"a1b22c333"
+                                             forCaptureCaptureGroup:@"digits"],
+                          @"1", @"a named capture group resolves to its substring");
+
+    NSString *hello = @"hello";
+    DVTExpectEqualRanges(hello.dvt_fullRange, NSMakeRange(0, 5),
+                         @"dvt_fullRange covers the whole string");
+    DVTExpectEqualRanges([hello dvt_prefixRangeOfLength:2], NSMakeRange(0, 2),
+                         @"dvt_prefixRangeOfLength starts at the front");
+    DVTExpectEqualRanges([hello dvt_suffixRangeOfLength:2], NSMakeRange(3, 2),
+                         @"dvt_suffixRangeOfLength ends at the back");
+    DVTExpectEqualRanges([hello dvt_suffixRangeFromIndex:2], NSMakeRange(2, 3),
+                         @"dvt_suffixRangeFromIndex runs to the end");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8135,6 +8219,7 @@ int main(int argc, const char *argv[])
         DVTTestLockExtensions();
         DVTTestCacheAdditions();
         DVTTestScannerAndSortDescriptorAdditions();
+        DVTTestIndexSetAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
