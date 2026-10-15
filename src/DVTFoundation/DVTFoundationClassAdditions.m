@@ -26,10 +26,13 @@
 #import "DVTFoundationClassAdditions.h"
 
 #import "DVTAssertions.h"
+#import "DVTDispatch.h"
 #import "DVTVersion.h"
 #import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
 #import "NSUndoManager+DVTNSUndoManagerAdditions.h"
+#import "NSLock+DVTFoundationExtensions.h"
+#import "NSRecursiveLock+DVTFoundationExtensions.h"
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
@@ -4518,6 +4521,70 @@ static int DVTNSDataClose(void *cookie)
 + (void)dvt_applyUndoBlock:(void (^)(void))block
 {
     block();
+}
+
+@end
+
+/* Both locks get the same pair of methods. The synchronous one takes the lock,
+   runs the block under an @try, and releases it in @finally so an exception
+   cannot leave the lock held. The asynchronous one just hands the same work to
+   a lazily created shared concurrent queue, so callers never block; the lock is
+   what serialises the blocks at run time. The queue labels reproduce Apple's
+   "ConcurrentQueue: <method>" form, which is only ever read back for
+   diagnostics. */
+
+@implementation NSLock (DVTFoundationExtensions)
+
+- (void)dvt_performLockedBlock:(void (^)(void))block
+{
+    [self lock];
+    @try {
+        block();
+    } @finally {
+        [self unlock];
+    }
+}
+
+- (void)dvt_asyncPerformLockedBlock:(void (^)(void))block
+{
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = DVTDispatchCreateQueue(NO, QOS_CLASS_DEFAULT, 0,
+                                       "ConcurrentQueue: -[NSLock(DVTFoundationExtensions) dvt_asyncPerformLockedBlock:]");
+    });
+
+    DVTDispatchAsync(queue, ^{
+        [self dvt_performLockedBlock:block];
+    });
+}
+
+@end
+
+@implementation NSRecursiveLock (DVTFoundationExtensions)
+
+- (void)dvt_performLockedBlock:(void (^)(void))block
+{
+    [self lock];
+    @try {
+        block();
+    } @finally {
+        [self unlock];
+    }
+}
+
+- (void)dvt_asyncPerformLockedBlock:(void (^)(void))block
+{
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = DVTDispatchCreateQueue(NO, QOS_CLASS_DEFAULT, 0,
+                                       "ConcurrentQueue: -[NSRecursiveLock(DVTFoundationExtensions) dvt_asyncPerformLockedBlock:]");
+    });
+
+    DVTDispatchAsync(queue, ^{
+        [self dvt_performLockedBlock:block];
+    });
 }
 
 @end

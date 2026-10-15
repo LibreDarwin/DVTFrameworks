@@ -7999,6 +7999,43 @@ static void DVTTestUndoBlockAdditions(void)
     DVTExpect(applied == 2, @"undo invokes the registered block");
 }
 
+static void DVTTestLockExtensions(void)
+{
+    fprintf(stdout, "\n== lock extensions ==\n");
+
+    /* The synchronous form runs the block while holding the lock, then frees it. */
+    __block NSUInteger runs = 0;
+    NSLock *lock = [[NSLock alloc] init];
+    [lock dvt_performLockedBlock:^{
+        runs++;
+    }];
+    DVTExpect(runs == 1, @"a locked block runs once");
+    DVTExpect([lock tryLock], @"the lock is free again after the block returns");
+    [lock unlock];
+
+    /* A recursive lock lets the block take the lock again without deadlocking. */
+    NSRecursiveLock *recursive = [[NSRecursiveLock alloc] init];
+    __block NSUInteger nested = 0;
+    [recursive dvt_performLockedBlock:^{
+        nested++;
+        [recursive dvt_performLockedBlock:^{
+            nested++;
+        }];
+    }];
+    DVTExpect(nested == 2, @"a recursive lock lets the block relock itself");
+
+    /* The asynchronous form runs the block later, on its private queue. */
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block NSUInteger asyncRuns = 0;
+    [lock dvt_asyncPerformLockedBlock:^{
+        asyncRuns++;
+        dispatch_semaphore_signal(done);
+    }];
+    DVTExpect(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0,
+              @"the async locked block finishes within the timeout");
+    DVTExpect(asyncRuns == 1, @"the async locked block ran once");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8031,6 +8068,7 @@ int main(int argc, const char *argv[])
         DVTTestClassCategoryRemainder();
         DVTTestNSDataStdIO();
         DVTTestUndoBlockAdditions();
+        DVTTestLockExtensions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

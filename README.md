@@ -694,6 +694,19 @@ block and files it against the undo manager's *class* with
 class method, which just invokes the block. The copy is stored as the target's
 object, which is what keeps it alive until the undo fires.
 
+### Lock extensions
+
+`NSLock (DVTFoundationExtensions)` and `NSRecursiveLock (DVTFoundationExtensions)`
+each adopt the `DVTLocking` protocol, whose two methods run a block under the
+lock. `-dvt_performLockedBlock:` takes the lock, runs the block inside an `@try`,
+and releases the lock in `@finally` — so an exception can never leave the lock
+held. `-dvt_asyncPerformLockedBlock:` is the non-blocking form: it hands the same
+work to a lazily created shared concurrent queue (via
+`DVTDispatchCreateQueue(NO, QOS_CLASS_DEFAULT, …)`), where the queue's blocks
+re-enter `dvt_performLockedBlock:`. The lock is what serialises them. Both
+categories share the identical pair; `DVTLocking` lives in
+`src/DVTFoundation/include/DVTLocking.h`.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

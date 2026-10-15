@@ -31,6 +31,7 @@
 #import "DVTArchitecture.h"
 #import "DVTComparison.h"
 #import "DVTDispatch.h"
+#import "DVTLocking.h"
 #import "DVTGeometryAdditions.h"
 #import "NSValue+DVTGeometryAdditions.h"
 #import "DVTCertificateComparison.h"
@@ -61,5 +62,7 @@
 #import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
 #import "NSUndoManager+DVTNSUndoManagerAdditions.h"
+#import "NSLock+DVTFoundationExtensions.h"
+#import "NSRecursiveLock+DVTFoundationExtensions.h"
 
 #endif /* DVT_FOUNDATION_H */
