@@ -8062,6 +8062,44 @@ static void DVTTestCacheAdditions(void)
     DVTExpect(created == 2, @"each missing key creates once");
 }
 
+static void DVTTestScannerAndSortDescriptorAdditions(void)
+{
+    fprintf(stdout, "\n== NSScanner and NSSortDescriptor additions ==\n");
+
+    NSScanner *scanner = [NSScanner scannerWithString:@"42abc"];
+    unsigned long long value = 0;
+    DVTExpect([scanner dvt_scanUnsignedIntegerInto:&value],
+              @"scanning digits reports success");
+    DVTExpect(value == 42, @"the scanned number is copied out");
+    DVTExpect(scanner.scanLocation == 2, @"the scan position advances past the number");
+
+    NSScanner *letters = [NSScanner scannerWithString:@"abc"];
+    unsigned long long untouched = 777;
+    DVTExpect(![letters dvt_scanUnsignedIntegerInto:&untouched],
+              @"scanning non-digits reports failure");
+    DVTExpect(untouched == 777, @"a failed scan leaves the caller's storage untouched");
+
+    NSArray *words = @[ @"dddd", @"a", @"ccc", @"bb" ];
+    NSSortDescriptor *byLength =
+        [NSSortDescriptor dvt_sortDescriptorWithTransformBlock:^id (id object) {
+            return @([object length]);
+        }];
+    NSArray *byLengthResult = [words sortedArrayUsingDescriptors:@[ byLength ]];
+    DVTExpectEqualObjects(byLengthResult, (@[ @"a", @"bb", @"ccc", @"dddd" ]),
+                          @"a transform descriptor sorts by the mapped values");
+
+    NSArray *mixed = @[ @"bbb", @"a1", @"cc", @"ad" ];
+    NSSortDescriptor *byPredicate =
+        [NSSortDescriptor dvt_sortDescriptorWithPredicateBlock:^BOOL (id object) {
+            return [object hasPrefix:@"a"];
+        }];
+    NSArray *byPredicateResult = [mixed sortedArrayUsingDescriptors:@[ byPredicate ]];
+    DVTExpectEqualObjects(byPredicateResult.firstObject, @"a1",
+                          @"a predicate descriptor puts accepted objects first");
+    DVTExpect(![byPredicateResult.lastObject hasPrefix:@"a"],
+              @"objects rejected by the predicate sort last");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8096,6 +8134,7 @@ int main(int argc, const char *argv[])
         DVTTestUndoBlockAdditions();
         DVTTestLockExtensions();
         DVTTestCacheAdditions();
+        DVTTestScannerAndSortDescriptorAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

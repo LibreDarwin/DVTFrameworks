@@ -714,6 +714,23 @@ categories share the identical pair; `DVTLocking` lives in
 runs the block and inserts the result under the key; a hit is returned as-is
 without running the block.
 
+### Sort descriptors and scanners
+
+`NSSortDescriptor (DVTNSSortDescriptorAdditions)` builds descriptors that sort
+on a derived value instead of a stored key. Both class methods hand
+`+sortDescriptorWithKey:ascending:comparator:` the key `@"self"` — so the
+comparator receives the objects themselves — and differ only in the comparator
+they install. `+dvt_sortDescriptorWithTransformBlock:` maps each object through
+the block and compares the two mapped values with `compare:`; equal mapped
+values are equal and a nil side sorts first. `+dvt_sortDescriptorWithPredicateBlock:`
+treats the block as a boolean ranking: an accepted object sorts ahead of a
+rejected one and two objects answered the same way compare as equal.
+
+`NSScanner (DVTNSScannerAdditions)` adds `-dvt_scanUnsignedIntegerInto:`, a thin
+wrapper over `-scanUnsignedLongLong:` that reads into a local and only copies the
+result out when the scan succeeded — a failed scan leaves the caller's storage
+untouched.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

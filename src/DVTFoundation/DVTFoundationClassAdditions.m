@@ -4605,3 +4605,57 @@ static int DVTNSDataClose(void *cookie)
 }
 
 @end
+
+@implementation NSScanner (DVTNSScannerAdditions)
+
+- (BOOL)dvt_scanUnsignedIntegerInto:(unsigned long long *)into
+{
+    /* The scanner only knows about unsigned long long, so the value is read
+       into a local and copied out only when the scan actually succeeded. A
+       failure leaves the caller's storage untouched. */
+    unsigned long long value = 0;
+    BOOL scanned = [self scanUnsignedLongLong:&value];
+    if (scanned)
+        *into = value;
+    return scanned;
+}
+
+@end
+
+@implementation NSSortDescriptor (DVTNSSortDescriptorAdditions)
+
++ (id)dvt_sortDescriptorWithTransformBlock:(id (^)(id))block
+{
+    /* The descriptor sorts on the objects' own transformed values: each side is
+       mapped through the block and the two mapped values are compared. Equal
+       mapped values compare as equal, and a nil side sorts before a non-nil
+       one. Sorting by the "self" key means the descriptor asks for the object
+       itself and the comparator does the rest. */
+    NSComparator comparator = ^NSComparisonResult(id object1, id object2) {
+        id value1 = block(object1);
+        id value2 = block(object2);
+        if (value1 == value2)
+            return NSOrderedSame;
+        if (value1 && value2)
+            return [value1 compare:value2];
+        return value1 ? NSOrderedDescending : NSOrderedAscending;
+    };
+    return [NSSortDescriptor sortDescriptorWithKey:@"self" ascending:YES comparator:comparator];
+}
+
++ (id)dvt_sortDescriptorWithPredicateBlock:(BOOL (^)(id))block
+{
+    /* An object the block accepts sorts ahead of one it rejects; two objects
+       that answer the same way compare as equal. Same "self" key trick as the
+       transform variant. */
+    NSComparator comparator = ^NSComparisonResult(id object1, id object2) {
+        BOOL matched1 = block(object1);
+        BOOL matched2 = block(object2);
+        if (matched1 == matched2)
+            return NSOrderedSame;
+        return matched1 ? NSOrderedAscending : NSOrderedDescending;
+    };
+    return [NSSortDescriptor sortDescriptorWithKey:@"self" ascending:YES comparator:comparator];
+}
+
+@end

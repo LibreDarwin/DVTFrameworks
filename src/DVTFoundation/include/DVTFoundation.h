@@ -65,5 +65,7 @@
 #import "NSLock+DVTFoundationExtensions.h"
 #import "NSRecursiveLock+DVTFoundationExtensions.h"
 #import "NSCache+DVTNSCacheAdditions.h"
+#import "NSScanner+DVTNSScannerAdditions.h"
+#import "NSSortDescriptor+DVTNSSortDescriptorAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */
