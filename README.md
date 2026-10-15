@@ -784,6 +784,19 @@ parser, is not ported yet; it is deferred alongside the invalidation families.
 It is deliberately declared nowhere here so that a caller cannot reach a symbol
 this port does not provide.
 
+### Pointer array additions
+
+`NSPointerArray (DVTNSPointerArrayAdditions)` dresses the C-pointer container in
+object clothing. `-dvt_addObject:`, `-dvt_objectAtIndex:`, `-dvt_insertObject:atIndex:`
+and `-dvt_replaceObjectAtIndex:withObject:` are one-line bridges onto
+`addPointer:`, `pointerAtIndex:`, `insertPointer:atIndex:` and
+`replacePointerAtIndex:withPointer:`, casting through `__bridge` on both sides.
+`-dvt_indexOfObjectIdenticalTo:` walks the array with fast enumeration — the raw
+pointers come back as `id`s, so identity is a plain `==` — and answers the first
+position, or `NSNotFound` when nothing matches. `-dvt_removeFirstObjectIdenticalTo:`
+builds on it: it looks the object up and removes that pointer only when the lookup
+found something, so a miss is a no-op.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

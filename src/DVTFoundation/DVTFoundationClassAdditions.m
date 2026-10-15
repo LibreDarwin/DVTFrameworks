@@ -4857,3 +4857,50 @@ static int DVTNSDataClose(void *cookie)
 }
 
 @end
+
+@implementation NSPointerArray (DVTNSPointerArrayAdditions)
+
+- (void)dvt_addObject:(id)object
+{
+    [self addPointer:(__bridge void *)object];
+}
+
+- (id)dvt_objectAtIndex:(unsigned long long)index
+{
+    return (__bridge id)[self pointerAtIndex:index];
+}
+
+- (void)dvt_insertObject:(id)object atIndex:(unsigned long long)index
+{
+    [self insertPointer:(__bridge void *)object atIndex:index];
+}
+
+- (void)dvt_replaceObjectAtIndex:(unsigned long long)index withObject:(id)object
+{
+    [self replacePointerAtIndex:index withPointer:(__bridge void *)object];
+}
+
+- (unsigned long long)dvt_indexOfObjectIdenticalTo:(id)object
+{
+    /* Pointer array's fast enumeration hands back the raw pointers, so identity
+       is a plain ==. */
+    unsigned long long index = 0;
+    for (id candidate in self) {
+        if (candidate == object) {
+            return index;
+        }
+        index++;
+    }
+    return (unsigned long long)NSNotFound;
+}
+
+- (void)dvt_removeFirstObjectIdenticalTo:(id)object
+{
+    unsigned long long index = [self dvt_indexOfObjectIdenticalTo:object];
+    if (index == (unsigned long long)NSNotFound) {
+        return;
+    }
+    [self removePointerAtIndex:index];
+}
+
+@end

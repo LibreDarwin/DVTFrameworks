@@ -8218,6 +8218,44 @@ static void DVTTestIndexPathAdditions(void)
     DVTExpect([wide indexAtPosition:299] == 299, @"the last position survives the heap path");
 }
 
+static void DVTTestPointerArrayAdditions(void)
+{
+    fprintf(stdout, "\n== NSPointerArray additions ==\n");
+
+    NSPointerArray *array = [NSPointerArray pointerArrayWithOptions:NSPointerFunctionsStrongMemory |
+                                                                     NSPointerFunctionsObjectPointerPersonality];
+
+    NSObject *one = [NSObject new];
+    NSObject *two = [NSObject new];
+    NSObject *three = [NSObject new];
+
+    [array dvt_addObject:one];
+    [array dvt_addObject:two];
+    [array dvt_addObject:three];
+    DVTExpect(array.count == 3, @"added objects grow the pointer array");
+    DVTExpect([array dvt_objectAtIndex:0] == one, @"an object comes back by index");
+
+    [array dvt_insertObject:one atIndex:1];
+    DVTExpect([array dvt_objectAtIndex:1] == one && [array dvt_objectAtIndex:2] == two,
+              @"inserting shifts later objects up");
+
+    [array dvt_replaceObjectAtIndex:0 withObject:three];
+    DVTExpect([array dvt_objectAtIndex:0] == three, @"replacing swaps the pointer in place");
+
+    DVTExpect([array dvt_indexOfObjectIdenticalTo:two] == 2,
+              @"the identical object's first position is found");
+    DVTExpect([array dvt_indexOfObjectIdenticalTo:[NSObject new]] == (unsigned long long)NSNotFound,
+              @"an absent object reports NSNotFound");
+
+    [array dvt_removeFirstObjectIdenticalTo:two];
+    DVTExpect(array.count == 3, @"removing the identical object drops one entry");
+    DVTExpect([array dvt_indexOfObjectIdenticalTo:two] == (unsigned long long)NSNotFound,
+              @"the removed object is gone");
+
+    [array dvt_removeFirstObjectIdenticalTo:two];
+    DVTExpect(array.count == 3, @"removing an absent object is a no-op");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8255,6 +8293,7 @@ int main(int argc, const char *argv[])
         DVTTestScannerAndSortDescriptorAdditions();
         DVTTestIndexSetAdditions();
         DVTTestIndexPathAdditions();
+        DVTTestPointerArrayAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
