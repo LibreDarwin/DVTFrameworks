@@ -71,5 +71,6 @@
 #import "NSMutableIndexSet+DVTNSMutableIndexSetAdditions.h"
 #import "NSRegularExpression+DVTNSRegularExpressionAdditions.h"
 #import "NSTextCheckingResult+DVTNSTextCheckingResultAdditions.h"
+#import "NSIndexPath+DVTNSIndexPathAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

@@ -4812,3 +4812,48 @@ static int DVTNSDataClose(void *cookie)
 }
 
 @end
+
+@implementation NSIndexPath (DVTNSIndexPathAdditions)
+
++ (id)dvt_indexPathWithIndexes:(id)indexes
+{
+    /* The numbers are unboxed into a stack buffer that spills to the heap only
+       once it would exceed 256 entries, then handed to the designated
+       initializer. */
+    NSUInteger count = [indexes count];
+    NSUInteger stackIndexes[256];
+    NSUInteger *pathIndexes = (count < 257) ? stackIndexes : calloc(count, sizeof(NSUInteger));
+    for (NSUInteger i = 0; i < count; i++) {
+        pathIndexes[i] = [[indexes objectAtIndex:i] unsignedIntegerValue];
+    }
+
+    NSIndexPath *indexPath = [[NSIndexPath alloc] initWithIndexes:pathIndexes length:count];
+
+    if (pathIndexes != stackIndexes) {
+        free(pathIndexes);
+    }
+    return indexPath;
+}
+
+- (id)dvt_pathComponents
+{
+    NSMutableArray *components = [NSMutableArray arrayWithCapacity:self.length];
+    for (NSUInteger i = 0; i < self.length; i++) {
+        [components addObject:[NSNumber numberWithUnsignedInteger:[self indexAtPosition:i]]];
+    }
+    return components;
+}
+
+- (id)dvt_stringRepresentation
+{
+    NSMutableString *representation = [NSMutableString string];
+    for (NSUInteger i = 0; i < self.length; i++) {
+        if (i != 0) {
+            [representation appendString:@"/"];
+        }
+        [representation appendFormat:@"%lu", (unsigned long)[self indexAtPosition:i]];
+    }
+    return representation;
+}
+
+@end

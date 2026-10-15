@@ -8184,6 +8184,40 @@ static void DVTTestIndexSetAdditions(void)
                          @"dvt_suffixRangeFromIndex runs to the end");
 }
 
+static void DVTTestIndexPathAdditions(void)
+{
+    fprintf(stdout, "\n== NSIndexPath additions ==\n");
+
+    NSIndexPath *path = [NSIndexPath indexPathWithIndex:2];
+    path = [path indexPathByAddingIndex:5];
+    path = [path indexPathByAddingIndex:9];
+
+    DVTExpectEqualObjects([path dvt_pathComponents], (@[ @2, @5, @9 ]),
+                          @"the path components are the position indexes");
+    DVTExpect([[path dvt_stringRepresentation] isEqualToString:@"2/5/9"],
+              @"the string representation is slash separated");
+
+    NSIndexPath *rebuilt = [NSIndexPath dvt_indexPathWithIndexes:@[ @2, @5, @9 ]];
+    DVTExpect(rebuilt.length == 3, @"a path built from numbers has the array's length");
+    DVTExpect([rebuilt indexAtPosition:0] == 2 && [rebuilt indexAtPosition:1] == 5 &&
+                  [rebuilt indexAtPosition:2] == 9,
+              @"the numbers become the path's positions");
+    DVTExpect([rebuilt isEqual:path], @"the rebuilt path equals the hand-built one");
+
+    NSIndexPath *empty = [NSIndexPath dvt_indexPathWithIndexes:@[]];
+    DVTExpect(empty.length == 0, @"an empty number array makes an empty path");
+    DVTExpect([[empty dvt_stringRepresentation] isEqualToString:@""],
+              @"an empty path stringifies to nothing");
+
+    NSMutableArray *many = [NSMutableArray array];
+    for (NSUInteger i = 0; i < 300; i++) {
+        [many addObject:@(i)];
+    }
+    NSIndexPath *wide = [NSIndexPath dvt_indexPathWithIndexes:many];
+    DVTExpect(wide.length == 300, @"a path longer than the stack buffer is built on the heap");
+    DVTExpect([wide indexAtPosition:299] == 299, @"the last position survives the heap path");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8220,6 +8254,7 @@ int main(int argc, const char *argv[])
         DVTTestCacheAdditions();
         DVTTestScannerAndSortDescriptorAdditions();
         DVTTestIndexSetAdditions();
+        DVTTestIndexPathAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

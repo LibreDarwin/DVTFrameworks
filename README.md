@@ -768,6 +768,22 @@ The string range helpers `-dvt_fullRange`, `-dvt_prefixRangeOfLength:`,
 whole string, its first or last `length` characters, or the tail from `index` —
 and `dvt_fullRange` is what the regular-expression helper above searches.
 
+### Index path additions
+
+`NSIndexPath (DVTNSIndexPathAdditions)` renders a path both ways.
+`-dvt_pathComponents` boxes each position into an `NSNumber` and returns the
+array, and `-dvt_stringRepresentation` joins the same positions with `/`,
+building a mutable string a position at a time. `+dvt_indexPathWithIndexes:`
+runs the other way: it unboxes an array of numbers into a buffer handed to
+`-initWithIndexes:length:`. Up to 256 positions live on the stack and a longer
+path spills to the heap.
+
+The fourth selector of this category,
+`+dvt_indexPathWithStringRepresentation:error:`, its `NSScanner`-driven tolerant
+parser, is not ported yet; it is deferred alongside the invalidation families.
+It is deliberately declared nowhere here so that a caller cannot reach a symbol
+this port does not provide.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and
