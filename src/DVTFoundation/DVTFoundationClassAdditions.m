@@ -33,6 +33,7 @@
 #import "NSUndoManager+DVTNSUndoManagerAdditions.h"
 #import "NSLock+DVTFoundationExtensions.h"
 #import "NSRecursiveLock+DVTFoundationExtensions.h"
+#import "NSCache+DVTNSCacheAdditions.h"
 
 #import <Foundation/NSEnumerator.h>
 #import <Foundation/NSNull.h>
@@ -4585,6 +4586,22 @@ static int DVTNSDataClose(void *cookie)
     DVTDispatchAsync(queue, ^{
         [self dvt_performLockedBlock:block];
     });
+}
+
+@end
+
+@implementation NSCache (DVTNSCacheAdditions)
+
+- (id)dvt_cachedObjectForKey:(id)key creationBlock:(id (^)(void))block
+{
+    /* Plain read-through: a hit is returned untouched, a miss is created and
+       then inserted under the key before being returned. */
+    id object = [self objectForKey:key];
+    if (!object) {
+        object = block();
+        [self setObject:object forKey:key];
+    }
+    return object;
 }
 
 @end

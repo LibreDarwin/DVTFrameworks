@@ -64,5 +64,6 @@
 #import "NSUndoManager+DVTNSUndoManagerAdditions.h"
 #import "NSLock+DVTFoundationExtensions.h"
 #import "NSRecursiveLock+DVTFoundationExtensions.h"
+#import "NSCache+DVTNSCacheAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

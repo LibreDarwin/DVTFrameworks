@@ -8036,6 +8036,32 @@ static void DVTTestLockExtensions(void)
     DVTExpect(asyncRuns == 1, @"the async locked block ran once");
 }
 
+static void DVTTestCacheAdditions(void)
+{
+    fprintf(stdout, "\n== NSCache additions ==\n");
+
+    NSCache *cache = [[NSCache alloc] init];
+    cache.countLimit = 100;
+
+    __block NSUInteger created = 0;
+    id (^create)(void) = ^{
+        created++;
+        return [NSString stringWithFormat:@"value%lu", (unsigned long)created];
+    };
+
+    id first = [cache dvt_cachedObjectForKey:@"k" creationBlock:create];
+    DVTExpectEqualObjects(first, @"value1", @"a miss runs the creation block");
+    DVTExpect(created == 1, @"the block runs once on a miss");
+
+    id second = [cache dvt_cachedObjectForKey:@"k" creationBlock:create];
+    DVTExpect(second == first, @"a hit returns the cached object");
+    DVTExpect(created == 1, @"the block does not run again on a hit");
+
+    id other = [cache dvt_cachedObjectForKey:@"k2" creationBlock:create];
+    DVTExpectEqualObjects(other, @"value2", @"a different key creates its own object");
+    DVTExpect(created == 2, @"each missing key creates once");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8069,6 +8095,7 @@ int main(int argc, const char *argv[])
         DVTTestNSDataStdIO();
         DVTTestUndoBlockAdditions();
         DVTTestLockExtensions();
+        DVTTestCacheAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

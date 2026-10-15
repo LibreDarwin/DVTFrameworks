@@ -707,6 +707,13 @@ re-enter `dvt_performLockedBlock:`. The lock is what serialises them. Both
 categories share the identical pair; `DVTLocking` lives in
 `src/DVTFoundation/include/DVTLocking.h`.
 
+### Cache additions
+
+`NSCache (DVTNSCacheAdditions)` adds a single read-through accessor,
+`-dvt_cachedObjectForKey:creationBlock:`. It looks the key up, and only on a miss
+runs the block and inserts the result under the key; a hit is returned as-is
+without running the block.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and
