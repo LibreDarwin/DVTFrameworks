@@ -8256,6 +8256,97 @@ static void DVTTestPointerArrayAdditions(void)
     DVTExpect(array.count == 3, @"removing an absent object is a no-op");
 }
 
+@interface DVTFakeFilePath : NSObject
+@end
+
+@implementation DVTFakeFilePath
+
+- (NSURL *)fileURL
+{
+    return [NSURL fileURLWithPath:@"/tmp/dvt-userdefaults"];
+}
+
+@end
+
+static void DVTTestUserDefaultsAdditions(void)
+{
+    fprintf(stdout, "\n== NSUserDefaults additions ==\n");
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+
+    /* A key that was never stored answers with the caller's default. */
+    DVTExpect([defaults dvt_boolForKey:@"dvt.absentBool" defaultValue:YES],
+              @"an absent boolean falls back to the default");
+    DVTExpect([defaults dvt_integerForKey:@"dvt.absentInteger" defaultValue:7] == 7,
+              @"an absent integer falls back to the default");
+    DVTExpect([defaults dvt_doubleForKey:@"dvt.absentDouble" defaultValue:1.5] == 1.5,
+              @"an absent double falls back to the default");
+
+    /* A stored value wins over the default. */
+    [defaults setBool:NO forKey:@"dvt.bool"];
+    [defaults setInteger:99 forKey:@"dvt.integer"];
+    [defaults setDouble:2.5 forKey:@"dvt.double"];
+    DVTExpect(![defaults dvt_boolForKey:@"dvt.bool" defaultValue:YES],
+              @"a stored boolean overrides the default");
+    DVTExpect([defaults dvt_integerForKey:@"dvt.integer" defaultValue:7] == 99,
+              @"a stored integer overrides the default");
+    DVTExpect([defaults dvt_doubleForKey:@"dvt.double" defaultValue:1.5] == 2.5,
+              @"a stored double overrides the default");
+
+    /* Volatile-domain lookup. */
+    [defaults setVolatileDomain:@{ @"answer" : @42 } forName:@"DVTUserDefaultsTestDomain"];
+    DVTExpectEqualObjects([defaults dvt_objectForKey:@"answer"
+                             inVolatileDomainForName:@"DVTUserDefaultsTestDomain"],
+                          @42, @"a volatile domain value is found by key");
+    DVTExpect([defaults dvt_objectForKey:nil
+                inVolatileDomainForName:@"DVTUserDefaultsTestDomain"] == nil,
+              @"a nil key has no value");
+
+    /* Strings split on the separator, an existing array passes through. */
+    [defaults setObject:@"a,b,c" forKey:@"dvt.strings"];
+    DVTExpectEqualObjects([defaults dvt_multipleStringsForKey:@"dvt.strings" separator:@","],
+                          (@[ @"a", @"b", @"c" ]), @"a string is split on the separator");
+    [defaults setObject:@[ @"x", @"y" ] forKey:@"dvt.stringArray"];
+    DVTExpectEqualObjects([defaults dvt_multipleStringsForKey:@"dvt.stringArray" separator:@","],
+                          (@[ @"x", @"y" ]), @"an existing array is returned unchanged");
+
+    /* Changed means the value differs from the registered default. */
+    [defaults registerDefaults:@{ @"dvt.changed" : @1 }];
+    DVTExpect(![defaults dvt_objectIsChangedForKey:@"dvt.changed"],
+              @"a value equal to the registered default is unchanged");
+    [defaults setInteger:2 forKey:@"dvt.changed"];
+    DVTExpect([defaults dvt_objectIsChangedForKey:@"dvt.changed"],
+              @"a value differing from the registered default is changed");
+    DVTExpect(![defaults dvt_objectIsChangedForKey:@"dvt.neverRegistered"],
+              @"a key without a registration is never changed");
+
+    /* A file path is stored as its file URL. */
+    [defaults dvt_setFilePath:[DVTFakeFilePath new] forKey:@"dvt.filePath"];
+    DVTExpectEqualObjects([defaults URLForKey:@"dvt.filePath"],
+                          [NSURL fileURLWithPath:@"/tmp/dvt-userdefaults"],
+                          @"a file path is stored as its file URL");
+
+    /* Subscripting routes through the plain accessors. */
+    defaults[@"dvt.subscript"] = @"value";
+    DVTExpectEqualObjects(defaults[@"dvt.subscript"], @"value",
+                          @"subscript get and set round-trip");
+
+    /* The environment hook is a deliberate no-op. */
+    [defaults dvt_setupDefaultsFromEnvironment];
+    DVTExpectEqualObjects(defaults[@"dvt.subscript"], @"value",
+                          @"setupDefaultsFromEnvironment leaves values alone");
+
+    [defaults removeObjectForKey:@"dvt.bool"];
+    [defaults removeObjectForKey:@"dvt.integer"];
+    [defaults removeObjectForKey:@"dvt.double"];
+    [defaults removeObjectForKey:@"dvt.strings"];
+    [defaults removeObjectForKey:@"dvt.stringArray"];
+    [defaults removeObjectForKey:@"dvt.changed"];
+    [defaults removeObjectForKey:@"dvt.filePath"];
+    [defaults removeObjectForKey:@"dvt.subscript"];
+    [defaults removeVolatileDomainForName:@"DVTUserDefaultsTestDomain"];
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8294,6 +8385,7 @@ int main(int argc, const char *argv[])
         DVTTestIndexSetAdditions();
         DVTTestIndexPathAdditions();
         DVTTestPointerArrayAdditions();
+        DVTTestUserDefaultsAdditions();
         DVTTestDictionaryAdditions();
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();

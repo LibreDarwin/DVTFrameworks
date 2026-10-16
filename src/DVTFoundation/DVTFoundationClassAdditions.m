@@ -4904,3 +4904,99 @@ static int DVTNSDataClose(void *cookie)
 }
 
 @end
+
+@implementation NSUserDefaults (DVTNSUserDefaultsAdditions)
+
+- (id)dvt_objectForKey:(id)key inVolatileDomainForName:(id)name
+{
+    /* A missing domain name falls back to the application's own bundle id; if
+       even that is unavailable there is nothing to look in. */
+    if (!key) {
+        return nil;
+    }
+    if (!name) {
+        name = [[NSBundle mainBundle] bundleIdentifier];
+        if (!name) {
+            return nil;
+        }
+    }
+    return [[self volatileDomainForName:name] valueForKey:key];
+}
+
+- (id)dvt_multipleStringsForKey:(id)key separator:(id)separator
+{
+    /* An array value is preferred; a plain string is split on the separator. */
+    NSArray *strings = [self stringArrayForKey:key];
+    if (!strings) {
+        strings = [[self stringForKey:key] componentsSeparatedByString:separator];
+    }
+    return strings;
+}
+
+- (BOOL)dvt_objectIsChangedForKey:(id)key
+{
+    /* Changed means the effective value differs from the one registered in the
+       NSRegistrationDomain. A missing key, or a missing registration, is not a
+       change. */
+    if (!key) {
+        return NO;
+    }
+    id value = [[self dictionaryRepresentation] objectForKey:key];
+    if (!value) {
+        return NO;
+    }
+    id registered = [self dvt_objectForKey:key inVolatileDomainForName:NSRegistrationDomain];
+    if (!registered) {
+        return NO;
+    }
+    return ![value isEqual:registered];
+}
+
+- (void)dvt_setFilePath:(id)path forKey:(id)key
+{
+    [self setURL:[path fileURL] forKey:key];
+}
+
+- (void)dvt_setupDefaultsFromEnvironment
+{
+    /* Intentionally empty in the oracle. */
+}
+
+- (BOOL)dvt_boolForKey:(id)key defaultValue:(BOOL)value
+{
+    id object = [self objectForKey:key];
+    if (object) {
+        value = [object boolValue];
+    }
+    return value;
+}
+
+- (double)dvt_doubleForKey:(id)key defaultValue:(double)value
+{
+    id object = [self objectForKey:key];
+    if (object) {
+        value = [object doubleValue];
+    }
+    return value;
+}
+
+- (long long)dvt_integerForKey:(id)key defaultValue:(long long)value
+{
+    id object = [self objectForKey:key];
+    if (object) {
+        value = [object integerValue];
+    }
+    return value;
+}
+
+- (id)objectForKeyedSubscript:(id)subscript
+{
+    return [self objectForKey:subscript];
+}
+
+- (void)setObject:(id)object forKeyedSubscript:(id)subscript
+{
+    [self setObject:object forKey:subscript];
+}
+
+@end

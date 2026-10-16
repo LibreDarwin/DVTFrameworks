@@ -797,6 +797,31 @@ position, or `NSNotFound` when nothing matches. `-dvt_removeFirstObjectIdentical
 builds on it: it looks the object up and removes that pointer only when the lookup
 found something, so a miss is a no-op.
 
+### User defaults additions
+
+`NSUserDefaults (DVTNSUserDefaultsAdditions)` adds typed accessors and a handful
+of domain helpers. The three typed getters — `-dvt_boolForKey:defaultValue:`,
+`-dvt_doubleForKey:defaultValue:` and `-dvt_integerForKey:defaultValue:` — each
+read the raw object and unbox it only when present, otherwise handing back the
+default they were given. `-dvt_multipleStringsForKey:separator:` prefers a
+`stringArrayForKey:` result and falls back to splitting a `stringForKey:` value
+on the separator. `-dvt_objectForKey:inVolatileDomainForName:` looks in a named
+volatile domain, treating a nil domain name as the main bundle's identifier and
+returning nil when there is no key or no domain to search.
+`-dvt_objectIsChangedForKey:` compares the effective value against the
+registration domain and reports a change only when both exist and differ.
+`-dvt_setFilePath:forKey:` stores `[path fileURL]` under the key as a URL, and
+`-dvt_setupDefaultsFromEnvironment` is a deliberate no-op. The two subscript
+selectors, `-objectForKeyedSubscript:` and `-setObject:forKeyedSubscript:`, are
+one-line forwards onto `objectForKey:` and `setObject:forKey:`.
+
+`-dvt_filePathForKey:`, which answers with a `DVTFilePath` built by
+`+[DVTFilePath filePathForFileURL:]` or `+[DVTFilePath filePathForPathString:]`,
+is not ported yet; `DVTFilePath` itself belongs to a later family, so the
+selector is omitted here rather than compiled against a symbol this port does
+not provide. The `<DVTUserDefaults>` protocol the header conforms to in the
+oracle is likewise left off until that protocol lands.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and

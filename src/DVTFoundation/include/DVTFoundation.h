@@ -73,5 +73,6 @@
 #import "NSTextCheckingResult+DVTNSTextCheckingResultAdditions.h"
 #import "NSIndexPath+DVTNSIndexPathAdditions.h"
 #import "NSPointerArray+DVTNSPointerArrayAdditions.h"
+#import "NSUserDefaults+DVTNSUserDefaultsAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */
