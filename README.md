@@ -840,6 +840,71 @@ selector is omitted here rather than compiled against a symbol this port does
 not provide. The `<DVTUserDefaults>` protocol the header conforms to in the
 oracle is likewise left off until that protocol lands.
 
+### Process info additions
+
+`NSProcessInfo (DVTNSProcessInfoAdditions)` is the process-wide housekeeping
+category: CPU count, executable path, process-name checks, termination
+bookkeeping, the saving policy, and system activity tokens.
+
+`-dvt_numberOfAvailableCPUs` asks `sysctl` for `HW_AVAILCPU` and reads a failed
+query as zero. `-dvt_executablePath` calls `_NSGetExecutablePath` twice — once
+for the buffer length, once for the bytes — and converts the C string with
+`-[NSFileManager stringWithFileSystemRepresentation:length:]`. The original
+passes the reported buffer size, which includes the terminating NUL; this port
+passes the C string length instead, because Foundation keeps a NUL that falls
+inside `length:` and the resulting string would otherwise carry an embedded NUL
+and fail to compare equal to a real path. `-isXcode` and `-isSwiftPlaygrounds`
+compare `processName` against `Xcode` and `Playgrounds` with `-isEqual:`.
+
+Termination bookkeeping comes in two flavours. Sudden termination counts live in
+a reason-to-count dictionary behind a recursive lock:
+`-dvt_suddenTerminationDisablingReasons` returns the keys,
+`-dvt_suddenTerminationDisablingCountForReason:` reads the stored number back
+through `-intValue` (so a negative stored count reads sign-extended), and
+`_dvt_setSuddenTerminationDisablingCount:forReason:` stores any non-zero value
+and removes the reason at zero. `-dvt_disableSuddenTerminationForReason:`
+increments the count and calls `-disableSuddenTermination`; its enable twin
+decrements without going below zero and calls `-enableSuddenTermination`.
+Automatic termination uses a counted set:
+`-dvt_disableAutomaticTerminationForReason:` adds an occurrence and forwards to
+`-disableAutomaticTermination:` when the process responds, its enable twin
+removes one occurrence and forwards to `-enableAutomaticTermination:`, and an
+absent reason is a no-op. `-dvt_disableAutomaticTerminationWithReason:` disables
+immediately and returns a `DVTOneShotBlock` whose callback re-enables the
+reason, so retaining the token keeps the pair balanced. Every reason-taking
+method validates its argument the way the original does: nil, non-string, and
+empty are assertion failures.
+
+The saving policy is two associated objects and one environment check:
+`-dvt_isNonGraphicalProcess`/`-dvt_setIsNonGraphicalProcess:` store a flag,
+`-dvt_setDisallowSavingOverride:` stores an override, and
+`-dvt_shouldDisallowSaving` answers NO when `XCODEBUILD_FORCE_ALLOW_SAVING` is
+set, otherwise uses the override when present, otherwise the non-graphical flag.
+
+System activities are `DVTSystemActivityToken`s.
+`-dvt_beginActivityWithOptions:reason:` creates one and registers it in a
+process-wide set; `-dvt_activeSystemActivityTokensMatchingOptions:` returns every
+token sharing at least one option bit; invalidating a token ends the Foundation
+activity and removes it from the set. The token registry is guarded by a
+non-recursive lock, so the accessor block must not re-enter it — the same
+constraint as the original.
+
+`DVTOneShotBlock` is the small invalidation stand-in used here: it stores a
+copied callback and runs it exactly once on `-invalidate`, while
+`-markAsInvalid` drops it without running.
+
+Three pieces of the original are deliberately left out. The logging calls
+(`DVTLogAspect` under the `DVTSystemActivity`, `AutomaticTermination`, and
+`InstantOff` aspects) and the private `-[NSProcessInfo
+_suddenTerminationDisablingCount]` probe they print are dropped, since this port
+has no `DVTLogAspect` and the messages have no observable effect. The two helper
+classes neither conform to `DVTInvalidation` nor record creation or invalidation
+backtraces, and `DVTSystemActivityToken`'s display and system sleep assertions
+plus its `_stringForActivityOptions:` and
+`_descriptionOfOutstandingTokens:withActivityOptions:logLevel:` helpers belong to
+that class's own port. Finally, `-dvt_executablePath` puts its buffer on the
+heap rather than the stack.
+
 ### Error builders
 
 Two `NSError` class methods, `dvt_errorWithDomain:errorCode:messageFormat:` and
@@ -1992,14 +2057,24 @@ binary, where it compiles away entirely.
 
 ### Deliberate divergence
 
-Three situations are answered differently rather than matched. Initialising a
+Four situations are answered differently rather than matched. Initialising a
 `DVTTextDocumentLocation` with a `nil` document URL **aborts in Apple's binary**
 and survives here: the object is built, and
 `-persistableStringRepresentationAndDecodableClassName:error:` then returns `nil`
 with an error saying the location has no document URL. The URL is declared
 nonnull, so the abort is a programmer-error guard rather than a case Apple
-handles; returning an error keeps a recoverable mistake recoverable. Two
-candidate divergences were checked and turned out **not** to be differences —
+handles; returning an error keeps a recoverable mistake recoverable.
+
+The fourth is `-dvt_executablePath`. Apple passes the buffer length reported by
+`_NSGetExecutablePath` to
+`-[NSFileManager stringWithFileSystemRepresentation:length:]`, and that length
+includes the terminating NUL. On this system Foundation keeps a NUL that falls
+inside `length:`, so the reference returns a path with an embedded trailing NUL —
+which no path comparison against a normal string can match. This port passes the
+C string length, returning the path callers expect; the path is otherwise
+identical.
+
+Two candidate divergences were checked and turned out **not** to be differences —
 `DVTLineRangeForCharacterRange` on a shifted table ignores `baseLine` and
 `baseOffset` in both implementations, and both abort on a line offset table with
 fewer than two entries, differing only in the text of the assertion.

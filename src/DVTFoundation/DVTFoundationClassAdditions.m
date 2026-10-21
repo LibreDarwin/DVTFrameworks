@@ -27,7 +27,11 @@
 
 #import "DVTAssertions.h"
 #import "DVTDispatch.h"
+#import "DVTEnvironmentSnapshot.h"
+#import "DVTOneShotBlock.h"
+#import "DVTSystemActivityToken.h"
 #import "DVTVersion.h"
+#import "NSProcessInfo+DVTNSProcessInfoAdditions.h"
 #import "NSData+DVTNSDataStdIO.h"
 #import "NSMutableData+DVTNSDataStdIO.h"
 #import "NSUndoManager+DVTNSUndoManagerAdditions.h"
@@ -39,10 +43,13 @@
 #import <Foundation/NSNull.h>
 #import <errno.h>
 #import <limits.h>
+#import <mach-o/dyld.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
+#import <sys/sysctl.h>
 
 /*
  PureDarwin's Foundation is a subset of Apple's: -firstObject, -indexOfObject:,
@@ -5027,6 +5034,282 @@ static int DVTNSDataClose(void *cookie)
 - (void)setObject:(id)object forKeyedSubscript:(id)subscript
 {
     [self setObject:object forKey:subscript];
+}
+
+@end
+
+#pragma mark - NSProcessInfo (DVTNSProcessInfoAdditions)
+
+/*
+ Sudden termination is tracked as a reason -> count dictionary, automatic
+ termination as a counted set of reasons. Both stores are process-wide.
+ Each has its own recursive lock: incrementing or decrementing a count reads
+ the current value back through the public accessor while the store is still
+ locked, so a non-recursive lock would deadlock.
+ */
+static NSMutableDictionary<NSString *, NSNumber *> *DVTSuddenTerminationDisablingReasons = nil;
+static NSCountedSet<NSString *> *DVTAutomaticTerminationDisablingReasons = nil;
+static NSRecursiveLock *DVTSuddenTerminationDisablingReasonsLock = nil;
+static NSRecursiveLock *DVTAutomaticTerminationDisablingReasonsLock = nil;
+static dispatch_once_t DVTSuddenTerminationDisablingReasonsOnceToken;
+static dispatch_once_t DVTAutomaticTerminationDisablingReasonsOnceToken;
+
+static void DVTAccessSuddenTerminationDisablingReasons(void (^block)(NSMutableDictionary<NSString *, NSNumber *> *reasons))
+{
+    dispatch_once(&DVTSuddenTerminationDisablingReasonsOnceToken, ^{
+        DVTSuddenTerminationDisablingReasons = [[NSMutableDictionary alloc] init];
+        DVTSuddenTerminationDisablingReasonsLock = [[NSRecursiveLock alloc] init];
+    });
+    [DVTSuddenTerminationDisablingReasonsLock dvt_performLockedBlock:^{
+        block(DVTSuddenTerminationDisablingReasons);
+    }];
+}
+
+static void DVTAccessAutomaticTerminationDisablingReasons(void (^block)(NSCountedSet<NSString *> *reasons))
+{
+    dispatch_once(&DVTAutomaticTerminationDisablingReasonsOnceToken, ^{
+        DVTAutomaticTerminationDisablingReasons = [[NSCountedSet alloc] init];
+        DVTAutomaticTerminationDisablingReasonsLock = [[NSRecursiveLock alloc] init];
+    });
+    [DVTAutomaticTerminationDisablingReasonsLock dvt_performLockedBlock:^{
+        block(DVTAutomaticTerminationDisablingReasons);
+    }];
+}
+
+/* Every reason-taking termination method validates its argument the same way:
+   a nil object, a non-string, and the empty string are all assertion failures
+   in the original. */
+static void DVTAssertTerminationReason(NSString *reason)
+{
+    DVTAssert(reason != nil, @"(reason) != nil", nil,
+              @"%@ must not be nil", @"reason");
+    DVTAssert(CFGetTypeID((__bridge CFStringRef)reason) == CFStringGetTypeID(),
+              @"CFGetTypeID((CFStringRef)reason) == CFStringGetTypeID()", nil,
+              @"%@ should be a string, but it is %@", @"reason", reason);
+    DVTAssert(![reason isEqualToString:@""], @"![reason isEqualToString:@\"\"]", nil,
+              @"%@ must not be empty", @"reason");
+}
+
+/*
+ The original also logs the private Foundation
+ `-[NSProcessInfo _suddenTerminationDisablingCount]` after changing a sudden
+ termination count. There is no DVTLogAspect in this port and the message has
+ no observable effect, so neither the probe nor the logging is carried over.
+ */
+
+@implementation NSProcessInfo (DVTNSProcessInfoAdditions)
+
+- (unsigned long long)dvt_numberOfAvailableCPUs
+{
+    /* HW_AVAILCPU is the number of CPUs the scheduler may use. A failed query
+       reads as zero rather than aborting. */
+    int availableCPUs = 0;
+    size_t length = sizeof(availableCPUs);
+    int mib[2] = { CTL_HW, HW_AVAILCPU };
+    if (sysctl(mib, 2, &availableCPUs, &length, NULL, 0) < 0) {
+        availableCPUs = 0;
+    }
+    return (unsigned long long)availableCPUs;
+}
+
+- (NSString *)dvt_executablePath
+{
+    /* The first call reports the buffer length with a NULL buffer. The
+       original allocates the buffer on the stack; a heap buffer is used here
+       so the size is not attacker-influenced stack usage. */
+    uint32_t size = 0;
+    int result = _NSGetExecutablePath(NULL, &size);
+    DVTAssert(result == -1 && size > 0,
+              @"_NSGetExecutablePath(NULL, &size) == -1 && size > 0", nil,
+              @"Could not determine the size of the executable path buffer");
+
+    char *path = malloc(size);
+    result = _NSGetExecutablePath(path, &size);
+    DVTAssert(result == 0, @"_NSGetExecutablePath(path, &size) == 0", nil,
+              @"Could not read the executable path");
+
+    /* size is the buffer length reported before the second call and includes
+       the terminating NUL. Foundation keeps the NUL when it is part of
+       `length:`, so the string is built from the C string length instead. */
+    NSString *executablePath = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:path
+                                                                                          length:strlen(path)];
+    free(path);
+    return executablePath;
+}
+
+- (BOOL)isXcode
+{
+    return [[self processName] isEqual:@"Xcode"];
+}
+
+- (BOOL)isSwiftPlaygrounds
+{
+    return [[self processName] isEqual:@"Playgrounds"];
+}
+
+- (NSArray<NSString *> *)dvt_suddenTerminationDisablingReasons
+{
+    __block NSArray<NSString *> *reasons = nil;
+    DVTAccessSuddenTerminationDisablingReasons(^(NSMutableDictionary<NSString *, NSNumber *> *dictionary) {
+        reasons = [dictionary allKeys];
+    });
+    return reasons;
+}
+
+- (long long)dvt_suddenTerminationDisablingCountForReason:(NSString *)reason
+{
+    __block long long count = 0;
+    DVTAccessSuddenTerminationDisablingReasons(^(NSMutableDictionary<NSString *, NSNumber *> *dictionary) {
+        /* The stored NSNumber is an int, so a negative value reads back
+           sign-extended. */
+        count = [[dictionary objectForKey:reason] intValue];
+    });
+    return count;
+}
+
+- (void)_dvt_setSuddenTerminationDisablingCount:(long long)count forReason:(NSString *)reason
+{
+    DVTAccessSuddenTerminationDisablingReasons(^(NSMutableDictionary<NSString *, NSNumber *> *dictionary) {
+        if (count != 0) {
+            [dictionary setObject:[NSNumber numberWithInteger:(NSInteger)count] forKey:reason];
+        } else {
+            [dictionary removeObjectForKey:reason];
+        }
+    });
+}
+
+- (NSArray<NSString *> *)dvt_automaticTerminationDisablingReasons
+{
+    __block NSArray<NSString *> *reasons = nil;
+    DVTAccessAutomaticTerminationDisablingReasons(^(NSCountedSet<NSString *> *set) {
+        reasons = [set allObjects];
+    });
+    return reasons;
+}
+
+- (long long)dvt_automaticTerminationDisablingCountForReason:(NSString *)reason
+{
+    __block long long count = 0;
+    DVTAccessAutomaticTerminationDisablingReasons(^(NSCountedSet<NSString *> *set) {
+        count = (long long)[set countForObject:reason];
+    });
+    return count;
+}
+
+- (DVTOneShotBlock *)dvt_disableAutomaticTerminationWithReason:(NSString *)reason
+{
+    /* The disable happens now; the returned token re-enables the reason when
+       its owner is done with it. */
+    [self dvt_disableAutomaticTerminationForReason:reason];
+    return [DVTOneShotBlock oneShotBlockWithCallback:^{
+        [self dvt_enableAutomaticTerminationForReason:reason];
+    }];
+}
+
+- (void)dvt_disableAutomaticTerminationForReason:(NSString *)reason
+{
+    DVTAssertTerminationReason(reason);
+    DVTAccessAutomaticTerminationDisablingReasons(^(NSCountedSet<NSString *> *reasons) {
+        [reasons addObject:reason];
+        if ([self respondsToSelector:@selector(disableAutomaticTermination:)]) {
+            [self disableAutomaticTermination:reason];
+        }
+    });
+}
+
+- (void)dvt_enableAutomaticTerminationForReason:(NSString *)reason
+{
+    DVTAssertTerminationReason(reason);
+    DVTAccessAutomaticTerminationDisablingReasons(^(NSCountedSet<NSString *> *reasons) {
+        if ([reasons containsObject:reason]) {
+            [reasons removeObject:reason];
+            if ([self respondsToSelector:@selector(enableAutomaticTermination:)]) {
+                [self enableAutomaticTermination:reason];
+            }
+        }
+    });
+}
+
+- (void)dvt_enableSuddenTerminationForReason:(NSString *)reason
+{
+    DVTAssertTerminationReason(reason);
+    DVTAccessSuddenTerminationDisablingReasons(^(NSMutableDictionary<NSString *, NSNumber *> *reasons) {
+        [self enableSuddenTermination];
+        long long count = [self dvt_suddenTerminationDisablingCountForReason:reason];
+        if (count != 0) {
+            [self _dvt_setSuddenTerminationDisablingCount:count - 1 forReason:reason];
+        }
+    });
+}
+
+- (void)dvt_disableSuddenTerminationForReason:(NSString *)reason
+{
+    DVTAssertTerminationReason(reason);
+    DVTAccessSuddenTerminationDisablingReasons(^(NSMutableDictionary<NSString *, NSNumber *> *reasons) {
+        [self disableSuddenTermination];
+        long long count = [self dvt_suddenTerminationDisablingCountForReason:reason];
+        [self _dvt_setSuddenTerminationDisablingCount:count + 1 forReason:reason];
+    });
+}
+
+- (BOOL)dvt_isNonGraphicalProcess
+{
+    NSNumber *isNonGraphicalProcess = objc_getAssociatedObject(self, "dvt_isNonGraphicalProcess");
+    return [isNonGraphicalProcess boolValue];
+}
+
+- (void)dvt_setIsNonGraphicalProcess:(BOOL)isNonGraphicalProcess
+{
+    objc_setAssociatedObject(self, "dvt_isNonGraphicalProcess",
+                             [NSNumber numberWithBool:isNonGraphicalProcess],
+                             OBJC_ASSOCIATION_RETAIN);
+}
+
+- (BOOL)dvt_shouldDisallowSaving
+{
+    /* Building through xcodebuild forces saving to be allowed regardless of
+       the other state. */
+    if (DVTEnvironmentSnapshotBool(@"XCODEBUILD_FORCE_ALLOW_SAVING")) {
+        return NO;
+    }
+
+    NSNumber *disallowSavingOverride = objc_getAssociatedObject(self, "dvt_disallowSavingOverride");
+    if (disallowSavingOverride != nil) {
+        return [disallowSavingOverride boolValue];
+    }
+
+    return [self dvt_isNonGraphicalProcess];
+}
+
+- (void)dvt_setDisallowSavingOverride:(BOOL)disallowSavingOverride
+{
+    objc_setAssociatedObject(self, "dvt_disallowSavingOverride",
+                             [NSNumber numberWithBool:disallowSavingOverride],
+                             OBJC_ASSOCIATION_RETAIN);
+}
+
+- (DVTSystemActivityToken *)dvt_beginActivityWithOptions:(unsigned long long)options reason:(NSString *)reason
+{
+    DVTSystemActivityToken *token = [[DVTSystemActivityToken alloc] initWithOptions:options reason:reason];
+    [DVTSystemActivityToken _accessSystemActivityTokensWithBlock:^(NSMutableSet<DVTSystemActivityToken *> *tokens) {
+        [tokens addObject:token];
+    }];
+    return token;
+}
+
+- (NSArray<DVTSystemActivityToken *> *)dvt_activeSystemActivityTokensMatchingOptions:(unsigned long long)options
+{
+    /* A token matches when any of its option bits is also in `options`, which
+       is how the original asks "is this token in one of these families?". */
+    NSMutableArray<DVTSystemActivityToken *> *matchingTokens = [NSMutableArray array];
+    [DVTSystemActivityToken _accessSystemActivityTokensWithBlock:^(NSMutableSet<DVTSystemActivityToken *> *tokens) {
+        for (DVTSystemActivityToken *token in tokens) {
+            if ((token.activityOptions & options) != 0) {
+                [matchingTokens addObject:token];
+            }
+        }
+    }];
+    return matchingTokens;
 }
 
 @end

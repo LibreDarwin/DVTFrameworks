@@ -855,6 +855,191 @@ static void DVTTestMachO(void)
 
 @end
 
+#pragma mark - Process info additions
+
+static void DVTTestProcessInfoAdditions(void)
+{
+    fprintf(stdout, "\n== process info additions ==\n");
+
+    NSProcessInfo *processInfo = [NSProcessInfo processInfo];
+
+    DVTExpect([processInfo dvt_numberOfAvailableCPUs] > 0,
+              @"sysctl reports at least one available CPU");
+
+    NSString *executablePath = [processInfo dvt_executablePath];
+    DVTExpect(executablePath.length > 0, @"the executable path is not empty");
+    DVTExpect([executablePath isAbsolutePath], @"the executable path is absolute");
+    DVTExpect([[NSFileManager defaultManager] fileExistsAtPath:executablePath],
+              @"the executable path names an existing file");
+    DVTExpect([[executablePath lastPathComponent] isEqualToString:@"dvt_tests"],
+              @"the executable path names the test binary");
+
+    DVTExpect(!processInfo.isXcode, @"the test binary is not Xcode");
+    DVTExpect(!processInfo.isSwiftPlaygrounds, @"the test binary is not Playgrounds");
+
+    /* Sudden termination is a keyed signed count. Disables and enables are
+       balanced, and enabling an absent reason is a no-op rather than a
+       decrement into the negative. */
+    NSString *suddenReason = @"DVTTestSuddenTerminationReason";
+    [processInfo _dvt_setSuddenTerminationDisablingCount:0 forReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 0,
+              @"an unused sudden termination reason counts as zero");
+    DVTExpect(![[processInfo dvt_suddenTerminationDisablingReasons] containsObject:suddenReason],
+              @"an unused sudden termination reason is absent from the list");
+
+    [processInfo dvt_disableSuddenTerminationForReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 1,
+              @"disabling sudden termination counts once");
+    DVTExpect([[processInfo dvt_suddenTerminationDisablingReasons] containsObject:suddenReason],
+              @"disabling sudden termination records the reason");
+
+    [processInfo dvt_disableSuddenTerminationForReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 2,
+              @"nested disables accumulate");
+
+    [processInfo dvt_enableSuddenTerminationForReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 1,
+              @"enabling sudden termination decrements the count");
+
+    [processInfo dvt_enableSuddenTerminationForReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 0,
+              @"the last enable brings the count back to zero");
+    DVTExpect(![[processInfo dvt_suddenTerminationDisablingReasons] containsObject:suddenReason],
+              @"a zero count removes the reason");
+
+    [processInfo dvt_enableSuddenTerminationForReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 0,
+              @"enabling an absent reason does not go negative");
+
+    [processInfo _dvt_setSuddenTerminationDisablingCount:4 forReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 4,
+              @"the private setter stores a positive count");
+    [processInfo _dvt_setSuddenTerminationDisablingCount:0 forReason:suddenReason];
+    DVTExpect([processInfo dvt_suddenTerminationDisablingCountForReason:suddenReason] == 0,
+              @"the private setter clears a zero count");
+
+    /* Automatic termination is a counted set, so the same reason can be
+       disabled more than once and needs one enable per disable. */
+    NSString *automaticReason = @"DVTTestAutomaticTerminationReason";
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 0,
+              @"an unused automatic termination reason counts as zero");
+
+    [processInfo dvt_disableAutomaticTerminationForReason:automaticReason];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 1,
+              @"disabling automatic termination counts once");
+    [processInfo dvt_disableAutomaticTerminationForReason:automaticReason];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 2,
+              @"nested disables accumulate");
+    DVTExpect([[processInfo dvt_automaticTerminationDisablingReasons] containsObject:automaticReason],
+              @"disabling automatic termination records the reason");
+
+    [processInfo dvt_enableAutomaticTerminationForReason:automaticReason];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 1,
+              @"enabling automatic termination decrements the count");
+    [processInfo dvt_enableAutomaticTerminationForReason:automaticReason];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 0,
+              @"the last enable brings the count back to zero");
+    DVTExpect(![[processInfo dvt_automaticTerminationDisablingReasons] containsObject:automaticReason],
+              @"a zero count removes the automatic reason");
+
+    [processInfo dvt_enableAutomaticTerminationForReason:automaticReason];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 0,
+              @"enabling an absent automatic reason does not go negative");
+
+    DVTOneShotBlock *automaticTerminationToken =
+        [processInfo dvt_disableAutomaticTerminationWithReason:automaticReason];
+    DVTExpect(automaticTerminationToken != nil, @"disabling with a token returns one");
+    DVTExpect(automaticTerminationToken.isValid, @"a new automatic termination token is valid");
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 1,
+              @"the token disables the reason before it is returned");
+
+    [automaticTerminationToken invalidate];
+    DVTExpect(!automaticTerminationToken.isValid, @"invalidating the token clears its validity");
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 0,
+              @"invalidating the token re-enables the reason");
+    [automaticTerminationToken invalidate];
+    DVTExpect([processInfo dvt_automaticTerminationDisablingCountForReason:automaticReason] == 0,
+              @"a second invalidation is a no-op");
+
+    /* Saving policy: an explicit override wins, a non-graphical process must
+       not save, and xcodebuild can force saving to be allowed. */
+    DVTExpect(!processInfo.dvt_isNonGraphicalProcess, @"the non-graphical flag defaults to NO");
+    DVTExpect(!processInfo.dvt_shouldDisallowSaving, @"a graphical process without an override may save");
+
+    [processInfo dvt_setIsNonGraphicalProcess:YES];
+    DVTExpect(processInfo.dvt_isNonGraphicalProcess, @"the non-graphical flag round-trips");
+    DVTExpect(processInfo.dvt_shouldDisallowSaving, @"a non-graphical process must not save");
+
+    [processInfo dvt_setDisallowSavingOverride:NO];
+    DVTExpect(!processInfo.dvt_shouldDisallowSaving, @"a NO override beats the non-graphical flag");
+
+    [processInfo dvt_setIsNonGraphicalProcess:NO];
+    [processInfo dvt_setDisallowSavingOverride:YES];
+    DVTExpect(processInfo.dvt_shouldDisallowSaving, @"a YES override disallows saving");
+
+    DVTSetEnvironmentVariable(@"XCODEBUILD_FORCE_ALLOW_SAVING", @"YES");
+    DVTExpect(!processInfo.dvt_shouldDisallowSaving, @"xcodebuild forces saving to be allowed");
+    DVTRemoveEnvironmentVariable(@"XCODEBUILD_FORCE_ALLOW_SAVING");
+
+    [processInfo dvt_setDisallowSavingOverride:NO];
+    DVTExpect(!processInfo.dvt_shouldDisallowSaving, @"the override is cleared again");
+
+    /* System activities: created through Foundation, matched by any shared
+       option bit, and removed from the registry when invalidated. */
+    unsigned long long activityOptions = NSActivityBackground | NSActivityIdleSystemSleepDisabled;
+    DVTSystemActivityToken *activityToken =
+        [processInfo dvt_beginActivityWithOptions:activityOptions reason:@"DVTTestSystemActivity"];
+    DVTExpect(activityToken != nil, @"beginning an activity returns a token");
+    DVTExpect(activityToken.isValid, @"a new activity token is valid");
+    DVTExpect(activityToken.activityOptions == activityOptions, @"the token keeps its options");
+    DVTExpectEqualObjects(activityToken.reason, @"DVTTestSystemActivity", @"the token keeps its reason");
+    DVTExpect(activityToken.processInfoToken != nil, @"the token wraps a Foundation activity");
+
+    NSArray<DVTSystemActivityToken *> *backgroundTokens =
+        [processInfo dvt_activeSystemActivityTokensMatchingOptions:NSActivityBackground];
+    DVTExpect([backgroundTokens containsObject:activityToken],
+              @"a token matches when it shares any option bit");
+
+    NSArray<DVTSystemActivityToken *> *latencyCriticalTokens =
+        [processInfo dvt_activeSystemActivityTokensMatchingOptions:NSActivityLatencyCritical];
+    DVTExpect(![latencyCriticalTokens containsObject:activityToken],
+              @"a token does not match disjoint options");
+
+    [activityToken invalidate];
+    DVTExpect(!activityToken.isValid, @"invalidating an activity token clears its validity");
+    DVTExpect(activityToken.processInfoToken == nil, @"invalidating releases the Foundation activity");
+    DVTExpect(![[processInfo dvt_activeSystemActivityTokensMatchingOptions:activityOptions]
+                   containsObject:activityToken],
+              @"an invalidated token leaves the active set");
+
+    /* The one-shot block on its own: the callback runs once and only when the
+       block is invalidated. */
+    __block NSUInteger callbackCount = 0;
+    DVTOneShotBlock *oneShotBlock = [DVTOneShotBlock oneShotBlockWithCallback:^{
+        callbackCount++;
+    }];
+    DVTExpect(oneShotBlock.isValid, @"a new one-shot block is valid");
+    DVTExpect(callbackCount == 0, @"creating a one-shot block does not run its callback");
+    [oneShotBlock invalidate];
+    DVTExpect(callbackCount == 1, @"invalidating runs the callback once");
+    DVTExpect(!oneShotBlock.isValid, @"invalidating clears validity");
+    [oneShotBlock invalidate];
+    DVTExpect(callbackCount == 1, @"a second invalidation does not run the callback again");
+
+    DVTOneShotBlock *primitiveBlock = [DVTOneShotBlock oneShotBlockWithCallback:^{
+        callbackCount++;
+    }];
+    [primitiveBlock primitiveInvalidate];
+    DVTExpect(callbackCount == 2, @"primitiveInvalidate runs the callback without the validity check");
+
+    DVTOneShotBlock *markedBlock = [DVTOneShotBlock oneShotBlockWithCallback:^{
+        callbackCount++;
+    }];
+    [markedBlock markAsInvalid];
+    [markedBlock invalidate];
+    DVTExpect(callbackCount == 2, @"markAsInvalid keeps the callback from running");
+}
+
 #pragma mark - Class additions
 
 static void DVTTestClassAdditions(void)
@@ -8413,6 +8598,7 @@ int main(int argc, const char *argv[])
     @autoreleasepool {
         fprintf(stdout, "DVTFoundation tests\n");
         DVTTestEnvironmentSnapshot();
+        DVTTestProcessInfoAdditions();
         DVTTestDispatch();
         DVTTestBlockPerformers();
         DVTTestGeometry();

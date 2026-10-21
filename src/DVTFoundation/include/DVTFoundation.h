@@ -36,6 +36,8 @@
 #import "NSValue+DVTGeometryAdditions.h"
 #import "DVTCertificateComparison.h"
 #import "DVTEnvironmentSnapshot.h"
+#import "DVTOneShotBlock.h"
+#import "DVTSystemActivityToken.h"
 #import "DVTFoundationErrors.h"
 #import "DVTSimpleSerialization.h"
 #import "DVTCodingAdditions.h"
@@ -73,6 +75,7 @@
 #import "NSTextCheckingResult+DVTNSTextCheckingResultAdditions.h"
 #import "NSIndexPath+DVTNSIndexPathAdditions.h"
 #import "NSPointerArray+DVTNSPointerArrayAdditions.h"
+#import "NSProcessInfo+DVTNSProcessInfoAdditions.h"
 #import "NSUserDefaults+DVTNSUserDefaultsAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */
