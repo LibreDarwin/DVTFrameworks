@@ -26,3 +26,4 @@
 #import "DVTFoundationErrors.h"
 
 NSString *const DVTFoundationErrorDomain = @"DVTFoundationErrorDomain";
+NSString *const DVTDevicePreparationErrorDomain = @"com.apple.dt.deviceprep";

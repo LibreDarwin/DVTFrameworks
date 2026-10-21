@@ -918,12 +918,73 @@ arrive verbatim and `userInfo` never grows a second key. Both are declared as
 `src/DVTFoundation/include/DVTFoundationClassAdditions.h`.
 
 These two selectors are the first slice of Apple's `NSError` family under that
-category name to land here; about two dozen more follow separately
-(`dvt_isNoSuchFileError`, `dvt_propertyListDictionary`,
-`dvt_errorFromPropertyList:`, …). They come first because everything in the
-property list section below that has a failure to report builds it with them —
-Apple's `__getValue` lookup helper calls this same builder, and the lookup helper
-and the missing-key decoder reimplemented beneath match it.
+category name to land here. They come first because everything in the property
+list section below that has a failure to report builds it with them — Apple's
+`__getValue` lookup helper calls this same builder, and the lookup helper and
+the missing-key decoder reimplemented beneath match it.
+
+### Error additions
+
+The rest of Apple's `NSError` family follows in three categories, named as the
+binary records them. `NSError(DVTFoundationClassAdditions)` carries the generic
+builders, the injectors, the predicates, the recovery machinery and the
+property-list round trip; `NSError(DVTSecurityAdditions)` carries the
+`Security.framework` pair; `NSError(DVTDeviceOperationAdditions)` carries the
+analytics projection. All three are declared in
+`src/DVTFoundation/include/DVTFoundationClassAdditions.h`.
+
+The builders are all one-line projections onto
+`+errorWithDomain:code:userInfo:`, so a nil field omits its key rather than
+storing `NSNull`. A nil message with no recovery suggestion, for instance, is an
+error with an empty `userInfo`. `dvt_errorWithMessage:` and its format twin
+always use the literal `com.apple.DVTFoundation` domain and code `-1`; the POSIX
+pair uses `NSPOSIXErrorDomain` and `strerror`'s text, as the description when a
+format is supplied and for both description and failure reason when it is not.
+The four-key builder stores description, failure reason, recovery suggestion and
+underlying error independently. `dvt_errorFromPropertyList:` is the inverse of
+`-dvt_propertyListDictionary`: strings that are absent read back as `""` and a
+missing code as `0`.
+
+The recovery builder stores the chosen options under
+`NSLocalizedRecoveryOptionsErrorKey`, a copy of the block under the exported
+`DVTRecoveryBlockKey`, and a private `_DVTErrorRecoveryHandler` under
+`NSRecoveryAttempterErrorKey`. The handler does two things: it looks the block
+up and returns its answer for an option index, and it reports that answer back to
+a delegate, asserting on a null or unhandled selector the way the original does.
+The instance twin merges the same three entries into an existing error.
+
+The predicates are plain domain-and-code comparisons, not text matching:
+`dvt_isNoSuchFileError` accepts three combinations (`NSFileReadNoSuchFileError`,
+`NSFileNoSuchFileError` and `ENOENT`), `dvt_isFileExistsError` exactly
+`NSFileWriteFileExistsError`, and `dvt_isUserCancelledError` exactly
+`NSUserCancelledError`. `dvt_secItemNotFound` looks for `-25300` in
+`DVTSecErrorDomain` specifically — the same status in `NSOSStatusErrorDomain` is
+not accepted. `DVTSecErrorDomain` is a literal because the binary never exports
+it as a symbol; `+dvt_errorWithSecurityErrorCode:` fills the description from
+`SecCopyErrorMessageString`, which is why the framework now links against
+`Security.framework`.
+
+Both recursive selectors walk `NSUnderlyingErrorKey` only, as the binary does.
+`-dvt_recursivelyRetrieveObjectForUserInfoKey:` returns the first hit along the
+chain, and `-dvt_selfOrUnderlyingErrorMatchesBlock:` is a short-circuiting
+any-match. Neither consults `NSMultipleUnderlyingErrorsKey`.
+
+`-dvt_fillDeviceOperationAnalyticsDictionary:` is the one method that looks at a
+wider set of underlying errors. It records only device failures
+(`com.apple.dt.CoreDeviceError`, `DVTDevicePreparationErrorDomain`) and user
+cancellations, and leaves every other dictionary untouched. The value it stores
+under `operation_errorDomain` is a dotted trail: the error's own domain when it
+has no underlying error, otherwise `<domain>.<code>.<underlying domain>` with
+the recorded code taken from the underlying error. When that underlying error is
+an InstallCoordination presentation failure
+(`IXUserPresentableErrorDomain`, code `1`) the trail gains one more level,
+`<previous>.<1>.<deep domain>`, and the deep error supplies the code — the
+presentation error hides the failure that actually explains it. The trailing
+number is formatted with `%llu`, matching the original. The port reads
+`NSUnderlyingErrorKey` and `NSMultipleUnderlyingErrorsKey` directly instead of
+calling `-underlyingErrors`, which is newer than the Foundation subset this
+framework targets; the list it builds is the same one, with the single
+underlying error first.
 
 ### Property list values
 

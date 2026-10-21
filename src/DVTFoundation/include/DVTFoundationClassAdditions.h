@@ -1855,14 +1855,16 @@ DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const v
 
 /**
   An `NSError` in `domain` with code `errorCode`, a `NSLocalizedDescription` of
-  `message` and a `NSLocalizedRecoverySuggestion` of `recoverySuggestion`.
+  `message` and a `NSLocalizedRecoverySuggestion` of `recoverySuggestion`. A nil
+  `recoverySuggestion` omits that key; the security builder passes nil when a
+  status has no message text to derive one from.
 
   A forwarder onto `…recoverySuggestion:underlyingError:` with no underlying error.
   */
 + (NSError *)dvt_errorWithDomain:(NSString *)domain
                        errorCode:(NSInteger)errorCode
                          message:(NSString *)message
-              recoverySuggestion:(NSString *)recoverySuggestion;
+              recoverySuggestion:(nullable NSString *)recoverySuggestion;
 
 /**
   An `NSError` in `domain` with code `errorCode`, a `NSLocalizedDescription` of
@@ -1976,6 +1978,64 @@ DVT_EXTERN void DVTRemoveObjectForKey(CFMutableDictionaryRef dictionary, const v
  when a recovery attempt is made.
  */
 DVT_EXTERN NSString *const DVTRecoveryBlockKey;
+
+/**
+ The security slice of the `NSError` family, under Apple's category name
+ `DVTSecurityAdditions`: a builder for errors from a `Security.framework` status
+ code and the keychain-miss predicate.
+
+ The domain is the literal `DVTSecErrorDomain`. Unlike `DVTRecoveryBlockKey` and
+ the device domains the binary does not export it as a symbol, so it stays a
+ translation-unit literal rather than gaining a public constant.
+ */
+@interface NSError (DVTSecurityAdditions)
+
+/**
+  An `NSError` in `DVTSecErrorDomain` with `code`, whose
+  `NSLocalizedDescription` is Security.framework's own text for the status
+  (`SecCopyErrorMessageString`).
+
+  A status with no message text leaves the description out rather than storing
+  an empty string.
+
+  @param code The `OSStatus` from a Security call; positive and negative codes
+  both pass through unchanged.
+  */
++ (NSError *)dvt_errorWithSecurityErrorCode:(int)code;
+
+/** `YES` for `errSecItemNotFound` (`-25300`) in `DVTSecErrorDomain`. */
+- (BOOL)dvt_secItemNotFound;
+
+@end
+
+/**
+ The device-operation slice of the `NSError` family, under Apple's category name
+ `DVTDeviceOperationAdditions`: the projection of an error into the analytics
+ dictionary that device failures and cancellations are reported with.
+ */
+@interface NSError (DVTDeviceOperationAdditions)
+
+/**
+  Records this error in `dictionary` as `operation_errorCode` and
+  `operation_errorDomain`.
+
+  Only three kinds of error are recorded: `com.apple.dt.CoreDeviceError`,
+  `DVTDevicePreparationErrorDomain`, and a user cancellation in
+  `NSCocoaErrorDomain`. Anything else leaves `dictionary` untouched.
+
+  The recorded domain is a dotted trail rather than a bare string. With no
+  underlying error it is simply this error's domain. With one it is
+  `<domain>.<code>.<underlying domain>`, and the code becomes the underlying
+  error's. When that underlying error is an InstallCoordination presentation
+  failure (`IXUserPresentableErrorDomain`, code `1`) the trail gains one more
+  level, `<previous>.<1>.<deep domain>`, and the code comes from the deep error
+  -- the presentation error hides the failure that actually explains it.
+
+  @param dictionary The dictionary to add the two entries to; not copied.
+  */
+- (void)dvt_fillDeviceOperationAnalyticsDictionary:(NSMutableDictionary *)dictionary;
+
+@end
 
 /* The older spelling of the two collection tests. Apple keeps them in categories
    of their own, all three named the same thing, and in the binary each one is a

@@ -38,4 +38,13 @@
  */
 DVT_EXTERN NSString *const DVTFoundationErrorDomain;
 
+/**
+ The `NSError` domain for device-preparation failures.
+
+ The binary exports the symbol and spells the domain `com.apple.dt.deviceprep`.
+ `-dvt_fillDeviceOperationAnalyticsDictionary:` treats errors in it as device
+ failures worth recording, so it is exported here too.
+ */
+DVT_EXTERN NSString *const DVTDevicePreparationErrorDomain;
+
 #endif /* DVT_FOUNDATION_ERRORS_H */

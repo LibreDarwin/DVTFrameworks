@@ -28,6 +28,7 @@
 #import "DVTAssertions.h"
 #import "DVTDispatch.h"
 #import "DVTEnvironmentSnapshot.h"
+#import "DVTFoundationErrors.h"
 #import "DVTOneShotBlock.h"
 #import "DVTSystemActivityToken.h"
 #import "DVTVersion.h"
@@ -46,6 +47,7 @@
 #import <mach-o/dyld.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <Security/Security.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
@@ -62,6 +64,26 @@
 static id DVTFirstObject(NSArray *array)
 {
     return array.count > 0 ? [array objectAtIndex:0] : nil;
+}
+
+/* -underlyingErrors is newer than the Foundation subset this framework runs
+   against, so the two user-info keys are read directly. Apple's accessor lists
+   the NSUnderlyingErrorKey error first, then every NSMultipleUnderlyingErrorsKey
+   entry; this builds the same list without asking for the accessor. */
+static NSArray *DVTUnderlyingErrors(NSError *error)
+{
+    NSMutableArray *errors = [NSMutableArray array];
+    id underlying = error.userInfo[NSUnderlyingErrorKey];
+    if (underlying) {
+        [errors addObject:underlying];
+    }
+    id multiple = error.userInfo[NSMultipleUnderlyingErrorsKey];
+    if ([multiple isKindOfClass:[NSArray class]]) {
+        for (id member in multiple) {
+            [errors addObject:member];
+        }
+    }
+    return errors;
 }
 
 /** Shared body of `dvt_anyObjectsPassTest:` on the set-like classes. Unlike the
@@ -3970,6 +3992,71 @@ NSString *const DVTRecoveryBlockKey = @"DVTRecoveryBlockKey";
         return [underlyingError dvt_selfOrUnderlyingErrorMatchesBlock:block];
     }
     return NO;
+}
+
+@end
+
+@implementation NSError (DVTSecurityAdditions)
+
++ (NSError *)dvt_errorWithSecurityErrorCode:(int)code
+{
+    /* Security.framework supplies the text for a status; the copy is handed to
+       ARC, so it is released when the builder is done with it. A status with no
+       text leaves the description out entirely. */
+    NSString *message = (__bridge_transfer NSString *)SecCopyErrorMessageString((OSStatus)code, NULL);
+    return [self dvt_errorWithDomain:@"DVTSecErrorDomain"
+                           errorCode:code
+                             message:message
+                  recoverySuggestion:nil];
+}
+
+- (BOOL)dvt_secItemNotFound
+{
+    /* errSecItemNotFound is -25300. The domain check is the point: the same
+       OSStatus in NSOSStatusErrorDomain is not what this predicate is asking
+       about. */
+    return [self dvt_hasDomain:@"DVTSecErrorDomain" errorCode:-25300];
+}
+
+@end
+
+@implementation NSError (DVTDeviceOperationAdditions)
+
+- (void)dvt_fillDeviceOperationAnalyticsDictionary:(NSMutableDictionary *)dictionary
+{
+    /* Only device failures and user cancellations are worth recording; every
+       other error leaves the caller's dictionary untouched. */
+    NSString *domain = self.domain;
+    if (!([domain isEqualToString:@"com.apple.dt.CoreDeviceError"] ||
+          [domain isEqualToString:DVTDevicePreparationErrorDomain] ||
+          [self dvt_hasDomain:NSCocoaErrorDomain errorCode:3072])) {
+        return;
+    }
+
+    NSInteger code = self.code;
+    NSString *message = domain;
+    NSError *underlying = DVTFirstObject(DVTUnderlyingErrors(self));
+    if (underlying != nil) {
+        /* Flat case: the trail names this error and its code, then the
+           underlying domain, and the recorded code becomes the underlying
+           code. */
+        message = [NSString stringWithFormat:@"%@.%llu.%@", domain,
+                   (unsigned long long)code, underlying.domain];
+        if ([underlying dvt_hasDomain:@"IXUserPresentableErrorDomain" errorCode:1]) {
+            NSError *deep = DVTFirstObject(DVTUnderlyingErrors(underlying));
+            if (deep != nil) {
+                /* A presentation error hides the failure that explains it one
+                   level further down, so the trail gains that level and the
+                   code comes from the deep error. */
+                message = [NSString stringWithFormat:@"%@.%llu.%@", message, 1ULL, deep.domain];
+                underlying = deep;
+            }
+        }
+        code = underlying.code;
+    }
+
+    dictionary[@"operation_errorCode"] = @(code);
+    dictionary[@"operation_errorDomain"] = message;
 }
 
 @end

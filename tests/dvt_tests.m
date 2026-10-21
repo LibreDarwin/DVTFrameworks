@@ -5568,6 +5568,102 @@ static void DVTTestErrorAdditions(void)
 }
 
 /**
+ The security and device-operation slices of the NSError family: the DVTSecErrorDomain
+ builder and keychain-miss predicate, and the analytics projection that unwraps
+ device and cancellation errors into a dotted domain trail.
+ */
+static void DVTTestErrorDeviceAdditions(void)
+{
+    fprintf(stdout, "\n== error device and security additions ==\n");
+
+    /* The security builder takes Security.framework's own text for the status. */
+    NSError *error = [NSError dvt_errorWithSecurityErrorCode:-25300];
+    DVTExpectEqualObjects(error.domain, @"DVTSecErrorDomain", @"the security builder uses the private domain");
+    DVTExpect(error.code == -25300, @"the security status code passes through");
+    DVTExpectEqualObjects(error.localizedDescription,
+                          @"The specified item could not be found in the keychain.",
+                          @"the description is Security.framework's text");
+    DVTExpect(error.userInfo[NSLocalizedRecoverySuggestionErrorKey] == nil,
+              @"the security builder invents no recovery suggestion");
+
+    NSError *noError = [NSError dvt_errorWithSecurityErrorCode:0];
+    DVTExpectEqualObjects(noError.localizedDescription, @"No error.",
+                          @"a zero status still gets its text");
+
+    /* The predicate asks for errSecItemNotFound in the DVT domain specifically. */
+    DVTExpect([error dvt_secItemNotFound], @"errSecItemNotFound matches the predicate");
+    DVTExpect(![[NSError errorWithDomain:@"DVTSecErrorDomain" code:-25299 userInfo:nil] dvt_secItemNotFound],
+              @"another security status does not");
+    DVTExpect(![[NSError errorWithDomain:NSOSStatusErrorDomain code:-25300 userInfo:nil] dvt_secItemNotFound],
+              @"NSOSStatusErrorDomain is not the DVT security domain");
+
+    /* Cancellations are recorded as themselves. */
+    NSMutableDictionary *analytics = [NSMutableDictionary dictionary];
+    [[NSError dvt_userCancelledError] dvt_fillDeviceOperationAnalyticsDictionary:analytics];
+    DVTExpectEqualObjects(analytics[@"operation_errorCode"], @3072,
+                          @"the cancellation code is recorded");
+    DVTExpectEqualObjects(analytics[@"operation_errorDomain"], NSCocoaErrorDomain,
+                          @"the cancellation domain is recorded verbatim");
+
+    /* Anything else leaves the dictionary untouched, retaining what was there. */
+    NSMutableDictionary *untouched = [NSMutableDictionary dictionaryWithObject:@"kept" forKey:@"keep"];
+    [[NSError dvt_errorWithDomain:@"Other" errorCode:9 message:@"nope" recoverySuggestion:nil]
+        dvt_fillDeviceOperationAnalyticsDictionary:untouched];
+    DVTExpect(untouched.count == 1, @"an unrelated error adds nothing");
+    DVTExpectEqualObjects(untouched[@"keep"], @"kept", @"the caller's entries survive");
+
+    /* A CoreDevice failure with an underlying error records the underlying code
+       and a three-part trail. */
+    NSError *inner = [NSError dvt_errorWithDomain:@"InnerDomain" errorCode:7 message:@"inner" recoverySuggestion:nil];
+    NSError *outer = [NSError dvt_errorWithDomain:@"com.apple.dt.CoreDeviceError" errorCode:5 message:@"outer"
+                               recoverySuggestion:nil underlyingError:inner];
+    analytics = [NSMutableDictionary dictionary];
+    [outer dvt_fillDeviceOperationAnalyticsDictionary:analytics];
+    DVTExpectEqualObjects(analytics[@"operation_errorCode"], @7,
+                          @"the underlying code is the recorded code");
+    DVTExpectEqualObjects(analytics[@"operation_errorDomain"],
+                          @"com.apple.dt.CoreDeviceError.5.InnerDomain",
+                          @"the trail names the error, its code and the underlying domain");
+
+    /* With no underlying error the domain stands alone and the code is the
+       error's own. */
+    NSError *plain = [NSError dvt_errorWithDomain:@"com.apple.dt.CoreDeviceError" errorCode:5
+                                          message:@"outer" recoverySuggestion:nil];
+    analytics = [NSMutableDictionary dictionary];
+    [plain dvt_fillDeviceOperationAnalyticsDictionary:analytics];
+    DVTExpectEqualObjects(analytics[@"operation_errorCode"], @5, @"the error's own code is recorded");
+    DVTExpectEqualObjects(analytics[@"operation_errorDomain"], @"com.apple.dt.CoreDeviceError",
+                          @"with no underlying error the domain stands alone");
+
+    /* The preparation domain is classified as a device failure too. */
+    DVTExpectEqualObjects(DVTDevicePreparationErrorDomain, @"com.apple.dt.deviceprep",
+                          @"the preparation domain matches the binary");
+    NSError *preparation = [NSError dvt_errorWithDomain:DVTDevicePreparationErrorDomain errorCode:3
+                                                message:@"prep" recoverySuggestion:nil];
+    analytics = [NSMutableDictionary dictionary];
+    [preparation dvt_fillDeviceOperationAnalyticsDictionary:analytics];
+    DVTExpectEqualObjects(analytics[@"operation_errorCode"], @3,
+                          @"a preparation failure is recorded");
+    DVTExpectEqualObjects(analytics[@"operation_errorDomain"], @"com.apple.dt.deviceprep",
+                          @"the preparation domain is recorded");
+
+    /* An InstallCoordination presentation error hides the real failure one
+       level further down; the trail gains that level and its code wins. */
+    NSError *deep = [NSError dvt_errorWithDomain:@"DeepDomain" errorCode:11 message:@"deep" recoverySuggestion:nil];
+    NSError *presentation = [NSError dvt_errorWithDomain:@"IXUserPresentableErrorDomain" errorCode:1
+                                                  message:@"ix" recoverySuggestion:nil underlyingError:deep];
+    NSError *wrapped = [NSError dvt_errorWithDomain:@"com.apple.dt.CoreDeviceError" errorCode:5
+                                            message:@"outer" recoverySuggestion:nil underlyingError:presentation];
+    analytics = [NSMutableDictionary dictionary];
+    [wrapped dvt_fillDeviceOperationAnalyticsDictionary:analytics];
+    DVTExpectEqualObjects(analytics[@"operation_errorCode"], @11,
+                          @"the deep error's code is recorded");
+    DVTExpectEqualObjects(analytics[@"operation_errorDomain"],
+                          @"com.apple.dt.CoreDeviceError.5.IXUserPresentableErrorDomain.1.DeepDomain",
+                          @"the trail passes through the presentation error");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -8630,6 +8726,7 @@ int main(int argc, const char *argv[])
         DVTTestObservingConvenience();
         DVTTestErrorBuilders();
         DVTTestErrorAdditions();
+        DVTTestErrorDeviceAdditions();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();
