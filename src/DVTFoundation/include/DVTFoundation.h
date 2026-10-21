@@ -37,6 +37,8 @@
 #import "DVTCertificateComparison.h"
 #import "DVTEnvironmentSnapshot.h"
 #import "DVTOneShotBlock.h"
+#import "DVTCancellable.h"
+#import "DVTTimerBlockWrapper.h"
 #import "DVTSystemActivityToken.h"
 #import "DVTFoundationErrors.h"
 #import "DVTSimpleSerialization.h"
@@ -77,5 +79,6 @@
 #import "NSPointerArray+DVTNSPointerArrayAdditions.h"
 #import "NSProcessInfo+DVTNSProcessInfoAdditions.h"
 #import "NSUserDefaults+DVTNSUserDefaultsAdditions.h"
+#import "NSTimer+DVTNSTimerAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

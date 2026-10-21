@@ -5664,6 +5664,51 @@ static void DVTTestErrorDeviceAdditions(void)
 }
 
 /**
+ The block-timer category: the answer is a `DVTTimerBlockWrapper` rather than a
+ timer, and cancelling it drops the handler, which is what defines cancellation.
+ */
+static void DVTTestTimerBlockWrapper(void)
+{
+    fprintf(stdout, "\n== timer block wrapper ==\n");
+
+    __block NSInteger fires = 0;
+    id token = [NSTimer dvt_scheduledTimerWithTimeInterval:3600.0 repeats:NO handler:^{
+        fires += 1;
+    }];
+    DVTExpect(token != nil, @"the category vends a token");
+    DVTExpect([token isKindOfClass:[DVTTimerBlockWrapper class]],
+              @"the token is the wrapper, not an NSTimer");
+    DVTExpect(![token isKindOfClass:[NSTimer class]], @"the receiver is only a namespace");
+    DVTExpect([token conformsToProtocol:@protocol(DVTCancellable)],
+              @"the wrapper is a DVTCancellable");
+    DVTExpect(![token isCancelled], @"a fresh wrapper is not cancelled");
+
+    /* The timer targets the wrapper with -fire:, which runs the handler. A long
+       interval keeps the run loop from delivering it behind our back. */
+    [(DVTTimerBlockWrapper *)token fire:nil];
+    DVTExpect(fires == 1, @"firing invokes the handler");
+    [(DVTTimerBlockWrapper *)token fire:nil];
+    DVTExpect(fires == 2, @"the wrapper does not disable itself after one firing");
+    DVTExpect(![token isCancelled], @"firing does not count as cancelling");
+
+    [(DVTTimerBlockWrapper *)token cancel];
+    DVTExpect([token isCancelled], @"cancelling marks the wrapper cancelled");
+    [(DVTTimerBlockWrapper *)token cancel];
+    DVTExpect([token isCancelled], @"cancelling twice is harmless");
+
+    /* A repeating timer that is cancelled before the run loop runs never calls
+       the handler. */
+    __block NSInteger cancelledFires = 0;
+    id repeating = [NSTimer dvt_scheduledTimerWithTimeInterval:0.0 repeats:YES handler:^{
+        cancelledFires += 1;
+    }];
+    DVTExpect(![repeating isCancelled], @"a fresh repeating wrapper is not cancelled");
+    [(DVTTimerBlockWrapper *)repeating cancel];
+    DVTExpect([repeating isCancelled], @"the repeating wrapper cancels");
+    DVTExpect(cancelledFires == 0, @"a cancelled timer has not fired");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -8727,6 +8772,7 @@ int main(int argc, const char *argv[])
         DVTTestErrorBuilders();
         DVTTestErrorAdditions();
         DVTTestErrorDeviceAdditions();
+        DVTTestTimerBlockWrapper();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();

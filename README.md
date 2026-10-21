@@ -986,6 +986,29 @@ calling `-underlyingErrors`, which is newer than the Foundation subset this
 framework targets; the list it builds is the same one, with the single
 underlying error first.
 
+### Block timers
+
+`NSTimer(DVTNSTimerAdditions)` has a single class method,
+`+dvt_scheduledTimerWithTimeInterval:repeats:handler:`, and it does not answer
+an `NSTimer`: it allocates a `DVTTimerBlockWrapper`, schedules the timer with
+the wrapper as target and `-fire:` as selector, and returns it autoreleased.
+The receiver class is only a namespace, and the declared answer is `id` because
+that is how the binary records it.
+
+The wrapper owns the scheduled timer and a copy of the handler. `-fire:` is the
+timer's callback and invokes the handler with no arguments, so handler blocks
+take none; it deliberately has no nil check, matching the binary — the timer is
+invalidated by `-cancel` before the handler is dropped, so only a direct message
+to `-fire:` after cancelling can reach nil. `-isCancelled` answers "the handler
+is gone", and `-cancel` invalidates the timer and clears both the timer and the
+handler, which makes it idempotent. A non-repeating timer that has already fired
+is not cancelled: the wrapper does not watch the timer's lifetime.
+
+The same unit introduces `DVTCancellable`, the protocol the wrapper conforms to.
+It records the state question both ways — a `cancelled` property that reads
+through `-isCancelled`, and the method itself — exactly as the binary's protocol
+metadata does.
+
 ### Property list values
 
 A property list can hold exactly six things: string, data, date, number, array,
