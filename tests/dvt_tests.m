@@ -3284,6 +3284,60 @@ static void DVTTestClassAdditions(void)
     NSMutableSet *set = [NSMutableSet setWithCapacity:0];
     [set dvt_addObjectIfNonNil:nil];
     DVTExpect(set.count == 0, @"NSMutableSet ignores nil");
+    [set dvt_addObjectIfNonNil:@"a"];
+    DVTExpectEqualObjects(set, ([NSSet setWithObject:@"a"]),
+                          @"NSMutableSet appends a non-nil object");
+
+    /* -dvt_recursivelyRemoveAllObjects on a set receiver walks the same three
+       classes the array and dictionary versions do: nested arrays, sets and
+       dictionary values are emptied, dictionary keys are not. */
+    {
+        NSMutableArray *array = [NSMutableArray arrayWithObject:@"a"];
+        NSMutableSet *innerSet = [NSMutableSet setWithObject:@"s"];
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        dictionary[@"k"] = @"v";
+        NSMutableSet *outer = [NSMutableSet setWithObjects:array, innerSet, dictionary, nil];
+        [outer dvt_recursivelyRemoveAllObjects];
+        DVTExpectEqualObjects(outer, [NSSet set],
+                              @"set recursive removal empties the receiver");
+        DVTExpectEqualObjects(array, @[],
+                              @"set recursive removal empties a nested array");
+        DVTExpectEqualObjects(innerSet, [NSSet set],
+                              @"set recursive removal empties a nested set");
+        DVTExpectEqualObjects(dictionary, @{},
+                              @"set recursive removal empties a nested dictionary");
+    }
+
+    /* -dvt_popAllObjects answers an immutable snapshot of the members and empties
+       the receiver; the snapshot is unaffected by later mutation of the receiver. */
+    {
+        NSMutableSet *popped = [NSMutableSet setWithObjects:@"a", @"b", nil];
+        id snapshot = [popped dvt_popAllObjects];
+        DVTExpect(popped.count == 0, @"dvt_popAllObjects empties the receiver");
+        DVTExpectEqualObjects(snapshot, ([NSSet setWithObjects:@"a", @"b", nil]),
+                              @"dvt_popAllObjects answers the members that were there");
+        DVTExpect(![snapshot isKindOfClass:[NSMutableSet class]],
+                  @"dvt_popAllObjects answers an immutable snapshot");
+        [popped addObject:@"c"];
+        DVTExpectEqualObjects(snapshot, ([NSSet setWithObjects:@"a", @"b", nil]),
+                              @"dvt_popAllObjects snapshot ignores later receiver mutation");
+        NSMutableSet *empty = [NSMutableSet set];
+        DVTExpectEqualObjects([empty dvt_popAllObjects], [NSSet set],
+                              @"dvt_popAllObjects on an empty set answers an empty set");
+    }
+
+    /* -dvt_addReturningDidMutate: answers whether the count grew. */
+    {
+        NSMutableSet *mutating = [NSMutableSet set];
+        DVTExpect([mutating dvt_addReturningDidMutate:@"a"] == YES,
+                  @"dvt_addReturningDidMutate: YES for a new object");
+        DVTExpect([mutating dvt_addReturningDidMutate:@"a"] == NO,
+                  @"dvt_addReturningDidMutate: NO for an object already held");
+        DVTExpect([mutating dvt_addReturningDidMutate:nil] == NO,
+                  @"dvt_addReturningDidMutate: NO for nil");
+        DVTExpectEqualObjects(mutating, ([NSSet setWithObject:@"a"]),
+                              @"dvt_addReturningDidMutate: leaves a single member");
+    }
 
     /* The emptiness pair on the other five hosts Apple declares it on. Each is
        empty-then-filled, because a method that returned a constant would pass an

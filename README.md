@@ -404,6 +404,24 @@ specifically to get past `NSMutableArray`, and is refused the same way as the
 others, exit `134` with the same reason string on both binaries. The guard is documented in the
 implementation and left out of the tests rather than faked with a lying subclass.
 
+`NSMutableSet` carries four methods under a category name of its own,
+`DVTNSMutableSetAdditions` — the mutable set sits beside the immutable `NSSet`
+family rather than inside `DVTFoundationClassAdditions`, which is how Apple
+declares it and the one place a class dump would otherwise disagree.
+`dvt_addObjectIfNonNil:` is the nil guard the ordered set spells
+`dvt_addObjectIfNotNil:`, the extra `n` included, and
+`dvt_addReturningDidMutate:` is the ordered set's count comparison under the same
+name: an object the receiver already holds leaves the count alone and answers
+`NO`, as does `nil`. `dvt_recursivelyRemoveAllObjects` hands the shared
+`DVTRemoveAllObjectsRecursively` helper a fresh `NSMutableSet` as the visited set,
+exactly as the array and dictionary versions do, so a set receiver empties the
+arrays, sets and dictionary values reachable from it — dictionary keys are never
+touched. `dvt_popAllObjects` takes an immutable `+[NSSet setWithSet:]` snapshot
+**before** sending `-removeAllObjects` and answers the snapshot, so the members
+are out of the receiver before the answer is handed back and the snapshot is a
+distinct immutable set that later mutation of the receiver cannot change; an
+empty receiver answers an empty set rather than `nil`.
+
 `NSOrderedSet` and `NSMutableOrderedSet` carry the fourth slice of this family, and
 it splits the family along the class line in a way the other collections do not:
 the immutable set answers the queries and the algebra, the mutable set adds three

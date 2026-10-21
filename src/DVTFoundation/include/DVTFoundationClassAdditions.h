@@ -1037,10 +1037,33 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
-@interface NSMutableSet (DVTFoundationClassAdditions)
+@interface NSMutableSet (DVTNSMutableSetAdditions)
 
 /** Adds `object` only when it is non-`nil`. */
 - (void)dvt_addObjectIfNonNil:(id _Nullable)object;
+
+/**
+  Empties the receiver and every mutable collection reachable from it.
+
+  Descends through array members, set members and dictionary values (never keys)
+  using the same helper the array and dictionary versions reach for; the helper
+  fills in the visited set it is handed.
+ */
+- (void)dvt_recursivelyRemoveAllObjects;
+
+/**
+  Answers an immutable snapshot of the members and then removes every one of them.
+ */
+- (id)dvt_popAllObjects;
+
+/**
+  Adds `object` if it is non-`nil`, answering whether that grew the receiver.
+
+  The test is the count, so an object the receiver already holds answers `NO`:
+  adding one changes nothing about a set's contents. A `nil` argument is `NO` for
+  the same reason.
+ */
+- (BOOL)dvt_addReturningDidMutate:(id _Nullable)object;
 
 @end
 

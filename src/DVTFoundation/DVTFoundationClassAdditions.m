@@ -2235,13 +2235,43 @@ static void DVTRemoveAllObjectsRecursively(id object, NSMutableSet *visited)
 
 @end
 
-@implementation NSMutableSet (DVTFoundationClassAdditions)
+@implementation NSMutableSet (DVTNSMutableSetAdditions)
 
 - (void)dvt_addObjectIfNonNil:(id)object
 {
     if (object != nil) {
         [self addObject:object];
     }
+}
+
+- (void)dvt_recursivelyRemoveAllObjects
+{
+    /* The helper is the one the mutable array and dictionary reach for; it is
+       handed a fresh visited set and the receiver is its first step. */
+    DVTRemoveAllObjectsRecursively(self, [NSMutableSet set]);
+}
+
+- (id)dvt_popAllObjects
+{
+    /* Disassembly: -setWithSet: on an immutable set is taken first, then
+       -removeAllObjects on the receiver, and the snapshot is answered. The
+       members are out of the receiver before the answer is handed back, and the
+       snapshot is a distinct immutable set, so later mutation of the receiver
+       leaves it unchanged. */
+    NSSet *snapshot = [NSSet setWithSet:self];
+    [self removeAllObjects];
+    return snapshot;
+}
+
+- (BOOL)dvt_addReturningDidMutate:(id)object
+{
+    /* Disassembly: the count before, the nil-guarded add, the count after, and a
+       single unsigned comparison of the two. So the answer is whether the count
+       grew, not whether anything was added -- an object the set already holds
+       leaves it the same size, and answers NO. */
+    NSUInteger before = self.count;
+    [self dvt_addObjectIfNonNil:object];
+    return before < self.count;
 }
 
 @end
