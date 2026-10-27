@@ -4750,6 +4750,79 @@ static int DVTNSDataClose(void *cookie)
 
 @end
 
+@implementation NSCountedSet (DVTNSCountedSetAdditions)
+
+- (BOOL)dvt_containsAnyObjects:(id)objects
+{
+    /* A single non-zero count settles the question, so the walk stops there. */
+    for (id object in objects) {
+        if ([self countForObject:object] != 0) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (unsigned long long)dvt_countForObjects:(id)objects
+{
+    /* Only the listed objects contribute, and one absent from the set adds
+       nothing because its count is zero. */
+    unsigned long long total = 0;
+    for (id object in objects) {
+        total += [self countForObject:object];
+    }
+    return total;
+}
+
+- (unsigned long long)dvt_countsOfAllObjects
+{
+    /* This is the set's own cardinality with multiplicity: every member's
+       count, summed. */
+    unsigned long long total = 0;
+    for (id object in self) {
+        total += [self countForObject:object];
+    }
+    return total;
+}
+
+- (unsigned long long)dvt_maxCount
+{
+    /* An empty set has no member, so the starting zero is also its answer. */
+    unsigned long long maxCount = 0;
+    for (id object in self) {
+        unsigned long long count = [self countForObject:object];
+        if (count > maxCount) {
+            maxCount = count;
+        }
+    }
+    return maxCount;
+}
+
+- (id)dvt_objectsWithMaxCount
+{
+    /* Ties all count: the answer is every member whose count equals the
+       maximum, not just the first one found. */
+    unsigned long long maxCount = [self dvt_maxCount];
+    NSMutableSet *objects = [NSMutableSet set];
+    for (id object in self) {
+        if ([self countForObject:object] == maxCount) {
+            [objects addObject:object];
+        }
+    }
+    return objects;
+}
+
+- (void)dvt_removeAllCountsForObject:(id)object
+{
+    /* removeObject: drops one count at a time, so the loop runs until the
+       object stops being a member at all. */
+    while ([self member:object] != nil) {
+        [self removeObject:object];
+    }
+}
+
+@end
+
 @implementation NSScanner (DVTNSScannerAdditions)
 
 - (BOOL)dvt_scanUnsignedIntegerInto:(unsigned long long *)into

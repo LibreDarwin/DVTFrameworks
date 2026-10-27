@@ -1076,6 +1076,25 @@ produces `dvt-test://`. The query is assigned already escaped
 (`percentEncodedQuery`), so it is not escaped twice; the path is not escaped
 here.
 
+### Counted set additions
+
+An `NSCountedSet` answers the count of one object; these six selectors ask
+questions about groups of them. `-dvt_countForObjects:` sums the counts of the
+listed objects only, so an object the set has never seen contributes its zero.
+`-dvt_countsOfAllObjects` is the same sum over the set's own members, which is
+its cardinality with multiplicity. `-dvt_containsAnyObjects:` is the
+short-circuiting form: the first listed object with a non-zero count answers
+`YES`, and an empty collection answers `NO`. `-dvt_maxCount` folds the counts
+to their maximum, starting from zero, so an empty set answers zero rather than
+signalling the absence of a maximum.
+
+`-dvt_objectsWithMaxCount` is built on `-dvt_maxCount` and returns every member
+whose count equals it, so a tie returns all of them, and an empty set returns
+an empty set. `-dvt_removeAllCountsForObject:` loops on `-member:` and calls
+`-removeObject:` once per iteration: `-removeObject:` only decrements a count,
+so the loop is what makes the object disappear entirely. Removing an object
+that is not a member is a no-op, and other objects keep their counts.
+
 ### Property list values
 
 A property list can hold exactly six things: string, data, date, number, array,

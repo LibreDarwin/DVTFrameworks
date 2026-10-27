@@ -5871,6 +5871,59 @@ static void DVTTestURLParameterAdditions(void)
 }
 
 /**
+ The counted-set additions: the membership question over a collection, the
+ counts over a collection and over the whole set, the maximum count and the
+ members that reach it, and the removal that empties the count rather than
+ decrementing it once.
+ */
+static void DVTTestCountedSetAdditions(void)
+{
+    fprintf(stdout, "\n== counted set additions ==\n");
+
+    NSCountedSet *set = [[NSCountedSet alloc] init];
+    [set addObject:@"a"];
+    [set addObject:@"a"];
+    [set addObject:@"b"];
+
+    DVTExpect([set countForObject:@"a"] == 2, @"the fixture holds two a's");
+    DVTExpect([set dvt_countsOfAllObjects] == 3,
+              @"the whole set counts every copy");
+    DVTExpect([set dvt_countForObjects:([NSSet setWithObjects:@"a", @"b", nil])] == 3,
+              @"the listed objects count their copies");
+    DVTExpect([set dvt_countForObjects:([NSSet setWithObject:@"a"])] == 2,
+              @"a subset counts only its objects");
+    DVTExpect([set dvt_countForObjects:([NSSet setWithObject:@"c"])] == 0,
+              @"an absent object counts nothing");
+
+    DVTExpect([set dvt_containsAnyObjects:([NSSet setWithObject:@"a"])],
+              @"a present object is found");
+    DVTExpect(![set dvt_containsAnyObjects:([NSSet setWithObject:@"c"])],
+              @"an absent object is not found");
+    DVTExpect(![set dvt_containsAnyObjects:[NSSet set]],
+              @"the empty collection contains nothing");
+
+    DVTExpect([set dvt_maxCount] == 2, @"the maximum count is the duplicated object's");
+    DVTExpectEqualObjects([set dvt_objectsWithMaxCount], ([NSSet setWithObject:@"a"]),
+                          @"only the object at the maximum count answers");
+
+    [set addObject:@"b"];
+    DVTExpectEqualObjects([set dvt_objectsWithMaxCount],
+                          ([NSSet setWithObjects:@"a", @"b", nil]),
+                          @"a tie answers every object at the maximum");
+
+    [set dvt_removeAllCountsForObject:@"a"];
+    DVTExpect([set countForObject:@"a"] == 0, @"removal empties the count, not one copy");
+    DVTExpect([set countForObject:@"b"] == 2, @"the other object is untouched");
+    [set dvt_removeAllCountsForObject:@"c"];
+    DVTExpect([set countForObject:@"b"] == 2, @"removing an absent object does nothing");
+
+    NSCountedSet *empty = [[NSCountedSet alloc] init];
+    DVTExpect([empty dvt_maxCount] == 0, @"an empty set has a zero maximum");
+    DVTExpectEqualObjects([empty dvt_objectsWithMaxCount], ([NSSet set]),
+                          @"an empty set has no objects at the maximum");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -8937,6 +8990,7 @@ int main(int argc, const char *argv[])
         DVTTestTimerBlockWrapper();
         DVTTestURLAdditions();
         DVTTestURLParameterAdditions();
+        DVTTestCountedSetAdditions();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();
