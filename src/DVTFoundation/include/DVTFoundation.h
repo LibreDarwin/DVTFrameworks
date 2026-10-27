@@ -80,5 +80,7 @@
 #import "NSProcessInfo+DVTNSProcessInfoAdditions.h"
 #import "NSUserDefaults+DVTNSUserDefaultsAdditions.h"
 #import "NSTimer+DVTNSTimerAdditions.h"
+#import "NSURL+DVTNSURLAdditions.h"
+#import "NSURL+DVTSecurityAdditions.h"
 
 #endif /* DVT_FOUNDATION_H */

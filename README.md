@@ -1009,6 +1009,42 @@ It records the state question both ways — a `cancelled` property that reads
 through `-isCancelled`, and the method itself — exactly as the binary's protocol
 metadata does.
 
+### URL additions
+
+`+[NSURL dvt_emptyURL]` builds `[NSURL URLWithString:@""]` once, under a
+`dispatch_once`, and answers the same instance afterwards. `-dvt_isEmptyURL`
+then compares **identity**, not equality: it is `YES` only for that cached
+instance, and an independently created empty URL is not it. The original
+soft-asserts inside the `dispatch_once` block that the URL is non-nil, but the
+soft-assertion family is a separate unit and the call cannot fail in practice,
+so this port omits that check.
+
+`-dvt_isFilePathURL` is `[self isFileURL] && ![self isFileReferenceURL]`, so a
+file reference URL does not name a path even though it is a file URL.
+`+dvt_fileURLWithAbsoluteOrRelativePath:` goes through
+`CFURLCreateWithFileSystemPathRelativeToBase` with the POSIX style, "not a
+directory", and no base URL — a relative path therefore resolves against the
+current working directory, and nothing touches the file system. The path must
+be a non-nil, non-empty string; all three guards are assertions. The type-check
+report names its argument with `-description` because the original's
+`-descriptionForAssertionMessage` lives in the unported `NSObject`
+assertion-support category.
+
+`-dvt_isGeneneratedInterface` (the typo is Apple's) is true for the
+`x-xcode-module`, `x-xcode-swift-source-interface`, and
+`x-xcode-swift-header-interface` schemes. `-dvt_sanitizedFilePath` copies the
+path into a mutable string, replaces the first occurrence of
+`NSHomeDirectory()` with `$HOME$`, then replaces the first match of
+`\/Volumes\/[^\/]*` with `$VOLUME$`; the answer is that mutable string, so it
+is safe to hand to a caller who may edit it.
+
+`-dvt_secProtocol`, in the `DVTSecurityAdditions` category, maps the scheme to a
+`SecProtocolType` by prefix, in a fixed order: `https`, `http`, `svn+ssh`,
+`svn`, `ssh`, `ftp`. The order is what keeps `https` from answering HTTP and
+`svn+ssh` from answering SVN. An absent or unrecognised scheme answers `0`.
+The original lives in `DVTNSURLAdditions.mm`; the URL builders that serialize
+document and location parameters are not ported yet.
+
 ### Property list values
 
 A property list can hold exactly six things: string, data, date, number, array,

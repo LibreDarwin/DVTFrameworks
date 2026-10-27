@@ -5709,6 +5709,77 @@ static void DVTTestTimerBlockWrapper(void)
 }
 
 /**
+ The URL additions: the cached empty URL and its identity predicate, the file
+ URL predicates, the path-based builder, the generated-interface schemes, the
+ sanitised path, and the Security protocol mapping.
+ */
+static void DVTTestURLAdditions(void)
+{
+    fprintf(stdout, "\n== URL additions ==\n");
+
+    NSURL *emptyURL = [NSURL dvt_emptyURL];
+    DVTExpect(emptyURL != nil, @"the empty URL is not nil");
+    DVTExpectEqualObjects(emptyURL.absoluteString, @"", @"it is the empty URL");
+    DVTExpect([NSURL dvt_emptyURL] == emptyURL, @"the empty URL is cached");
+    DVTExpect([emptyURL dvt_isEmptyURL], @"the cached empty URL is recognised");
+    DVTExpect(![[NSURL URLWithString:@"x"] dvt_isEmptyURL],
+              @"a non-empty URL is not the empty URL");
+
+    NSURL *fileURL = [NSURL fileURLWithPath:@"/tmp/dvt.txt"];
+    DVTExpect([fileURL dvt_isFilePathURL], @"a file URL names a path");
+    NSURL *referenceURL = [[NSURL fileURLWithPath:@"/tmp"] fileReferenceURL];
+    DVTExpect(referenceURL != nil, @"a reference URL can be made for an existing path");
+    DVTExpect(![referenceURL dvt_isFilePathURL], @"a file reference URL does not name a path");
+    DVTExpect(![[NSURL URLWithString:@"https://example.com/"] dvt_isFilePathURL],
+              @"an https URL does not");
+
+    NSURL *made = [NSURL dvt_fileURLWithAbsoluteOrRelativePath:@"/tmp/dvt.txt"];
+    DVTExpect([made isKindOfClass:[NSURL class]], @"the builder answers a URL");
+    DVTExpect([made isFileURL], @"the builder answers a file URL");
+    DVTExpectEqualObjects(made.path, @"/tmp/dvt.txt", @"the path is preserved");
+    NSURL *relative = [NSURL dvt_fileURLWithAbsoluteOrRelativePath:@"a/b.txt"];
+    DVTExpectEqualObjects(relative.lastPathComponent, @"b.txt",
+                          @"a relative path still resolves to a file URL");
+
+    NSURL *moduleURL = [NSURL URLWithString:@"x-xcode-module://container/item"];
+    DVTExpect([moduleURL dvt_isGeneneratedInterface], @"the module scheme counts");
+    DVTExpect([[NSURL URLWithString:@"x-xcode-swift-source-interface://container/item"] dvt_isGeneneratedInterface],
+              @"the Swift source interface scheme counts");
+    DVTExpect([[NSURL URLWithString:@"x-xcode-swift-header-interface://container/item"] dvt_isGeneneratedInterface],
+              @"the Swift header interface scheme counts");
+    DVTExpect(![[NSURL URLWithString:@"https://example.com/"] dvt_isGeneneratedInterface],
+              @"an ordinary scheme does not");
+    DVTExpect(![[NSURL fileURLWithPath:@"/tmp/dvt.txt"] dvt_isGeneneratedInterface],
+              @"a file URL has no generated-interface scheme");
+
+    NSString *home = NSHomeDirectory();
+    NSURL *homeURL = [NSURL fileURLWithPath:[home stringByAppendingPathComponent:@"Documents/report.txt"]];
+    DVTExpectEqualObjects([homeURL dvt_sanitizedFilePath], @"$HOME$/Documents/report.txt",
+                          @"the home directory becomes a token");
+    NSURL *volumeURL = [NSURL fileURLWithPath:@"/Volumes/External/thing.txt"];
+    DVTExpectEqualObjects([volumeURL dvt_sanitizedFilePath], @"$VOLUME$/thing.txt",
+                          @"a volume name becomes a token");
+    NSURL *plainURL = [NSURL fileURLWithPath:@"/usr/local/thing.txt"];
+    DVTExpectEqualObjects([plainURL dvt_sanitizedFilePath], @"/usr/local/thing.txt",
+                          @"an ordinary path is unchanged");
+
+    DVTExpect([[NSURL URLWithString:@"https://example.com/"] dvt_secProtocol] == kSecProtocolTypeHTTPS,
+              @"https maps to the HTTPS protocol");
+    DVTExpect([[NSURL URLWithString:@"http://example.com/"] dvt_secProtocol] == kSecProtocolTypeHTTP,
+              @"http maps to the HTTP protocol");
+    DVTExpect([[NSURL URLWithString:@"ssh://example.com/"] dvt_secProtocol] == kSecProtocolTypeSSH,
+              @"ssh maps to the SSH protocol");
+    DVTExpect([[NSURL URLWithString:@"svn://example.com/repo"] dvt_secProtocol] == kSecProtocolTypeSVN,
+              @"svn maps to the SVN protocol");
+    DVTExpect([[NSURL URLWithString:@"svn+ssh://example.com/repo"] dvt_secProtocol] == kSecProtocolTypeSSH,
+              @"svn+ssh maps to the SSH protocol, not SVN");
+    DVTExpect([[NSURL URLWithString:@"ftp://example.com/"] dvt_secProtocol] == kSecProtocolTypeFTP,
+              @"ftp maps to the FTP protocol");
+    DVTExpect([[NSURL URLWithString:@"gopher://example.com/"] dvt_secProtocol] == 0,
+              @"an unknown scheme maps to no protocol");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -8773,6 +8844,7 @@ int main(int argc, const char *argv[])
         DVTTestErrorAdditions();
         DVTTestErrorDeviceAdditions();
         DVTTestTimerBlockWrapper();
+        DVTTestURLAdditions();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();
