@@ -1042,8 +1042,39 @@ is safe to hand to a caller who may edit it.
 `SecProtocolType` by prefix, in a fixed order: `https`, `http`, `svn+ssh`,
 `svn`, `ssh`, `ftp`. The order is what keeps `https` from answering HTTP and
 `svn+ssh` from answering SVN. An absent or unrecognised scheme answers `0`.
-The original lives in `DVTNSURLAdditions.mm`; the URL builders that serialize
-document and location parameters are not ported yet.
+The original lives in `DVTNSURLAdditions.mm`.
+
+`+dvt_URLWithScheme:path:documentParameters:locationParameters:` assembles
+`scheme://path?document#location` from a mutable string: the scheme and `://`
+appear only when the scheme is non-nil, the path is percent-encoded with a path
+set (which keeps `&` and `=`, and escapes `?`, `#`, and `%`), and each non-empty
+dictionary contributes `?` or `#` followed by its assignments. When every part
+is absent the text is empty, which still becomes a URL; a nil
+`[NSURL URLWithString:]` is an assertion. The original passes the assembled
+string through `NSString`'s `dvt_sharedCopy`, which is not ported; a fresh
+immutable copy has the same value.
+
+Assignments are `key=value` pairs joined with `&` and ordered by `compare:` on
+the keys, so the text is stable. Keys and values are escaped with the set
+`!$'()*+,-./0123456789:;?@A-Z_a-z~`, which keeps `?`, `;`, and `:`, but escapes
+`%`, `&`, `#`, and `=`; a `+` is not a space here. Decoding
+(`-dvt_documentParameters` and `-dvt_locationParameters`, over the query and the
+fragment) splits on `&`, skips empty pairs, splits each pair on its first `=`,
+percent-decodes both halves (a failed decode becomes the empty string), gives a
+bare pair an empty value, and drops pairs whose key is empty. Both directions
+assert their argument's type — the original's type reports use
+`-descriptionForAssertionMessage`, replaced here by `-description` — and the
+component getters answer `nil` when the query or fragment is absent.
+
+`+dvt_URLWithNonFileScheme:absolutePath:documentParameters:error:` asserts a
+non-empty, non-`file` scheme and a non-nil path, then builds the URL through
+`NSURLComponents` with an **empty host**, so `/a/b` under `dvt-test` is
+`dvt-test:///a/b`. A non-empty path that is not absolute, or a URL that fails to
+parse, answers `nil` and, when `error` is not `NULL`, describes the problem
+through it via `+[NSError dvt_errorWithMessage:]`; an empty path is accepted and
+produces `dvt-test://`. The query is assigned already escaped
+(`percentEncodedQuery`), so it is not escaped twice; the path is not escaped
+here.
 
 ### Property list values
 

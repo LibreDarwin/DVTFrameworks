@@ -5780,6 +5780,97 @@ static void DVTTestURLAdditions(void)
 }
 
 /**
+ The URL builders and parameter serialisation: the path and assignment
+ escaping, the sorted key order, the escaping grammar (bare pairs, empty pairs,
+ empty keys, split on the first equals sign), the document and location
+ parameter decoders, the three-part builder, and the non-file builder with its
+ refusal of relative paths.
+ */
+static void DVTTestURLParameterAdditions(void)
+{
+    fprintf(stdout, "\n== URL builders and parameters ==\n");
+
+    NSURL *built = [NSURL dvt_URLWithScheme:@"dvt-test"
+                                      path:@"/a b/c"
+                        documentParameters:@{ @"z" : @"1", @"a" : @"x y&" }
+                        locationParameters:@{ @"q" : @"r=s" }];
+    DVTExpectEqualObjects([built absoluteString],
+                          @"dvt-test:///a%20b/c?a=x%20y%26&z=1#q=r%3Ds",
+                          @"the path and assignments are escaped, keys are sorted");
+    DVTExpectEqualObjects([built dvt_documentParameters], (@{ @"a" : @"x y&", @"z" : @"1" }),
+                          @"the query round-trips");
+    DVTExpectEqualObjects([built dvt_locationParameters], (@{ @"q" : @"r=s" }),
+                          @"the fragment round-trips");
+
+    DVTExpectEqualObjects([[NSURL dvt_URLWithScheme:@"dvt-test" path:@"/a b?c#d"
+                                  documentParameters:nil locationParameters:nil] absoluteString],
+                          @"dvt-test:///a%20b%3Fc%23d",
+                          @"the path escaping keeps a path a path");
+    DVTExpectEqualObjects([[NSURL dvt_URLWithScheme:@"dvt-test" path:@"/a&b=c"
+                                  documentParameters:nil locationParameters:nil] absoluteString],
+                          @"dvt-test:///a&b=c",
+                          @"an ampersand and an equals sign survive a path");
+
+    NSURL *noQuery = [NSURL URLWithString:@"dvt-test:///thing"];
+    DVTExpect([noQuery dvt_documentParameters] == nil,
+              @"a URL without a query has no document parameters");
+    DVTExpect([noQuery dvt_locationParameters] == nil,
+              @"a URL without a fragment has no location parameters");
+
+    DVTExpectEqualObjects([[NSURL URLWithString:@"dvt-test:///thing?bare"] dvt_documentParameters],
+                          (@{ @"bare" : @"" }),
+                          @"a bare query pair is a key with an empty value");
+    DVTExpectEqualObjects([[NSURL URLWithString:@"dvt-test:///thing?a=1&&b=2"] dvt_documentParameters],
+                          (@{ @"a" : @"1", @"b" : @"2" }),
+                          @"empty pairs are skipped");
+    DVTExpectEqualObjects([[NSURL URLWithString:@"dvt-test:///thing?=v&a=1"] dvt_documentParameters],
+                          (@{ @"a" : @"1" }),
+                          @"a pair with an empty key is dropped");
+    DVTExpectEqualObjects([[NSURL URLWithString:@"dvt-test:///thing?a=b%20c&d=%3D"] dvt_documentParameters],
+                          (@{ @"a" : @"b c", @"d" : @"=" }),
+                          @"both halves are percent-decoded");
+    DVTExpectEqualObjects([[NSURL URLWithString:@"dvt-test:///thing?a=b=c"] dvt_documentParameters],
+                          (@{ @"a" : @"b=c" }),
+                          @"only the first equals sign splits a pair");
+
+    DVTExpectEqualObjects([[NSURL dvt_URLWithScheme:@"dvt-test" path:nil
+                                  documentParameters:nil locationParameters:nil] absoluteString],
+                          @"dvt-test://", @"a bare scheme keeps the separator");
+    DVTExpectEqualObjects([[NSURL dvt_URLWithScheme:nil path:@"/a"
+                                  documentParameters:nil locationParameters:nil] absoluteString],
+                          @"/a", @"a path without a scheme is the whole text");
+    DVTExpectEqualObjects([[NSURL dvt_URLWithScheme:nil path:nil
+                                  documentParameters:nil locationParameters:nil] absoluteString],
+                          @"", @"no parts at all is the empty URL");
+
+    NSError *error = nil;
+    NSURL *nonFile = [NSURL dvt_URLWithNonFileScheme:@"dvt-test"
+                                        absolutePath:@"/a/b"
+                                  documentParameters:@{ @"k" : @"v" }
+                                               error:&error];
+    DVTExpect(nonFile != nil, @"the non-file builder answers a URL");
+    DVTExpect(error == nil, @"success reports no error");
+    DVTExpectEqualObjects([nonFile absoluteString], @"dvt-test:///a/b?k=v",
+                          @"an absolute path follows an empty host");
+    DVTExpectEqualObjects([nonFile dvt_documentParameters], (@{ @"k" : @"v" }),
+                          @"its query round-trips");
+
+    NSURL *emptyPath = [NSURL dvt_URLWithNonFileScheme:@"dvt-test" absolutePath:@""
+                                    documentParameters:nil error:NULL];
+    DVTExpectEqualObjects([emptyPath absoluteString], @"dvt-test://",
+                          @"an empty path is allowed and empty, not relative");
+
+    error = nil;
+    NSURL *bad = [NSURL dvt_URLWithNonFileScheme:@"dvt-test" absolutePath:@"relative/path"
+                              documentParameters:nil error:&error];
+    DVTExpect(bad == nil, @"a relative path is refused");
+    DVTExpect(error != nil, @"the refusal reports an error");
+    DVTExpectEqualObjects([error localizedDescription],
+                          @"Cannot use scheme (dvt-test) with a non-absolute path (relative/path)",
+                          @"the refusal explains itself");
+}
+
+/**
  A decoder of every plist value except numbers: enough to exercise both
  directions the chain can fail in -- this class refusing a member, and the
  selectors below refusing a key.
@@ -8845,6 +8936,7 @@ int main(int argc, const char *argv[])
         DVTTestErrorDeviceAdditions();
         DVTTestTimerBlockWrapper();
         DVTTestURLAdditions();
+        DVTTestURLParameterAdditions();
         DVTTestPropertyListValue();
         DVTTestAssertions();
         DVTTestComparison();

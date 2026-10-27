@@ -77,6 +77,66 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (nullable NSString *)dvt_sanitizedFilePath;
 
+/**
+ The receiver's query decoded as key-value assignments.
+
+ A query is a `&`-separated list of `key=value` pairs, with both halves
+ percent-decoded; a pair without `=` is a key with an empty value, empty pairs
+ are skipped, and a pair whose key decodes to the empty string is dropped.
+ `nil` when the receiver has no query.
+
+ @return The decoded assignments, or `nil`.
+ */
+- (nullable NSDictionary<NSString *, NSString *> *)dvt_documentParameters;
+
+/**
+ The receiver's fragment decoded as key-value assignments, with the same
+ grammar as `-dvt_documentParameters`. `nil` when the receiver has no fragment.
+
+ @return The decoded assignments, or `nil`.
+ */
+- (nullable NSDictionary<NSString *, NSString *> *)dvt_locationParameters;
+
+/**
+ Builds a URL from its parts: `scheme://path?document#location`.
+
+ A missing scheme omits both the scheme and the `://`, a missing path omits the
+ path, and a nil or empty parameter dictionary omits its separator. The path is
+ percent-encoded as a path and the parameters as assignments; assignment pairs
+ are ordered by key. When every part is absent the answer is the empty URL.
+
+ @param scheme The URL scheme, or `nil`.
+ @param path The unescaped path, or `nil`.
+ @param documentParameters The query assignments, or `nil`.
+ @param locationParameters The fragment assignments, or `nil`.
+ @return The URL, or `nil` when its text cannot be parsed.
+ */
++ (nullable id)dvt_URLWithScheme:(nullable NSString *)scheme
+                            path:(nullable NSString *)path
+              documentParameters:(nullable NSDictionary<NSString *, NSString *> *)documentParameters
+              locationParameters:(nullable NSDictionary<NSString *, NSString *> *)locationParameters;
+
+/**
+ Builds a URL for a non-file scheme and an absolute path, reporting failures.
+
+ The scheme must be a non-empty string other than `file` and the path must not
+ be nil; those are assertions. A non-empty relative path, or text that cannot
+ be parsed into a URL, makes the method answer `nil` and, when `error` is not
+ `NULL`, describes the problem through that pointer. The path is absolute, so
+ the answer has an empty host: `x-test:///a/b`. The query is omitted when the
+ dictionary is nil or empty.
+
+ @param scheme The non-file scheme.
+ @param absolutePath The absolute path to represent, or an empty string.
+ @param documentParameters The query assignments, or `nil`.
+ @param error On failure, a description of the problem.
+ @return The URL, or `nil` on failure.
+ */
++ (nullable id)dvt_URLWithNonFileScheme:(NSString *)scheme
+                           absolutePath:(NSString *)absolutePath
+                     documentParameters:(nullable NSDictionary<NSString *, NSString *> *)documentParameters
+                                  error:(NSError *_Nullable *_Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END
