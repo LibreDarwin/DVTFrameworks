@@ -164,6 +164,17 @@ DVTRegistryObjectHasEqualOrHigherVersion(id object, id existingObject)
 	return (objects);
 }
 
+- (NSString *)description
+{
+	NSString *name = _debugName;
+
+	if (name == nil) {
+		name = [NSString stringWithFormat:@"Registry %p", (__bridge void *)self];
+	}
+	return ([NSString stringWithFormat:@"<%@:%p:'%@'>",
+		   NSStringFromClass([self class]), (__bridge void *)self, name]);
+}
+
 - (void)didRegisterObject:(id)object replacingObject:(id)existingObject
 {
 	(void)object;

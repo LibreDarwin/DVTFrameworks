@@ -25,6 +25,10 @@
 #include <zlib.h>
 
 #import "DVTFoundation.h"
+#import "DVTMacroDefinitionTable.h"
+#import "DVTMacroNameRegistry.h"
+#import "DVTMacroNameRegistryRegistration.h"
+#import "DVTMacroNameString.h"
 
 /** An object that claims to be equal to nothing, not even to itself. */
 @interface DVTPicky : NSObject
@@ -8942,6 +8946,74 @@ static void DVTTestUserDefaultsAdditions(void)
     [defaults removeVolatileDomainForName:@"DVTUserDefaultsTestDomain"];
 }
 
+
+static void DVTTestMacroNameStringsAndRegistry(void)
+{
+    DVTMacroNameString *foo = [DVTMacroNameString macroNameStringForString:@"FOO" createIfNeeded:YES];
+    DVTMacroNameString *fooAgain = [DVTMacroNameString macroNameStringForString:@"FOO" createIfNeeded:YES];
+    DVTMacroNameString *bar = [DVTMacroNameString macroNameStringForString:@"BAR" createIfNeeded:YES];
+    DVTMacroNameString *lower = [DVTMacroNameString macroNameStringForString:@"foo" createIfNeeded:YES];
+
+    /* Names are interned, compared by contents, and hash like plain strings. */
+    DVTExpect(foo == fooAgain, @"the same macro name is handed out twice");
+    DVTExpect(foo != lower, @"macro names are case sensitive");
+    DVTExpect([foo isEqual:@"FOO"], @"a macro name equals a plain string with the same contents");
+    DVTExpect(![foo isEqual:lower], @"a macro name does not equal a differently cased string");
+    DVTExpect([foo hash] == [@"FOO" hash], @"a macro name hashes like its contents");
+    DVTExpect([foo length] == 3, @"length comes from the contents");
+    DVTExpect([foo characterAtIndex:0] == 'F', @"characters come from the contents");
+    DVTExpectEqualObjects([foo description], @"FOO", @"description is the contents");
+    DVTExpect([foo copy] == foo, @"copying a macro name returns it unchanged");
+    DVTExpectEqualObjects([foo replacementObjectForCoder:nil], @"FOO",
+                          @"coding substitutes the plain contents string");
+
+    /* Registration numbers count up, one per newly interned name. */
+    DVTExpect([bar macroRegistrationNumber] == [foo macroRegistrationNumber] + 1,
+              @"a new name gets the next registration number");
+    DVTExpect([lower macroRegistrationNumber] == [bar macroRegistrationNumber] + 1,
+              @"differently cased names get distinct registration numbers");
+
+    /* A manually built name is not interned but still compares by contents. */
+    DVTMacroNameString *manual = [[DVTMacroNameString alloc] initWithContents:@"MANUAL" registrationNumber:42];
+    DVTExpect([manual macroRegistrationNumber] == 42, @"a manual name keeps its registration number");
+    DVTExpect([manual hash] == [@"MANUAL" hash], @"a manual name hashes like its contents");
+    DVTExpect([manual isEqual:@"MANUAL"], @"a manual name compares by contents");
+
+    /* The registry defaults to list values and remembers explicit answers. */
+    DVTMacroNameRegistry *registry = [[DVTMacroNameRegistry alloc] initWithDebugName:@"test"];
+    DVTExpect([registry defaultIsListType], @"the plain initialiser defaults to list values");
+    DVTExpect([registry macroIsListType:@"UNKNOWN"], @"an unknown name falls back to the default");
+    [registry registerMacroName:@"ONE" isListType:YES];
+    [registry registerMacroName:@"two" isListType:NO];
+    DVTExpect([registry macroIsListType:@"ONE"], @"a registered list name is a list");
+    DVTExpect(![registry macroIsListType:@"two"], @"a registered non-list name is not a list");
+    DVTMacroNameRegistry *caseRegistry = [[DVTMacroNameRegistry alloc] initWithDebugName:@"case" defaultIsListType:NO];
+    [caseRegistry registerMacroName:@"Flag" isListType:YES];
+    DVTExpect([caseRegistry macroIsListType:@"Flag"], @"the registered spelling is found");
+    DVTExpect(![caseRegistry macroIsListType:@"flag"],
+              @"lookups are case sensitive, so a case mismatch falls back to the default");
+    [registry registerMacroName:@"ONE" isListType:NO];
+    DVTExpect([registry macroIsListType:@"ONE"], @"the first registration of a name wins");
+
+    /* objectForIdentifier: is exactly as case sensitive as the registration. */
+    DVTExpect([registry objectForIdentifier:@"ONE"] != nil, @"the registered spelling is found");
+    DVTExpect([registry objectForIdentifier:@"one"] == nil, @"a differently cased identifier is not found");
+    DVTMacroNameRegistryRegistration *registration = [registry objectForIdentifier:@"two"];
+    DVTExpectEqualObjects([registration identifier], @"two", @"the identifier is the macro name");
+    DVTExpectEqualObjects([registration macroName], @"two", @"the registration exposes its macro name");
+    DVTExpect(![registration isListType], @"the registration exposes its list flag");
+    DVTExpect([[registration description] rangeOfString:@"two, listType=NO"].location != NSNotFound,
+              @"the registration describes its macro name and list flag");
+
+    DVTMacroNameRegistry *other = [[DVTMacroNameRegistry alloc] initWithDebugName:@"other" defaultIsListType:NO];
+    DVTExpect(![other defaultIsListType], @"the explicit initialiser keeps its default");
+    DVTExpect(![other macroIsListType:@"UNKNOWN"], @"the explicit default is used for unknown names");
+
+    /* The framework ships no global name registry. */
+    DVTExpect([DVTMacroDefinitionTable macroNameRegistry] == nil,
+              @"DVTMacroDefinitionTable has no global macro name registry");
+}
+
 int main(int argc, const char *argv[])
 {
     (void)argc;
@@ -8996,6 +9068,7 @@ int main(int argc, const char *argv[])
         DVTTestComparison();
         DVTTestCertificateComparison();
         DVTTestKeyPathComparison();
+        DVTTestMacroNameStringsAndRegistry();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);
     }

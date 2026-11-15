@@ -137,11 +137,13 @@ $(foreach fw,$(FRAMEWORKS),$(eval $(call DVT_FRAMEWORK_RULE,$(fw))))
 
 DVTFOUNDATION_BIN := $(BUILD_DIR)/DVTFoundation.framework/Versions/A/DVTFoundation
 DVTFOUNDATION_INCLUDES := $(call fw_includes,DVTFoundation)
+DVTMACROFOUNDATION_BIN := $(BUILD_DIR)/DVTMacroFoundation.framework/Versions/A/DVTMacroFoundation
+DVTMACROFOUNDATION_INCLUDES := $(call fw_includes,DVTMacroFoundation)
 
-$(TEST_BIN): $(TEST_DIR)/dvt_tests.m $(DVTFOUNDATION_BIN) Makefile
+$(TEST_BIN): $(TEST_DIR)/dvt_tests.m $(DVTFOUNDATION_BIN) $(DVTMACROFOUNDATION_BIN) Makefile
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(DVTFOUNDATION_INCLUDES) $< -o $@ \
-		$(DVTFOUNDATION_BIN) \
+	$(CC) $(CFLAGS) $(DVTFOUNDATION_INCLUDES) $(DVTMACROFOUNDATION_INCLUDES) $< -o $@ \
+		$(DVTFOUNDATION_BIN) $(DVTMACROFOUNDATION_BIN) \
 		-Wl,-rpath,$(abspath $(BUILD_DIR)) \
 		$(LDFLAGS)
 

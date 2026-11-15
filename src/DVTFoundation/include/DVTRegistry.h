@@ -40,6 +40,8 @@
 
 - (void)didRegisterObject:(id)object replacingObject:(id)existingObject;
 
+- (NSString *)description;
+
 @end
 
 #endif	/* DVTFOUNDATION_DVTREGISTRY_H */
