@@ -166,10 +166,10 @@ static NSCharacterSet *DVTCommandLineMetacharacterSet(void)
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         /* Read from the literal Apple passes to characterSetWithCharactersInString:
-           (cfstring 0x6beae8, length 4). Single quote, space, double quote, tab
-           -- notably *not* the rest of the shell metacharacters, and *not*
-           backslash, which therefore passes through unescaped. */
-        characterSet = [NSCharacterSet characterSetWithCharactersInString:@"' \"\t"];
+           (cfstring 0x6beae8, length 4). Double quote, space, tab and backslash
+           -- notably *not* the rest of the shell metacharacters, and not the
+           single quote, both of which pass through unescaped. */
+        characterSet = [NSCharacterSet characterSetWithCharactersInString:@"\" \\\t"];
     });
     return characterSet;
 }

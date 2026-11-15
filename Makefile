@@ -35,10 +35,16 @@ FRAMEWORKS := $(sort $(foreach f,$(wildcard $(SRC_DIR)/*/*.m),\
 	$(firstword $(subst /, ,$(patsubst $(SRC_DIR)/%,%,$(f))))))
 FRAMEWORK_TARGETS := $(foreach fw,$(FRAMEWORKS),$(BUILD_DIR)/$(fw).framework/Versions/A/$(fw))
 
+# The frameworks are universal so that Xcode targets, which build both
+# architectures by default, can link against them.
+ARCHS ?= arm64 x86_64
+MACOSX_DEPLOYMENT_TARGET ?= 13.0
+ARCH_FLAGS := $(foreach a,$(ARCHS),-arch $(a)) -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
+
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wobjc-missing-property-synthesis
-CFLAGS := -fobjc-arc -fPIC -O2 -g $(WARNINGS)
+CFLAGS := $(ARCH_FLAGS) -fobjc-arc -fPIC -O2 -g $(WARNINGS)
 CFLAGS += -isysroot $(SDK_PATH) -I$(COMMON_INC_DIR) -DDEBUG=1
-LDFLAGS := -isysroot $(SDK_PATH) -framework Foundation -framework CoreFoundation -framework Security -lz
+LDFLAGS := $(ARCH_FLAGS) -isysroot $(SDK_PATH) -framework Foundation -framework CoreFoundation -framework Security -lz
 
 TEST_BIN := $(BUILD_DIR)/dvt_tests
 

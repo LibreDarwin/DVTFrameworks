@@ -3079,13 +3079,13 @@ static void DVTTestClassAdditions(void)
         @[@"empty argument is quoted", @[@""], @"\"\""],
         @[@"every empty argument is quoted", @[@"", @""], @"\"\" \"\""],
         @[@"spaces are backslash escaped", @[@"a b"], @"a\\ b"],
-        @[@"single quotes are escaped", @[@"a'b"], @"a\\'b"],
+        @[@"single quotes are left alone", @[@"a'b"], @"a'b"],
         @[@"double quotes are escaped", @[@"a\"b"], @"a\\\"b"],
         @[@"tabs are backslash escaped", @[@"a\tb"], @"a\\\tb"],
-        /* The escaping set is only quote, space, and tab, so a backslash is
-           already literal and must not be doubled, and the rest of the shell
-           metacharacters are not escaped at all. */
-        @[@"backslashes are left alone", @[@"a\\b"], @"a\\b"],
+        /* The escaping set is double quote, space, tab and backslash, so a
+           single quote and the rest of the shell metacharacters are not
+           escaped at all. */
+        @[@"backslashes are escaped", @[@"a\\b"], @"a\\\\b"],
         @[@"other shell metacharacters are left alone", @[@"a$b*c;d|e&f>g<h~i#j!k"], @"a$b*c;d|e&f>g<h~i#j!k"],
         @[@"newlines are left alone", @[@"a\nb"], @"a\nb"],
         @[@"non-strings are described", @[@1, @2], @"1 2"],
