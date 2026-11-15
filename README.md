@@ -46,7 +46,7 @@ sources.
 | `DVTKeychainUtilities` | Not started |
 | `DVTKit` | Not started |
 | `DVTLibraryKit` | Not started |
-| `DVTMacroFoundation` | Not started |
+| `DVTMacroFoundation` | Implemented |
 | `DVTMarkup` | Not started |
 | `DVTPlaygroundCommunication` | Not started |
 | `DVTPlaygroundStubMacServices` | Not started |

@@ -48,9 +48,16 @@ BRIDGING_HEADER := $(TEST_DIR)/DVTFoundation-Bridging-Header.h
 SWIFT_TEST_BIN := $(BUILD_DIR)/dvt_swift_overlay_test
 
 # Include search path for a framework's own headers plus the common ones.
-fw_includes = -I$(COMMON_INC_DIR) $(foreach d,$(wildcard $(SRC_DIR)/$(1)/include),-I$(d))
+fw_includes = -I$(COMMON_INC_DIR) -I$(SRC_DIR)/DVTFoundation/include \
+	$(foreach d,$(wildcard $(SRC_DIR)/$(1)/include),-I$(d))
 # The compiled objects for one framework, one per source file.
 fw_objects = $(patsubst $(SRC_DIR)/$(1)/%.m,$(BUILD_DIR)/obj/$(1)/%.o,$(wildcard $(SRC_DIR)/$(1)/*.m))
+# Every framework except DVTFoundation itself links against DVTFoundation,
+# which is the base layer the rest of the package is written on top of.
+fw_deps = $(if $(filter DVTFoundation,$(1)),,$(BUILD_DIR)/DVTFoundation.framework/Versions/A/DVTFoundation)
+fw_link = $(if $(filter DVTFoundation,$(1)),,-F$(BUILD_DIR) -framework DVTFoundation \
+	-Wl,-rpath,@loader_path/../../..)
+
 # The headers whose contents can change a framework's objects.
 fw_headers = $(wildcard $(SRC_DIR)/$(1)/include/*.h) $(wildcard $(COMMON_INC_DIR)/*.h)
 
@@ -78,13 +85,13 @@ $(foreach fw,$(FRAMEWORKS),\
 # created atomically across several make targets, and an interrupted link would
 # otherwise leave a half-written framework that make considers up to date.
 define DVT_FRAMEWORK_RULE
-$(BUILD_DIR)/$(1).framework/Versions/A/$(1): $$(call fw_objects,$(1)) $$(call fw_headers,$(1)) Makefile
+$(BUILD_DIR)/$(1).framework/Versions/A/$(1): $$(call fw_objects,$(1)) $$(call fw_headers,$(1)) $$(call fw_deps,$(1)) Makefile
 	@mkdir -p $(BUILD_DIR)/$(1).framework/Versions/A/Headers \
 		$(BUILD_DIR)/$(1).framework/Versions/A/Resources
 	$$(CC) -dynamiclib -install_name @rpath/$(1).framework/Versions/A/$(1) \
 		-compatibility_version $$(COMPATIBILITY_VERSION) \
 		-current_version $$(CURRENT_VERSION) \
-		$$(LDFLAGS) -o $$@ $$(call fw_objects,$(1))
+		$$(LDFLAGS) $$(call fw_link,$(1)) -o $$@ $$(call fw_objects,$(1))
 	@cp $$(wildcard $$(SRC_DIR)/$(1)/include/*.h) $$(wildcard $$(COMMON_INC_DIR)/*.h) \
 		$$(BUILD_DIR)/$(1).framework/Versions/A/Headers/
 	@printf '%s\n' \
