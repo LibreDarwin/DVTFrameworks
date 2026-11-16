@@ -107,7 +107,7 @@ static unsigned long long DVTMacroNameStringNextRegistrationNumber;
 	[_contents getCharacters:buffer range:range];
 }
 
-- (unsigned long long)hash
+- (NSUInteger)hash
 {
 	return (_hashValue);
 }

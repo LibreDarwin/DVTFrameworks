@@ -29,6 +29,13 @@
 #import "DVTMacroNameRegistry.h"
 #import "DVTMacroNameRegistryRegistration.h"
 #import "DVTMacroNameString.h"
+#import "DVTMacroExpressionParser.h"
+#import "DVTMacroExpansionString.h"
+#import "DVTMacroExpansionStringList.h"
+#import "DVTMacroExpansionStringList_NonLiteral.h"
+#import "DVTMacroExpansionString_Concatenation.h"
+#import "DVTMacroExpansionString_Substitution.h"
+#import "DVTMacroExpansionString_StringSubstitution.h"
 
 /** An object that claims to be equal to nothing, not even to itself. */
 @interface DVTPicky : NSObject
@@ -8947,6 +8954,53 @@ static void DVTTestUserDefaultsAdditions(void)
 }
 
 
+static void DVTTestMacroExpressionParsing(void)
+{
+    /* A plain value becomes a one-element non-literal list. */
+    id plain = DVTMacroExpressionByParsingStringAsList(@"plain");
+    DVTExpect([plain isKindOfClass:[DVTMacroExpansionStringList_NonLiteral class]],
+              @"plain text parses as a non-literal list");
+    DVTExpect([plain count] == 1, @"plain text is one list element");
+    DVTExpectEqualObjects([(id)[plain objectAtIndex:0] dvt_stringForm], @"plain",
+                          @"a plain element keeps its text");
+    DVTExpect([[plain dvt_debugDescription] rangeOfString:@"𝗡𝗼𝗻𝗹𝗶𝘁𝗲𝗿𝗮𝗹𝗔𝗿𝗿𝗮𝘆:【plain】"].location != NSNotFound,
+              @"the non-literal list uses the expected debug format");
+
+    /* Whitespace splits; substitution groups stay inside a word. */
+    id words = DVTMacroExpressionByParsingStringAsList(@"a b c");
+    DVTExpect([words count] == 3, @"whitespace splits a list into words");
+    DVTExpectEqualObjects([words dvt_stringForm], @"a b c", @"the list keeps its string form");
+    id mixed = DVTMacroExpressionByParsingStringAsList(@"a$(FOO)b");
+    DVTExpect([mixed count] == 1, @"a substitution stays inside its word");
+    DVTExpect([[mixed objectAtIndex:0] isKindOfClass:[DVTMacroExpansionString_Concatenation class]],
+              @"text around a substitution becomes a concatenation");
+
+    /* String parsing uses the string-preserving substitution subclass. */
+    id substitution = DVTMacroExpressionByParsingString(@"$(FOO)");
+    DVTExpect([substitution isKindOfClass:[DVTMacroExpansionString_StringSubstitution class]],
+              @"string parsing yields a string substitution");
+    DVTExpect([[substitution dvt_debugDescription] rangeOfString:@"𝗦𝘁𝗿𝗶𝗻𝗴𝗦𝘂𝗯𝘀𝘁𝗶𝘁𝘂𝘁𝗶𝗼𝗻:【FOO】"].location != NSNotFound,
+              @"a string substitution uses the expected debug format");
+    DVTExpect([DVTMacroExpressionByParsingString(@"$x$(F)") isKindOfClass:[DVTMacroExpansionString_StringSubstitution class]],
+              @"a bare name absorbs one following parenthesised substitution");
+
+    /* List parsing promotes the same input only when it is not grouped. */
+    id listSubstitution = DVTMacroExpressionByParsingStringAsList(@"$(FOO)");
+    DVTExpect([[listSubstitution objectAtIndex:0] isKindOfClass:[DVTMacroExpansionString_Substitution class]],
+              @"list parsing yields a list substitution");
+
+    /* Backslash and quotes are shell-like in list mode. */
+    DVTExpectEqualObjects([(id)[DVTMacroExpressionByParsingStringAsList(@"\\a") objectAtIndex:0] dvt_stringForm], @"a",
+                          @"a backslash escape is removed in list mode");
+    DVTExpect([DVTMacroExpressionByParsingStringArrayAsList(@[@"a b", @"$(F)"]) count] == 2,
+              @"array input keeps one element per string");
+
+    /* Empty input is the shared empty literal list. */
+    id empty = DVTMacroExpressionByParsingStringAsList(@"");
+    DVTExpect([empty dvt_isLiteral] && [empty count] == 0,
+              @"the empty string parses as an empty literal list");
+}
+
 static void DVTTestMacroNameStringsAndRegistry(void)
 {
     DVTMacroNameString *foo = [DVTMacroNameString macroNameStringForString:@"FOO" createIfNeeded:YES];
@@ -9068,6 +9122,7 @@ int main(int argc, const char *argv[])
         DVTTestComparison();
         DVTTestCertificateComparison();
         DVTTestKeyPathComparison();
+        DVTTestMacroExpressionParsing();
         DVTTestMacroNameStringsAndRegistry();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);

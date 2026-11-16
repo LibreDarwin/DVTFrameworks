@@ -44,7 +44,7 @@
 	NSDictionary *_cachedDictRep;
 	NSSet *_cachedMacroNameSet;
 	unsigned long long _cachedHash;
-	id _cacheLock;
+	NSLock *_cacheLock;
 	BOOL _isImmutable;
 	BOOL _postsChangeNotifications;
 	BOOL _declaredMutable;

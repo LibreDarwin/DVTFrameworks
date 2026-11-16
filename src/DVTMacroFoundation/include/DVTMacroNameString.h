@@ -14,7 +14,7 @@
 
 @interface DVTMacroNameString : NSString {
 	NSString *_contents;
-	unsigned long long _hashValue;
+	NSUInteger _hashValue;
 	unsigned long long _regNumber;
 }
 

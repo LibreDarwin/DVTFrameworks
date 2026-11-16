@@ -49,6 +49,9 @@
 
 #import "DVTMacroDefinitionTable.h"
 
+#import "DVTMacroExpressionParser.h"
+#import "DVTMacroNameRegistry.h"
+
 #import <CoreFoundation/CoreFoundation.h>
 
 #import "DVTFoundationClassAdditions.h"
@@ -442,9 +445,9 @@ DVTSetMacroNameAndValue(DVTMacroDefinitionTable *table, id macroName, id value, 
 	if (value != nil && !valueIsAlreadyAnExpansion) {
 		CFTypeID typeID = CFGetTypeID((__bridge CFTypeRef)value);
 		if (typeID == CFStringGetTypeID()) {
-			storedValue = DVTMacroDefinitionTableLiteralValueForString(value);
+			storedValue = DVTMacroExpressionByParsingStringAsList(value);
 		} else if (typeID == CFArrayGetTypeID()) {
-			storedValue = DVTMacroDefinitionTableLiteralValueForArray(value);
+			storedValue = DVTMacroExpressionByParsingStringArrayAsList(value);
 		}
 	}
 	[table setValue:storedValue forMacroName:baseMacroName conditionSet:conditionSet];
@@ -482,6 +485,11 @@ DVTSetMacroNameAndValue(DVTMacroDefinitionTable *table, id macroName, id value, 
 		_cacheLock = [[NSLock alloc] init];
 	}
 	return (self);
+}
+
+- (id)init
+{
+	return ([self initWithLabel:nil]);
 }
 
 - (id)initWithLabel:(id)label
@@ -703,14 +711,16 @@ DVTSetMacroNameAndValue(DVTMacroDefinitionTable *table, id macroName, id value, 
 	}
 	CFTypeID typeID = CFGetTypeID((__bridge CFTypeRef)value);
 	if (typeID == CFStringGetTypeID()) {
-		/* Apple parses the string into an expansion expression list; the
-		 * expression parser belongs to a later stage, so store the literal
-		 * string instead. */
-		[self setValue:DVTMacroDefinitionTableLiteralValueForString(value) forMacroName:macroName conditionSet:conditionSet];
+		[self setValue:DVTMacroExpressionByParsingStringAsList(value) forMacroName:macroName conditionSet:conditionSet];
 		return;
 	}
 	if (typeID == CFArrayGetTypeID()) {
-		DVTMacroDefinitionTableRaiseInternalAssertion(@"[macroNameRegistry macroIsListType:macroName]");
+		id registry = [[self class] macroNameRegistry];
+		if (registry != nil && ![registry macroIsListType:macroName]) {
+			DVTMacroDefinitionTableRaiseInternalAssertion(@"[macroNameRegistry macroIsListType:macroName]");
+			return;
+		}
+		[self setValue:DVTMacroExpressionByParsingStringArrayAsList(value) forMacroName:macroName conditionSet:conditionSet];
 		return;
 	}
 	[NSException raise:NSInvalidArgumentException
