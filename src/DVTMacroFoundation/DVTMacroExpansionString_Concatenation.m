@@ -12,6 +12,7 @@
 #import "DVTMacroExpansionString_Concatenation.h"
 
 #import "DVTMacroExpansionOperator.h"
+#import "DVTMacroExpansion-Protocol.h"
 
 @implementation DVTMacroExpansionString_Concatenation
 
@@ -41,22 +42,43 @@
 
 - (id)dvt_evaluateAsStringInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
 {
-	(void)scope;
-	(void)state;
-	[NSException raise:NSInvalidArgumentException
-		    format:@"-[%@ dvt_evaluateAsStringInScope:withState:] requires a macro expansion scope",
-			   NSStringFromClass([self class])];
-	return (nil);
+	NSMutableString *result = [NSMutableString string];
+
+	for (id substring in _substrings) {
+		id value = [(id<DVTMacroExpansion>)substring dvt_evaluateAsStringInScope:scope withState:state];
+		if (value != nil) {
+			[result appendString:value];
+		}
+	}
+	return (result);
 }
 
 - (id)dvt_evaluateAsStringListInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
 {
-	(void)scope;
-	(void)state;
-	[NSException raise:NSInvalidArgumentException
-		    format:@"-[%@ dvt_evaluateAsStringListInScope:withState:] requires a macro expansion scope",
-			   NSStringFromClass([self class])];
-	return (nil);
+	NSMutableArray *result = nil;
+
+	for (id substring in _substrings) {
+		id evaluated = [(id<DVTMacroExpansion>)substring dvt_evaluateAsStringListInScope:scope withState:state];
+		NSArray *list;
+
+		if (evaluated == nil) {
+			continue;
+		}
+		list = ([evaluated isKindOfClass:[NSArray class]] ? evaluated : [NSArray arrayWithObject:evaluated]);
+		if ([list count] == 0) {
+			continue;
+		}
+		if (result == nil || [result count] == 0) {
+			result = [NSMutableArray arrayWithArray:list];
+		} else {
+			NSString *last = [[result lastObject] description];
+			NSString *first = [[list objectAtIndex:0] description];
+			id merged = [NSString stringWithFormat:@"%@%@", last, first];
+
+			[result replaceObjectAtIndex:([result count] - 1) withObject:merged];
+		}
+	}
+	return ([NSArray arrayWithArray:(result != nil ? result : [NSArray array])]);
 }
 
 - (void)dvt_assertInternalConsistency

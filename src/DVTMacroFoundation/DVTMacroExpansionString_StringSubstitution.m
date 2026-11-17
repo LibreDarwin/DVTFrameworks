@@ -16,12 +16,7 @@
 
 - (id)dvt_evaluateAsStringListInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
 {
-	(void)scope;
-	(void)state;
-	[NSException raise:NSInvalidArgumentException
-		    format:@"-[%@ dvt_evaluateAsStringListInScope:withState:] requires a macro expansion scope",
-			   NSStringFromClass([self class])];
-	return (nil);
+	return ([super dvt_evaluateAsStringListInScope:scope withState:state]);
 }
 
 - (id)dvt_debugDescription

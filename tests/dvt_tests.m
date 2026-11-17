@@ -30,6 +30,7 @@
 #import "DVTMacroNameRegistryRegistration.h"
 #import "DVTMacroNameString.h"
 #import "DVTMacroExpressionParser.h"
+#import "DVTMacroExpansionScope.h"
 #import "DVTMacroExpansionString.h"
 #import "DVTMacroExpansionStringList.h"
 #import "DVTMacroExpansionStringList_NonLiteral.h"
@@ -9001,6 +9002,53 @@ static void DVTTestMacroExpressionParsing(void)
               @"the empty string parses as an empty literal list");
 }
 
+static void DVTTestMacroExpansionScopeEvaluation(void)
+{
+    DVTMacroDefinitionTable *table = [DVTMacroDefinitionTable new];
+    [table setStringValue:@"hello" forMacroName:@"FOO" conditionSet:nil];
+    [table parseAndSetValue:@"$(FOO)/x" forMacroName:@"BAR" conditionSet:nil];
+    [table parseAndSetValue:@"$(SELF)x" forMacroName:@"SELF" conditionSet:nil];
+    [table setLiteralValue:@[@"a", @"b"] forMacroName:@"LIST" conditionSet:nil];
+    DVTMacroExpansionScope *scope = [DVTMacroExpansionScope newWithParentScope:nil
+                                                        macroDefinitionTable:table
+                                                            definitionLevel:0];
+    DVTExpectEqualObjects([scope evaluatedStringValueForMacroNamed:@"FOO"], @"hello",
+                          @"a scope looks up a plain macro");
+    DVTExpectEqualObjects([scope evaluatedStringValueForMacroNamed:@"BAR"], @"hello/x",
+                          @"nested substitutions expand in the same scope");
+    DVTExpectEqualObjects([scope evaluatedStringValueForMacroNamed:@"SELF"], @"x",
+                          @"a recursively substituted name stops at the cycle");
+    DVTExpect([scope evaluatedStringValueForMacroNamed:@"NOPE"] == nil,
+              @"a missing macro name has no value");
+    DVTExpectEqualObjects([scope evaluatedStringListValueForMacroNamed:@"LIST"], (@[@"a", @"b"]),
+                          @"a literal list keeps its elements");
+    DVTExpect([scope evaluatedStringListValueForMacroNamed:@"NOPE"] == nil,
+              @"a missing macro name has no list value");
+    DVTExpect(![scope evaluatedBooleanValueForMacroNamed:@"FOO"],
+              @"a non-boolean macro evaluates to NO");
+
+    id defaultExpression = DVTMacroExpressionByParsingString(@"$(NOPE:default=x)");
+    DVTExpectEqualObjects([scope evaluatedStringValueForMacroExpression:defaultExpression], @"x",
+                          @"the default operator supplies a value for a missing macro");
+    id defaultListExpression = DVTMacroExpressionByParsingStringAsList(@"$(NOPE:default=x)");
+    DVTExpectEqualObjects([scope evaluatedStringListValueForMacroExpression:defaultListExpression], (@[@"x"]),
+                          @"the default operator seeds an empty list");
+
+    id concatExpression = DVTMacroExpressionByParsingStringAsList(@"$(LIST)$(LIST)");
+    DVTExpectEqualObjects([scope evaluatedStringListValueForMacroExpression:concatExpression], (@[@"a", @"ba"]),
+                          @"concatenation merges only the last and first elements");
+
+    DVTMacroExpansionScope *preserving = [DVTMacroExpansionScope newWithParentScope:nil
+                                                                macroDefinitionTable:table
+                                                                    definitionLevel:0
+                                                           definitionLevelsToClear:nil
+                                                          conditionParameterValues:nil
+                                                                expansionOptions:1];
+    id unresolvedExpression = DVTMacroExpressionByParsingString(@"$(NOPE)");
+    DVTExpectEqualObjects([preserving evaluatedStringValueForMacroExpression:unresolvedExpression], @"$(NOPE)",
+                          @"a preserving scope leaves unresolved references alone");
+}
+
 static void DVTTestMacroNameStringsAndRegistry(void)
 {
     DVTMacroNameString *foo = [DVTMacroNameString macroNameStringForString:@"FOO" createIfNeeded:YES];
@@ -9123,6 +9171,7 @@ int main(int argc, const char *argv[])
         DVTTestCertificateComparison();
         DVTTestKeyPathComparison();
         DVTTestMacroExpressionParsing();
+        DVTTestMacroExpansionScopeEvaluation();
         DVTTestMacroNameStringsAndRegistry();
 
         fprintf(stdout, "\n%d checks, %d failures\n", DVTTestCount, DVTTestFailures);

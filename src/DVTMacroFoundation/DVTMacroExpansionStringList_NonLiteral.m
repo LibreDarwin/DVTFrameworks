@@ -108,22 +108,20 @@
 
 - (id)dvt_evaluateAsStringInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
 {
-	(void)scope;
-	(void)state;
-	[NSException raise:NSInvalidArgumentException
-		    format:@"-[%@ dvt_evaluateAsStringInScope:withState:] requires a macro expansion scope",
-			   NSStringFromClass([self class])];
-	return (nil);
+	return ([[_stringForm dvt_evaluateAsStringInScope:scope withState:state] copy]);
 }
 
 - (id)dvt_evaluateAsStringListInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
 {
-	(void)scope;
-	(void)state;
-	[NSException raise:NSInvalidArgumentException
-		    format:@"-[%@ dvt_evaluateAsStringListInScope:withState:] requires a macro expansion scope",
-			   NSStringFromClass([self class])];
-	return (nil);
+	NSMutableArray *result = [NSMutableArray array];
+
+	for (id element in _elements) {
+		id list = [element dvt_evaluateAsStringListInScope:scope withState:state];
+		if (list != nil) {
+			[result addObjectsFromArray:list];
+		}
+	}
+	return ([NSArray arrayWithArray:result]);
 }
 
 - (void)dvt_assertInternalConsistency

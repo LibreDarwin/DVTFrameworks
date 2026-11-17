@@ -72,4 +72,11 @@
 	return (_origString);
 }
 
+- (id)dvt_evaluateAsStringListInScope:(id)scope withState:(const struct DVTNestedMacroExpansionState *)state
+{
+	(void)scope;
+	(void)state;
+	return ([NSArray arrayWithObject:_origString]);
+}
+
 @end
