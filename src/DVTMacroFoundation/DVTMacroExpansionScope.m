@@ -66,9 +66,11 @@ DVTMacroExpansionScopeIsDictionary(id value)
 
 + (id)newWithParentScope:(id)scope macros:(id)macros definitionLevel:(long long)level conditionParameterValues:(id)values preserveUnresolvedReferences:(_Bool)references
 {
-	DVTMacroDefinitionTable *table = [DVTMacroDefinitionTable newWithLabel:nil];
+	DVTMacroDefinitionTable *table = macros;
 
-	[table setMacroNamesAndValuesFromDictionary:macros];
+	if (table == nil || ![table isKindOfClass:[DVTMacroDefinitionTable class]]) {
+		DVTMacroExpansionScopeRaise(self, @"macros must be a DVTMacroDefinitionTable");
+	}
 	return ([[self alloc] initWithParentScope:scope macroDefinitionTable:table definitionLevel:(unsigned long long)level definitionLevelsToClear:nil conditionParameterValues:values conditionParameterFallbackValues:nil expansionOptions:(references ? 1 : 0)]);
 }
 
